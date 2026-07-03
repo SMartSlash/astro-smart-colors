@@ -186,6 +186,9 @@ function processIdentityColor(source, background, role, minTextContrast, maxIden
   const rolePreset = ROLE_PRESETS[role] ?? ROLE_PRESETS["accent-text"];
 
   if (!rolePreset.adjustColor) {
+    if (background.l < 0.5) {
+      return fitToSrgb({ l: clamp(source.l * 1.5, 0.48, 0.82), c: source.c, h: source.h });
+    }
     return fitToSrgb(source);
   }
 

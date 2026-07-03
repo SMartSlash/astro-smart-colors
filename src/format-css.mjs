@@ -53,8 +53,8 @@ ${decorativeNames.map((name) => formatDecorativeInternals(name, decoratives[name
 ${identityNames.map((name) => formatIdentityPublic(name, onColors[name])).join("\n")}
 ${formatDecorativeSection(decoratives)}
 ${formatAliases(config.aliases, onColors)}
-  --color-border-subtle: color-mix(in oklch, var(--color-text) 14%, transparent);
-  --color-border-strong: color-mix(in oklch, var(--color-text) 28%, transparent);
+  --color-border-subtle: oklch(from var(--color-text) l c h / 14%);
+  --color-border-strong: oklch(from var(--color-text) l c h / 28%);
   --color-focus-ring: light-dark(var(--_color-focus-ring-light), var(--_color-focus-ring-dark));
 ${generatedLogoCss}${Object.keys(scales).length ? `\n  /* ─── Color scales (generated when scales.enabled = true) ──────────────── */\n${Object.entries(scales).map(([name, scale]) => formatScale(name, scale)).join("\n")}\n` : ""}
   /* ─── Controls ────────────────────────────────────────────────────────── */
@@ -78,11 +78,11 @@ ${generatedLogoCss}${Object.keys(scales).length ? `\n  /* ─── Color scales
     color-mix(in oklch, var(--_color-${config.roles.focus}-dark) 18%, var(--_color-bg-dark))
   );
 
-  --color-control-focus-border: color-mix(in oklch, var(--color-focus-ring) 72%, transparent);
+  --color-control-focus-border: oklch(from var(--color-focus-ring) l c h / 72%);
 
   --color-control-icon-muted: light-dark(
-    color-mix(in oklch, var(--_color-text-light) 48%, transparent),
-    color-mix(in oklch, var(--_color-text-dark) 72%, transparent)
+    oklch(from var(--_color-text-light) l c h / 48%),
+    oklch(from var(--_color-text-dark) l c h / 72%)
   );
 }
 `;
@@ -96,7 +96,7 @@ function formatDecorativeSection(decoratives) {
 }
 
 function formatDecorativeInternals(name, color) {
-  return `  --_color-${name}-light: ${oklch(color.light)};\n  --_color-${name}-dark: ${oklch(color.dark)};`;
+  return `  --_color-${name}-light: ${oklch(color.light)};\n  --_color-${name}-dark: oklch(from var(--_color-${name}-light) calc(l * 0.72) c h);`;
 }
 
 function formatIdentityInternals(name, identity, onColor) {
@@ -151,14 +151,15 @@ function formatLogoSection(logoTokens) {
 
   let css = "\n  /* ─── Logo / brand ──────────────────────────────────────────────────\n";
   css += "     Source colors from smart-colors.config.mjs.\n";
-  css += "     Dark variants auto-generated. */\n";
+  css += "     Dark variants derived via oklch(from ...). */\n";
 
   for (const name of names) {
-    css += `  --logo-${name}: light-dark(${oklch(logoTokens[name].light)}, ${oklch(logoTokens[name].dark)});\n`;
+    css += `  --_logo-${name}-light: ${oklch(logoTokens[name].light)};\n`;
+    css += `  --logo-${name}: light-dark(var(--_logo-${name}-light), oklch(from var(--_logo-${name}-light) calc(l * 1.5) c h));\n`;
   }
 
   if (logoTokens.accent) {
-    css += "  --logo-accent-alpha: color-mix(in oklch, var(--logo-accent) 88%, transparent);\n";
+    css += "  --logo-accent-alpha: oklch(from var(--logo-accent) l c h / 88%);\n";
   }
 
   css += "  --logo-stroke: light-dark(oklch(0.99 0 0), var(--color-bg));\n";

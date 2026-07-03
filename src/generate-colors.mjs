@@ -393,6 +393,7 @@ function ensureContrast(color, backgrounds, target) {
 
 function adjustContrast(color, background, target) {
   const darken = background.l > color.l;
+
   let pass = darken ? 0.02 : 0.99;
   let fail = color.l;
 
@@ -407,7 +408,27 @@ function adjustContrast(color, background, target) {
     }
   }
 
-  return fitToSrgb({ l: pass, c: color.c, h: color.h });
+  const lightnessOnly = fitToSrgb({ l: pass, c: color.c, h: color.h });
+  const deltaL = Math.abs(lightnessOnly.l - color.l);
+
+  if (deltaL <= 0.12) return lightnessOnly;
+
+  const cappedL = darken ? color.l - 0.12 : color.l + 0.12;
+  let passChroma = 0;
+  let failChroma = color.c;
+
+  for (let i = 0; i < 44; i += 1) {
+    const mid = (passChroma + failChroma) / 2;
+    const candidate = fitToSrgb({ l: cappedL, c: mid, h: color.h });
+
+    if (contrast(candidate, background) >= target) {
+      passChroma = mid;
+    } else {
+      failChroma = mid;
+    }
+  }
+
+  return fitToSrgb({ l: cappedL, c: passChroma, h: color.h });
 }
 
 function reduceContrast(color, background, target, floor) {

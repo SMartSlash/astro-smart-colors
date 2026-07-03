@@ -32,6 +32,11 @@ export const defaultSmartColorsConfig = {
     steps: [50, 100, 200, 300, 400, 500, 600, 700, 800, 900],
     base: 500,
     applyTo: [],
+    hueVariants: {
+      enabled: false,
+      shifts: [30, -30],
+      applyTo: [],
+    },
   },
   derivation: {
     surface: { lightShift: -0.018, darkFactor: 1.6 },

@@ -56,7 +56,7 @@ ${formatAliases(config.aliases, onColors)}
   --color-border-subtle: oklch(from var(--color-text) l c h / 14%);
   --color-border-strong: oklch(from var(--color-text) l c h / 28%);
   --color-focus-ring: light-dark(var(--_color-focus-ring-light), var(--_color-focus-ring-dark));
-${generatedLogoCss}${Object.keys(scales).length ? `\n  /* ─── Color scales (generated when scales.enabled = true) ──────────────── */\n${Object.entries(scales).map(([name, scale]) => formatScale(name, scale)).join("\n")}\n` : ""}
+${generatedLogoCss}${Object.keys(scales).length ? `\n  /* ─── Color scales (generated when scales.enabled = true) ──────────────── */\n${Object.entries(scales).map(([name, scale]) => formatScale(name, scale)).join("\n")}\n` : ""}${formatHueVariants(config)}
   /* ─── Controls ────────────────────────────────────────────────────────── */
   --color-control-bg: var(--color-surface);
   --color-control-border: var(--color-border-subtle);
@@ -163,6 +163,22 @@ function formatLogoSection(logoTokens) {
   }
 
   css += "  --logo-stroke: light-dark(oklch(0.99 0 0), var(--color-bg));\n";
+
+  return css;
+}
+
+function formatHueVariants(config) {
+  const hv = config.scales?.hueVariants;
+  if (!hv?.enabled || !hv.shifts?.length || !hv.applyTo?.length) return "";
+
+  let css = "\n  /* ─── Hue variants (oklch from …) ──────────────────────────────────── */\n";
+
+  for (const name of hv.applyTo) {
+    for (const shift of hv.shifts) {
+      const suffix = shift >= 0 ? `h${shift}` : `h${shift}`;
+      css += `  --color-${name}-${suffix}: oklch(from var(--_color-${name}-light) l c calc(h + ${shift}));\n`;
+    }
+  }
 
   return css;
 }

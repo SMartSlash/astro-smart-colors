@@ -58,6 +58,11 @@ function normalizeConfig(config) {
       steps: config.scales?.steps ?? [50, 100, 200, 300, 400, 500, 600, 700, 800, 900],
       base: config.scales?.base ?? 500,
       applyTo: config.scales?.applyTo ?? [],
+      hueVariants: {
+        enabled: Boolean(config.scales?.hueVariants?.enabled),
+        shifts: config.scales?.hueVariants?.shifts ?? [30, -30],
+        applyTo: config.scales?.hueVariants?.applyTo ?? [],
+      },
     },
     derivation: {
       surface: { ...{ lightShift: -0.018, darkFactor: 1.6 }, ...(config.derivation?.surface ?? {}) },

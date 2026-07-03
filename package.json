@@ -1,0 +1,31 @@
+{
+  "name": "@smartslash/astro-smart-colors",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/astro-integration.mjs",
+  "types": "./src/astro-integration.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/astro-integration.d.ts",
+      "default": "./src/astro-integration.mjs"
+    },
+    "./generate": {
+      "types": "./src/generate-colors.d.ts",
+      "default": "./src/generate-colors.mjs"
+    },
+    "./config": {
+      "types": "./src/defaults.d.ts",
+      "default": "./src/defaults.mjs"
+    }
+  },
+  "bin": {
+    "smart-colors": "./src/cli.mjs"
+  },
+  "peerDependencies": {
+    "astro": ">=5"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

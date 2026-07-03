@@ -163,6 +163,7 @@ function formatLogoSection(logoTokens) {
   }
 
   css += "  --logo-stroke: light-dark(oklch(0.99 0 0), var(--color-bg));\n";
+  css += "  --logo-bg-fill: light-dark(var(--color-bg), var(--color-surface));\n";
 
   return css;
 }

@@ -66,7 +66,7 @@ function normalizeConfig(config) {
     },
     logo: {
       enabled: Boolean(config.logo?.enabled),
-      css: config.logo?.css ?? "",
+      sources: config.logo?.sources ?? {},
     },
   };
 }

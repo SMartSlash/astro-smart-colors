@@ -1,12 +1,10 @@
 import { oklch } from "./color-math.mjs";
 
 export function formatColorsCss(model, config) {
-  const { neutrals, identities, decoratives, onColors, focus, scales } = model;
+  const { neutrals, identities, decoratives, logoTokens, onColors, focus, scales } = model;
   const identityNames = Object.keys(identities);
   const decorativeNames = Object.keys(decoratives ?? {});
-  const generatedLogoCss = config.logo.enabled && config.logo.css.trim()
-    ? `\n  /* ─── Logo / brand contract ─────────────────────────────────────────────\n     Optional project-specific CSS injected from smart-colors.config.mjs. */\n${indentCss(config.logo.css.trim(), 2)}\n`
-    : "";
+  const generatedLogoCss = formatLogoSection(logoTokens);
 
   return `:root {
   color-scheme: light dark;
@@ -147,10 +145,23 @@ function formatAliases(aliases, onColors) {
     .join("\n")}\n`;
 }
 
-function indentCss(css, spaces) {
-  const pad = " ".repeat(spaces);
-  return css
-    .split("\n")
-    .map((line) => `${pad}${line}`)
-    .join("\n");
+function formatLogoSection(logoTokens) {
+  const names = Object.keys(logoTokens ?? {});
+  if (!names.length) return "";
+
+  let css = "\n  /* ─── Logo / brand ──────────────────────────────────────────────────\n";
+  css += "     Source colors from smart-colors.config.mjs.\n";
+  css += "     Dark variants auto-generated. */\n";
+
+  for (const name of names) {
+    css += `  --logo-${name}: light-dark(${oklch(logoTokens[name].light)}, ${oklch(logoTokens[name].dark)});\n`;
+  }
+
+  if (logoTokens.accent) {
+    css += "  --logo-accent-alpha: color-mix(in oklch, var(--logo-accent) 88%, transparent);\n";
+  }
+
+  css += "  --logo-stroke: light-dark(oklch(0.99 0 0), var(--color-bg));\n";
+
+  return css;
 }

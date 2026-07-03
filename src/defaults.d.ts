@@ -34,7 +34,7 @@ export interface SmartColorsConfig {
   };
   logo: {
     enabled: boolean;
-    css: string;
+    sources: Record<string, string>;
   };
 }
 

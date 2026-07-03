@@ -151,6 +151,20 @@ function buildColorModel(palette, config) {
     decoratives[name] = { source, light, dark, role: "decorative" };
   }
 
+  const logoTokens = {};
+
+  if (config.logo.enabled && Object.keys(config.logo.sources ?? {}).length) {
+    for (const [name, value] of Object.entries(config.logo.sources)) {
+      const parsed = parsePalette(`:root { --l: ${value}; }`);
+      const source = parsed["l"];
+      if (!source) continue;
+
+      const light = fitToSrgb(source);
+      const dark = fitToSrgb({ l: clamp(light.l * 1.5, 0.48, 0.82), c: light.c, h: light.h });
+      logoTokens[name] = { light, dark };
+    }
+  }
+
   const focusRole = config.roles.focus;
   if (!identities[focusRole]) {
     throw new Error(`Configured focus role "${focusRole}" does not exist in roles.identities.`);
@@ -173,6 +187,7 @@ function buildColorModel(palette, config) {
     },
     identities,
     decoratives,
+    logoTokens,
     onColors,
     scales,
     focus: {

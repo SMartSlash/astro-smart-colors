@@ -40,7 +40,7 @@ export const defaultSmartColorsConfig = {
   },
   logo: {
     enabled: false,
-    css: "",
+    sources: {},
   },
 };
 

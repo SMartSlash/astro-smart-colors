@@ -58,7 +58,7 @@ function normalizeIdentities(config) {
     if (typeof def === "string") {
       identities[name] = { token: def, role: "accent-text" };
     } else {
-      identities[name] = { ...def };
+      identities[name] = { role: "accent-text", ...def };
     }
   }
 

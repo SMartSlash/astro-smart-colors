@@ -1,9 +1,9 @@
-import type { SmartColorsConfig } from "./defaults.d.ts";
+import type { SmartColorsConfig, SmartColorsUserConfig } from "./defaults.d.ts";
 
 export interface GenerateColorTokensOptions {
   root?: string | URL;
   configFile?: string;
-  inlineConfig?: Partial<SmartColorsConfig>;
+  inlineConfig?: SmartColorsUserConfig;
   config?: SmartColorsConfig;
   check?: boolean;
 }

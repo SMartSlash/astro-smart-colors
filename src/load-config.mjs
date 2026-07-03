@@ -77,7 +77,7 @@ function normalizeIdentityDefs(identities, defaultRole = "accent-text") {
     if (typeof def === "string") {
       normalized[name] = { token: def, role: defaultRole };
     } else {
-      normalized[name] = { ...def };
+      normalized[name] = { role: defaultRole, ...def };
     }
   }
   return normalized;

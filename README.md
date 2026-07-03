@@ -46,10 +46,11 @@ export default defineSmartColorsConfig({
     bg: "--palette-bg",
     ink: "--palette-ink",
     identities: {
-      primary: "--palette-primary",
-      secondary: "--palette-secondary",
-      tertiary: "--palette-tertiary",
+      primary: { token: "--palette-primary", role: "accent-text" },
+      secondary: { token: "--palette-secondary", role: "accent-ui" },
+      tertiary: { token: "--palette-tertiary", role: "soft-surface" },
     },
+    decoratives: {},
     focus: "primary",
   },
   aliases: {
@@ -57,14 +58,14 @@ export default defineSmartColorsConfig({
   },
   logo: {
     enabled: false,
-    css: "",
+    sources: {},
   },
 });
 ```
 
 ## Palette input
 
-The palette file should contain simple OKLCH source tokens:
+The palette file should contain simple OKLCH source tokens. Tokens registered in `roles.identities` are required and fail generation if missing; tokens registered in `roles.decoratives` are optional and are skipped with a warning if missing.
 
 ```css
 :root {
@@ -108,19 +109,19 @@ Generated internal tokens use the `--_color-*` prefix and should not be consumed
 
 ## Logo / brand tokens
 
-The core package does not know about any specific brand system. If a project needs logo tokens, inject them through `logo.css` in `smart-colors.config.mjs`:
+The core package does not know about any specific brand system. If a project needs logo tokens, register source OKLCH colors through `logo.sources` in `smart-colors.config.mjs`:
 
 ```js
 logo: {
   enabled: true,
-  css: `
---logo-accent: light-dark(var(--brand-logo-accent-light), var(--brand-logo-accent-dark));
---logo-body: light-dark(var(--brand-logo-body-light), var(--brand-logo-body-dark));
-`,
+  sources: {
+    accent: "oklch(0.585 0.095 156.59)",
+    body: "oklch(0.435 0.006 68)",
+  },
 }
 ```
 
-This keeps UI colors accessible while preserving brand-specific logo rendering.
+The generator emits `--logo-*` tokens with light/dark variants. This keeps UI colors accessible while preserving brand-specific logo rendering.
 
 ## CLI
 

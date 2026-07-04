@@ -128,7 +128,12 @@ The generator emits `--logo-*` tokens with light/dark variants. This keeps UI co
 ```sh
 smart-colors build
 smart-colors check
+smart-colors check --config smart-colors.config.mjs --root .
+smart-colors --config=smart-colors.config.mjs check
+smart-colors --help
 ```
+
+Options can be placed before or after the command. Supported flags are `--config`/`-c`, `--root`/`-r`, and `--help`/`-h`.
 
 Useful package scripts:
 

@@ -12,14 +12,48 @@ export interface ResolvedIdentityDef {
 
 export type IdentityConfig = IdentityInputDef | string;
 
+export interface SmartColorsContrastConfig {
+  text: number;
+  ui: number;
+  maxIdentity: number;
+  darkRichness: number;
+}
+
+export interface SmartColorHueVariantsConfig {
+  enabled: boolean;
+  shifts: number[];
+  applyTo: string[];
+}
+
+export interface SmartColorScalesConfig {
+  enabled: boolean;
+  steps: number[];
+  base: number;
+  applyTo: string[];
+  hueVariants: SmartColorHueVariantsConfig;
+}
+
+export interface SmartColorsDerivationConfig {
+  surface: {
+    lightShift: number;
+    darkFactor: number;
+  };
+  muted: {
+    chromaFactor: number;
+  };
+  dark: {
+    bgLightnessFactor: number;
+    textLightnessFactor: number;
+    bgMixRatio: number;
+    surfaceMixRatio: number;
+    textMixRatio: number;
+  };
+}
+
 export interface SmartColorsConfig {
   palette: string;
   output: string;
-  contrast: {
-    text: number;
-    ui: number;
-    maxIdentity: number;
-  };
+  contrast: SmartColorsContrastConfig;
   roles: {
     bg: string;
     ink: string;
@@ -28,27 +62,24 @@ export interface SmartColorsConfig {
     focus: string;
   };
   aliases: Record<string, string>;
-  scales: {
-    enabled: boolean;
-    steps: number[];
-    base: number;
-    applyTo: string[];
-  };
-  derivation: {
-    surface: { lightShift: number; darkFactor: number };
-    muted: { chromaFactor: number };
-    dark: { bgLightnessFactor: number; textLightnessFactor: number };
-  };
+  scales: SmartColorScalesConfig;
+  derivation: SmartColorsDerivationConfig;
   logo: {
     enabled: boolean;
     sources: Record<string, string>;
   };
 }
 
+export type SmartColorHueVariantsUserConfig = Partial<SmartColorHueVariantsConfig>;
+
+export type SmartColorScalesUserConfig = Partial<Omit<SmartColorScalesConfig, "hueVariants">> & {
+  hueVariants?: SmartColorHueVariantsUserConfig;
+};
+
 export interface SmartColorsUserConfig {
   palette?: string;
   output?: string;
-  contrast?: Partial<SmartColorsConfig["contrast"]>;
+  contrast?: Partial<SmartColorsContrastConfig>;
   roles?: {
     bg?: string;
     ink?: string;
@@ -57,11 +88,11 @@ export interface SmartColorsUserConfig {
     focus?: string;
   };
   aliases?: Record<string, string>;
-  scales?: Partial<SmartColorsConfig["scales"]>;
+  scales?: SmartColorScalesUserConfig;
   derivation?: {
-    surface?: Partial<SmartColorsConfig["derivation"]["surface"]>;
-    muted?: Partial<SmartColorsConfig["derivation"]["muted"]>;
-    dark?: Partial<SmartColorsConfig["derivation"]["dark"]>;
+    surface?: Partial<SmartColorsDerivationConfig["surface"]>;
+    muted?: Partial<SmartColorsDerivationConfig["muted"]>;
+    dark?: Partial<SmartColorsDerivationConfig["dark"]>;
   };
   logo?: {
     enabled?: boolean;

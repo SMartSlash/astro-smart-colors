@@ -2,7 +2,8 @@ import { readFile, writeFile } from "node:fs/promises";
 import { contrast, clamp, fitToSrgb, oklch } from "./color-math.mjs";
 import { formatColorsCss } from "./format-css.mjs";
 import { loadSmartColorsConfig, resolveProjectUrl } from "./load-config.mjs";
-import { parsePalette, tokenKey } from "./parse-palette.mjs";
+import { parsePalette, parsePaletteWithDiagnostics, tokenKey } from "./parse-palette.mjs";
+import { validateSmartColorsInput } from "./validate-config.mjs";
 import { ROLE_PRESETS } from "./defaults.mjs";
 
 export async function generateColorTokens(options = {}) {
@@ -16,15 +17,16 @@ export async function generateColorTokens(options = {}) {
   const paletteUrl = resolveProjectUrl(root, config.palette);
   const outputUrl = resolveProjectUrl(root, config.output);
   const paletteCss = await readFile(paletteUrl, "utf8");
-  const palette = parsePalette(paletteCss);
-  const paletteValidation = validatePaletteTokens(palette, config);
+  const parsedPalette = parsePaletteWithDiagnostics(paletteCss);
+  const palette = parsedPalette.tokens;
+  const inputValidation = validateSmartColorsInput({ config, palette, paletteErrors: parsedPalette.errors });
 
-  if (paletteValidation.errors.length) {
-    throw new Error(`Missing required palette tokens:\n${paletteValidation.errors.map((error) => `- ${error}`).join("\n")}`);
+  if (inputValidation.errors.length) {
+    throw new Error(`Smart Colors validation failed:\n${inputValidation.errors.map((error) => `- ${error}`).join("\n")}`);
   }
 
   const model = buildColorModel(palette, config);
-  const warnings = [...paletteValidation.warnings, ...model.warnings];
+  const warnings = [...inputValidation.warnings, ...model.warnings];
   const css = formatColorsCss(model, config);
   const current = await readFile(outputUrl, "utf8").catch(() => "");
   const changed = current !== css;
@@ -52,61 +54,25 @@ export async function generateColorTokens(options = {}) {
   };
 }
 
-function validatePaletteTokens(palette, config) {
-  const required = [
-    { token: config.roles.bg, path: "roles.bg" },
-    { token: config.roles.ink, path: "roles.ink" },
-    ...Object.entries(config.roles.identities ?? {}).map(([name, identityDef]) => ({
-      token: getPaletteToken(identityDef),
-      path: `roles.identities.${name}`,
-    })),
-  ];
-  const optionalDecoratives = Object.entries(config.roles.decoratives ?? {}).map(([name, decorativeDef]) => ({
-    token: getPaletteToken(decorativeDef),
-    path: `roles.decoratives.${name}`,
-  }));
 
-  const missingRequired = collectMissingPaletteEntries(required, palette);
-  const missingDecoratives = collectMissingPaletteEntries(optionalDecoratives, palette);
-
-  return {
-    errors: missingRequired.map(formatMissingPaletteEntry),
-    warnings: missingDecoratives.length
-      ? [`Missing decorative palette tokens skipped: ${missingDecoratives.map(formatMissingPaletteEntry).join(", ")}.`]
-      : [],
-  };
-}
-
-function getPaletteToken(definition) {
-  return typeof definition === "string" ? definition : definition.token;
-}
-
-function collectMissingPaletteEntries(entries, palette) {
-  const missing = new Map();
-
-  for (const entry of entries) {
-    const key = tokenKey(entry.token);
-    if (palette[key]) continue;
-
-    if (!missing.has(key)) {
-      missing.set(key, { token: `--${key}`, paths: [] });
-    }
-
-    missing.get(key).paths.push(entry.path);
-  }
-
-  return [...missing.values()];
-}
-
-function formatMissingPaletteEntry(entry) {
-  return `${entry.token} (${entry.paths.join(", ")})`;
-}
 
 function buildColorModel(palette, config) {
   const warnings = [];
   const minTextContrast = config.contrast.text;
+  const minUiContrast = config.contrast.ui;
   const maxIdentityContrast = config.contrast.maxIdentity;
   const minFocusContrast = config.contrast.ui;
+  const darkRichness = config.contrast.darkRichness ?? 1;
+  const lightContrast = {
+    text: minTextContrast,
+    ui: minUiContrast,
+    maxIdentity: maxIdentityContrast,
+  };
+  const darkContrast = {
+    text: Math.min(maxIdentityContrast, minTextContrast * darkRichness),
+    ui: Math.min(maxIdentityContrast, minUiContrast * darkRichness),
+    maxIdentity: maxIdentityContrast,
+  };
   const { derivation: deriv } = config;
 
   const bgLight = fitToSrgb(palette[tokenKey(config.roles.bg)]);
@@ -147,18 +113,23 @@ function buildColorModel(palette, config) {
     if (!source) continue;
 
     const rolePreset = ROLE_PRESETS[identityDef.role] ?? ROLE_PRESETS["accent-text"];
-    const light = processIdentityColor(source, bgLight, identityDef.role, minTextContrast, maxIdentityContrast, config.contrast.ui);
-    const dark = processIdentityColor(source, bgDark, identityDef.role, minTextContrast, maxIdentityContrast, config.contrast.ui);
+    const light = processIdentityColor(source, bgLight, identityDef.role, lightContrast);
+    const dark = processIdentityColor(source, bgDark, identityDef.role, darkContrast);
 
     if (rolePreset.adjustColor) {
-      const contrastTarget = getIdentityContrastTarget(identityDef.role, config.contrast);
-      maybeWarnShift(warnings, identityDef.token, name, "light", source, light, bgLight, contrastTarget);
-      maybeWarnShift(warnings, identityDef.token, name, "dark", source, dark, bgDark, contrastTarget);
+      const lightContrastTarget = getIdentityContrastTarget(identityDef.role, lightContrast);
+      const darkContrastTarget = getIdentityContrastTarget(identityDef.role, darkContrast);
+      maybeWarnShift(warnings, identityDef.token, name, "light", source, light, bgLight, lightContrastTarget);
+      maybeWarnShift(warnings, identityDef.token, name, "dark", source, dark, bgDark, darkContrastTarget);
+    }
 
-      const mixRatio = findDarkMixRatio(source, bgDark, contrastTarget * (config.contrast.darkRichness ?? 1));
-      identities[name] = { source, light, dark, mixRatio, role: identityDef.role };
-    } else {
-      identities[name] = { source, light, dark, role: identityDef.role };
+    identities[name] = { source, light, dark, role: identityDef.role };
+
+    if (rolePreset.adjustColor && config.derivation.dark.mode !== "static") {
+      const darkTarget = getIdentityContrastTarget(identityDef.role, darkContrast);
+      if (darkTarget) {
+        identities[name].mixRatio = findDarkMixRatio(source, bgDark, darkTarget);
+      }
     }
 
     if (rolePreset.generateOnColor) {
@@ -245,7 +216,7 @@ function buildColorModel(palette, config) {
   };
 }
 
-function processIdentityColor(source, background, role, minTextContrast, maxIdentityContrast, minUiContrast) {
+function processIdentityColor(source, background, role, contrastConfig) {
   const rolePreset = ROLE_PRESETS[role] ?? ROLE_PRESETS["accent-text"];
 
   if (!rolePreset.adjustColor) {
@@ -255,8 +226,8 @@ function processIdentityColor(source, background, role, minTextContrast, maxIden
     return fitToSrgb(source);
   }
 
-  const target = rolePreset.minContrastKey === "ui" ? minUiContrast : minTextContrast;
-  return fitContrastBand(source, background, { min: target, max: maxIdentityContrast });
+  const target = getIdentityContrastTarget(role, contrastConfig);
+  return fitContrastBand(source, background, { min: target, max: contrastConfig.maxIdentity });
 }
 
 function getIdentityContrastTarget(role, contrastConfig) {
@@ -286,6 +257,8 @@ function findDarkMixRatio(source, bgDark, target) {
 
   return Math.round(pass * 100);
 }
+
+
 
 function buildScale(lightColor, darkColor, scaleConfig) {
   const scale = { light: {}, dark: {} };

@@ -1,4 +1,4 @@
-import { oklch } from "./color-math.mjs";
+import { fitToSrgb, oklch } from "./color-math.mjs";
 
 export function formatColorsCss(model, config) {
   const { neutrals, identities, decoratives, logoTokens, onColors, focus, scales } = model;
@@ -26,20 +26,9 @@ export function formatColorsCss(model, config) {
      ======================================================================== */
 
   /* ─── Internal light/dark pairs ───────────────────────────────────────── */
-  --_color-bg-light: ${oklch(neutrals.bgLight)};
-  --_color-bg-dark: color-mix(in oklch, var(--_color-bg-light) ${config.derivation.dark.bgMixRatio}%, oklch(0 0 0));
-
-  --_color-surface-light: ${oklch(neutrals.surfaceLight)};
-  --_color-surface-dark: color-mix(in oklch, var(--_color-surface-light) ${config.derivation.dark.surfaceMixRatio}%, oklch(0 0 0));
-
-  --_color-text-light: ${oklch(neutrals.textLight)};
-  --_color-text-dark: color-mix(in oklch, var(--_color-bg-light) ${config.derivation.dark.textMixRatio}%, oklch(0.99 0 0));
-
-  --_color-text-muted-light: ${oklch(neutrals.textMutedLight)};
-  --_color-text-muted-dark: color-mix(in oklch, var(--_color-text-dark) 72%, var(--_color-bg-dark));
-
-${identityNames.map((name) => formatIdentityInternals(name, identities[name], onColors[name])).join("\n\n")}
-${decorativeNames.map((name) => formatDecorativeInternals(name, decoratives[name])).join("\n")}
+${formatNeutrals(neutrals, config)}
+${identityNames.map((name) => formatIdentityInternals(name, identities[name], onColors[name], config)).join("\n\n")}
+${decorativeNames.map((name) => formatDecorativeInternals(name, decoratives[name], config)).join("\n")}
 
   --_color-focus-ring-light: ${oklch(focus.light)};
   --_color-focus-ring-dark: ${oklch(focus.dark)};
@@ -56,7 +45,7 @@ ${formatAliases(config.aliases, onColors)}
   --color-border-subtle: oklch(from var(--color-text) l c h / 14%);
   --color-border-strong: oklch(from var(--color-text) l c h / 28%);
   --color-focus-ring: light-dark(var(--_color-focus-ring-light), var(--_color-focus-ring-dark));
-${generatedLogoCss}${Object.keys(scales).length ? `\n  /* ─── Color scales (generated when scales.enabled = true) ──────────────── */\n${Object.entries(scales).map(([name, scale]) => formatScale(name, scale)).join("\n")}\n` : ""}${formatHueVariants(config)}
+${generatedLogoCss}${Object.keys(scales).length ? `\n  /* ─── Color scales (generated when scales.enabled = true) ──────────────── */\n${Object.entries(scales).map(([name, scale]) => formatScale(name, scale)).join("\n")}\n` : ""}${formatHueVariants(config, identities)}
   /* ─── Controls ────────────────────────────────────────────────────────── */
   --color-control-bg: var(--color-surface);
   --color-control-border: var(--color-border-subtle);
@@ -95,16 +84,55 @@ function formatDecorativeSection(decoratives) {
   return `\n  /* ─── Decorative ────────────────────────────────────────────────────\n     Colors preserved as authored. No contrast correction.\n     For gradients, shadows, ornamental accents, visual detail.\n     Do not use for body text or critical UI text. */\n${names.map((name) => `  --color-${name}: light-dark(var(--_color-${name}-light), var(--_color-${name}-dark));`).join("\n")}\n`;
 }
 
-function formatDecorativeInternals(name, color) {
-  return `  --_color-${name}-light: ${oklch(color.light)};\n  --_color-${name}-dark: oklch(from var(--_color-${name}-light) calc(l * 0.72) c h);`;
+function formatNeutrals(neutrals, config) {
+  const mode = config.derivation?.dark?.mode ?? "relative";
+
+  if (mode === "relative") {
+    const bm = config.derivation.dark.bgMixRatio;
+    const sm = config.derivation.dark.surfaceMixRatio;
+    const tm = config.derivation.dark.textMixRatio;
+
+    return `  --_color-bg-light: ${oklch(neutrals.bgLight)};
+  --_color-bg-dark: color-mix(in oklch, var(--_color-bg-light) ${bm}%, oklch(0 0 0));
+
+  --_color-surface-light: ${oklch(neutrals.surfaceLight)};
+  --_color-surface-dark: color-mix(in oklch, var(--_color-surface-light) ${sm}%, oklch(0 0 0));
+
+  --_color-text-light: ${oklch(neutrals.textLight)};
+  --_color-text-dark: color-mix(in oklch, var(--_color-bg-light) ${tm}%, oklch(0.99 0 0));
+
+  --_color-text-muted-light: ${oklch(neutrals.textMutedLight)};
+  --_color-text-muted-dark: color-mix(in oklch, var(--_color-text-dark) 72%, var(--_color-bg-dark));`;
+  }
+
+  return `  --_color-bg-light: ${oklch(neutrals.bgLight)};
+  --_color-bg-dark: ${oklch(neutrals.bgDark)};
+
+  --_color-surface-light: ${oklch(neutrals.surfaceLight)};
+  --_color-surface-dark: ${oklch(neutrals.surfaceDark)};
+
+  --_color-text-light: ${oklch(neutrals.textLight)};
+  --_color-text-dark: ${oklch(neutrals.textDark)};
+
+  --_color-text-muted-light: ${oklch(neutrals.textMutedLight)};
+  --_color-text-muted-dark: ${oklch(neutrals.textMutedDark)};`;
 }
 
-function formatIdentityInternals(name, identity, onColor) {
+function formatDecorativeInternals(name, color, config) {
+  const mode = config.derivation?.dark?.mode ?? "relative";
+  if (mode === "relative") {
+    return `  --_color-${name}-light: ${oklch(color.light)};\n  --_color-${name}-dark: oklch(from var(--_color-${name}-light) calc(l * 0.72) c h);`;
+  }
+  return `  --_color-${name}-light: ${oklch(color.light)};\n  --_color-${name}-dark: ${oklch(color.dark)};`;
+}
+
+function formatIdentityInternals(name, identity, onColor, config) {
+  const mode = config.derivation?.dark?.mode ?? "relative";
   const lines = [
     `  --_color-${name}-light: ${oklch(identity.light)};`,
   ];
 
-  if (identity.mixRatio != null) {
+  if (mode === "relative" && identity.mixRatio != null) {
     lines.push(`  --_color-${name}-dark: color-mix(in oklch, var(--_color-${name}-light) ${identity.mixRatio}%, oklch(1 0 0));`);
   } else {
     lines.push(`  --_color-${name}-dark: ${oklch(identity.dark)};`);
@@ -157,11 +185,12 @@ function formatLogoSection(logoTokens) {
 
   let css = "\n  /* ─── Logo / brand ──────────────────────────────────────────────────\n";
   css += "     Source colors from smart-colors.config.mjs.\n";
-  css += "     Dark variants derived via oklch(from ...). */\n";
+  css += "     Dark variants generated at build time. */\n";
 
   for (const name of names) {
     css += `  --_logo-${name}-light: ${oklch(logoTokens[name].light)};\n`;
-    css += `  --logo-${name}: light-dark(var(--_logo-${name}-light), oklch(from var(--_logo-${name}-light) calc(l * 1.5) c h));\n`;
+    css += `  --_logo-${name}-dark: ${oklch(logoTokens[name].dark)};\n`;
+    css += `  --logo-${name}: light-dark(var(--_logo-${name}-light), var(--_logo-${name}-dark));\n`;
   }
 
   if (logoTokens.accent) {
@@ -174,16 +203,20 @@ function formatLogoSection(logoTokens) {
   return css;
 }
 
-function formatHueVariants(config) {
+function formatHueVariants(config, identities) {
   const hv = config.scales?.hueVariants;
   if (!hv?.enabled || !hv.shifts?.length || !hv.applyTo?.length) return "";
 
-  let css = "\n  /* ─── Hue variants (oklch from …) ──────────────────────────────────── */\n";
+  let css = "\n  /* ─── Hue variants (generated at build time) ───────────────────────────── */\n";
 
   for (const name of hv.applyTo) {
+    const identity = identities[name];
+    if (!identity) continue;
+
     for (const shift of hv.shifts) {
       const suffix = shift >= 0 ? `h${shift}` : `h${shift}`;
-      css += `  --color-${name}-${suffix}: oklch(from var(--_color-${name}-light) l c calc(h + ${shift}));\n`;
+      const shifted = fitToSrgb({ ...identity.light, h: identity.light.h + shift });
+      css += `  --color-${name}-${suffix}: ${oklch(shifted)};\n`;
     }
   }
 

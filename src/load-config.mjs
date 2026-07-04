@@ -67,7 +67,7 @@ function normalizeConfig(config) {
     derivation: {
       surface: { ...{ lightShift: -0.018, darkFactor: 1.6 }, ...(config.derivation?.surface ?? {}) },
       muted: { ...{ chromaFactor: 0.65 }, ...(config.derivation?.muted ?? {}) },
-      dark: { ...{ bgLightnessFactor: 0.17, textLightnessFactor: 3.3, bgMixRatio: 14, surfaceMixRatio: 18, textMixRatio: 88 }, ...(config.derivation?.dark ?? {}) },
+      dark: { ...{ bgLightnessFactor: 0.17, textLightnessFactor: 3.3, mode: "relative", bgMixRatio: 14, surfaceMixRatio: 18, textMixRatio: 88 }, ...(config.derivation?.dark ?? {}) },
     },
     logo: {
       enabled: Boolean(config.logo?.enabled),

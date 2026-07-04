@@ -27,13 +27,13 @@ export function formatColorsCss(model, config) {
 
   /* ─── Internal light/dark pairs ───────────────────────────────────────── */
   --_color-bg-light: ${oklch(neutrals.bgLight)};
-  --_color-bg-dark: color-mix(in oklch, var(--_color-bg-light) 14%, oklch(0 0 0));
+  --_color-bg-dark: color-mix(in oklch, var(--_color-bg-light) ${config.derivation.dark.bgMixRatio}%, oklch(0 0 0));
 
   --_color-surface-light: ${oklch(neutrals.surfaceLight)};
-  --_color-surface-dark: color-mix(in oklch, var(--_color-surface-light) 18%, oklch(0 0 0));
+  --_color-surface-dark: color-mix(in oklch, var(--_color-surface-light) ${config.derivation.dark.surfaceMixRatio}%, oklch(0 0 0));
 
   --_color-text-light: ${oklch(neutrals.textLight)};
-  --_color-text-dark: color-mix(in oklch, var(--_color-bg-light) 88%, oklch(0.99 0 0));
+  --_color-text-dark: color-mix(in oklch, var(--_color-bg-light) ${config.derivation.dark.textMixRatio}%, oklch(0.99 0 0));
 
   --_color-text-muted-light: ${oklch(neutrals.textMutedLight)};
   --_color-text-muted-dark: color-mix(in oklch, var(--_color-text-dark) 72%, var(--_color-bg-dark));

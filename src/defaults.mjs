@@ -42,7 +42,7 @@ export const defaultSmartColorsConfig = {
   derivation: {
     surface: { lightShift: -0.018, darkFactor: 1.6 },
     muted: { chromaFactor: 0.65 },
-    dark: { bgLightnessFactor: 0.17, textLightnessFactor: 3.3 },
+    dark: { bgLightnessFactor: 0.17, textLightnessFactor: 3.3, bgMixRatio: 14, surfaceMixRatio: 18, textMixRatio: 88 },
   },
   logo: {
     enabled: false,

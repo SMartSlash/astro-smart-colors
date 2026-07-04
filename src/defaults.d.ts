@@ -44,6 +44,7 @@ export interface SmartColorsDerivationConfig {
   dark: {
     bgLightnessFactor: number;
     textLightnessFactor: number;
+    mode: "static" | "relative";
     bgMixRatio: number;
     surfaceMixRatio: number;
     textMixRatio: number;

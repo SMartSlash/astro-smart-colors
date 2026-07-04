@@ -12,6 +12,7 @@ export const defaultSmartColorsConfig = {
     text: 4.6,
     ui: 3,
     maxIdentity: 7.5,
+    darkRichness: 1.15,
   },
   roles: {
     bg: "--palette-bg",

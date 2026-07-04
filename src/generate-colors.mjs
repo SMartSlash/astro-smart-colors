@@ -155,7 +155,7 @@ function buildColorModel(palette, config) {
       maybeWarnShift(warnings, identityDef.token, name, "light", source, light, bgLight, contrastTarget);
       maybeWarnShift(warnings, identityDef.token, name, "dark", source, dark, bgDark, contrastTarget);
 
-      const mixRatio = findDarkMixRatio(source, bgDark, contrastTarget);
+      const mixRatio = findDarkMixRatio(source, bgDark, contrastTarget * (config.contrast.darkRichness ?? 1));
       identities[name] = { source, light, dark, mixRatio, role: identityDef.role };
     } else {
       identities[name] = { source, light, dark, role: identityDef.role };

@@ -102,8 +102,14 @@ function formatDecorativeInternals(name, color) {
 function formatIdentityInternals(name, identity, onColor) {
   const lines = [
     `  --_color-${name}-light: ${oklch(identity.light)};`,
-    `  --_color-${name}-dark: ${oklch(identity.dark)};`,
   ];
+
+  if (identity.mixRatio != null) {
+    lines.push(`  --_color-${name}-dark: color-mix(in oklch, var(--_color-${name}-light) ${identity.mixRatio}%, oklch(1 0 0));`);
+  } else {
+    lines.push(`  --_color-${name}-dark: ${oklch(identity.dark)};`);
+  }
+
   if (onColor) {
     lines.push(
       `  --_color-on-${name}-light: ${onColor.light};`,

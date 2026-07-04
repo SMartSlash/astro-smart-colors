@@ -154,9 +154,12 @@ function buildColorModel(palette, config) {
       const contrastTarget = getIdentityContrastTarget(identityDef.role, config.contrast);
       maybeWarnShift(warnings, identityDef.token, name, "light", source, light, bgLight, contrastTarget);
       maybeWarnShift(warnings, identityDef.token, name, "dark", source, dark, bgDark, contrastTarget);
-    }
 
-    identities[name] = { source, light, dark, role: identityDef.role };
+      const mixRatio = findDarkMixRatio(source, bgDark, contrastTarget);
+      identities[name] = { source, light, dark, mixRatio, role: identityDef.role };
+    } else {
+      identities[name] = { source, light, dark, role: identityDef.role };
+    }
 
     if (rolePreset.generateOnColor) {
       onColors[name] = {
@@ -260,6 +263,28 @@ function getIdentityContrastTarget(role, contrastConfig) {
   const rolePreset = ROLE_PRESETS[role] ?? ROLE_PRESETS["accent-text"];
   if (!rolePreset.minContrastKey) return null;
   return contrastConfig[rolePreset.minContrastKey];
+}
+
+function findDarkMixRatio(source, bgDark, target) {
+  let pass = 0.3;
+  let fail = 1.0;
+
+  for (let i = 0; i < 32; i += 1) {
+    const mid = (pass + fail) / 2;
+    const mixed = fitToSrgb({
+      l: source.l * mid + 1 * (1 - mid),
+      c: source.c * mid,
+      h: source.h,
+    });
+
+    if (contrast(mixed, bgDark) >= target) {
+      pass = mid;
+    } else {
+      fail = mid;
+    }
+  }
+
+  return Math.round(pass * 100);
 }
 
 function buildScale(lightColor, darkColor, scaleConfig) {

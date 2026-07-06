@@ -148,11 +148,10 @@ function formatIdentityInternals(name, identity, onColor, config) {
 }
 
 function formatIdentityPublic(name, onColor) {
-  if (onColor) {
-    return `  --color-${name}: light-dark(var(--_color-${name}-light), var(--_color-${name}-dark));
-  --color-on-${name}: light-dark(var(--_color-on-${name}-light), var(--_color-on-${name}-dark));`;
-  }
-  return `  --color-${name}: light-dark(var(--_color-${name}-light), var(--_color-${name}-dark));`;
+  const colorToken = `  --color-${name}: light-dark(var(--_color-${name}-light), var(--_color-${name}-dark));`;
+  const onToken = onColor ? `\n  --color-on-${name}: light-dark(var(--_color-on-${name}-light), var(--_color-on-${name}-dark));` : "";
+  const inkToken = `\n  --ink-${name}: contrast-color(var(--color-${name}));`;
+  return colorToken + onToken + inkToken;
 }
 
 function formatScale(name, scale) {

@@ -6,9 +6,28 @@ export function formatColorsCss(model, config) {
   const decorativeNames = Object.keys(decoratives ?? {});
   const generatedLogoCss = formatLogoSection(logoTokens);
 
-  return `${formatPropertyRegistrations({ identityNames, onColors, aliases: config.aliases, decorativeNames })}
+  return `${formatPropertyRegistrations()}
 
 :root {
+  /* ─── Theme transition ──────────────────────────────────────────────────
+     Interpolazione cromatica light ↔ dark. La durata è controllata da
+     --theme-transition-duration (override in colors-tuning.css).
+     Nota: --color-bg non transisce (Safari glass effect).                */
+  --theme-transition-duration: 0.4s;
+
+  transition:
+    --color-surface var(--theme-transition-duration) ease,
+    --color-text var(--theme-transition-duration) ease,
+    --color-text-muted var(--theme-transition-duration) ease,
+    --color-border-subtle var(--theme-transition-duration) ease,
+    --color-border-strong var(--theme-transition-duration) ease,
+    --color-focus-ring var(--theme-transition-duration) ease,
+    --color-primary var(--theme-transition-duration) ease,
+    --color-on-primary var(--theme-transition-duration) ease,
+    --color-secondary var(--theme-transition-duration) ease,
+    --color-on-secondary var(--theme-transition-duration) ease,
+    --color-tertiary var(--theme-transition-duration) ease,
+    --color-on-tertiary var(--theme-transition-duration) ease;
   color-scheme: light dark;
 
   /* ========================================================================
@@ -36,7 +55,7 @@ export function formatColorsCss(model, config) {
      ======================================================================== */
 ${formatQuickReference(model)}
 
-${formatTuningContract(config, model)}
+${formatTuningContract(config)}
 
   /* ─── Internal light/dark pairs ───────────────────────────────────────── */
 ${formatNeutrals(neutrals, config)}
@@ -58,7 +77,7 @@ ${formatAliases(config.aliases, onColors)}
   --color-border-subtle: oklch(from var(--color-text) l c h / 14%);
   --color-border-strong: oklch(from var(--color-text) l c h / 28%);
   --color-focus-ring: light-dark(var(--_color-focus-ring-light), var(--_color-focus-ring-dark));
-${formatSurfaceContract()}${generatedLogoCss}${formatScaleSection(scales, onColors)}${formatHueVariants(config, identities)}${formatThemeTransition({ identityNames, onColors, aliases: config.aliases, decorativeNames })}
+${formatSurfaceContract()}${generatedLogoCss}${formatScaleSection(scales, onColors)}${formatHueVariants(config, identities)}
   /* ─── Controls ────────────────────────────────────────────────────────── */
   --color-control-bg: var(--color-surface);
   --color-control-border: var(--color-border-subtle);
@@ -90,67 +109,27 @@ ${formatSurfaceContract()}${generatedLogoCss}${formatScaleSection(scales, onColo
 `;
 }
 
-function formatPropertyRegistrations({ identityNames = [], onColors = {}, aliases = {}, decorativeNames = [] }) {
-  const props = [];
-
-  const add = (name, initial = "transparent") => {
-    props.push(`@property ${name} {
-  syntax: "<color>";
-  inherits: true;
-  initial-value: ${initial};
-}`);
-  };
-
-  /* ─── Neutral tokens ──────────────────────────────────────────────────── */
-  add("--color-bg", "transparent");
-  add("--color-surface", "transparent");
-  add("--color-text", "black");
-  add("--color-text-muted", "black");
-  add("--color-border-subtle", "transparent");
-  add("--color-border-strong", "transparent");
-  add("--color-focus-ring", "black");
-
-  /* ─── Surface substrate ───────────────────────────────────────────────── */
-  add("--surface-color", "transparent");
-  add("--surface-contrast", "black");
-  add("--surface-text", "black");
-  add("--surface-text-muted", "black");
-  add("--surface-border", "transparent");
-
-  /* ─── Component ink slot ──────────────────────────────────────────────── */
-  add("--ink", "black");
-
-  /* ─── Identity colors ─────────────────────────────────────────────────── */
-  for (const name of identityNames) {
-    add(`--color-${name}`, "transparent");
-    if (onColors[name]) {
-      add(`--color-on-${name}`, "black");
-    }
-    add(`--ink-${name}`, "black");
-  }
-
-  /* ─── Decorative colors ───────────────────────────────────────────────── */
-  for (const name of decorativeNames) {
-    add(`--color-${name}`, "transparent");
-  }
-
-  /* ─── Aliases ─────────────────────────────────────────────────────────── */
-  for (const [alias, target] of Object.entries(aliases)) {
-    add(`--color-${alias}`, "transparent");
-    if (onColors[target]) {
-      add(`--color-on-${alias}`, "black");
-    }
-  }
-
+function formatPropertyRegistrations() {
   return `/* ─── @property registrations ─────────────────────────────────────────────
-   Typed custom properties enable CSS transitions on colors and
-   @container style() queries. Baseline 2024 (Safari 17.4+, Chrome 85+,
-   Firefox 128+). Without @property the browser treats custom properties
-   as untyped strings and cannot interpolate them.
+   Typed custom properties enable CSS transitions on colors (Baseline 2024).
+   Registered only for tokens that actually transition on theme change. */
+@property --color-bg { syntax: "<color>"; inherits: true; initial-value: transparent; }
+@property --color-surface { syntax: "<color>"; inherits: true; initial-value: transparent; }
+@property --color-text { syntax: "<color>"; inherits: true; initial-value: black; }
+@property --color-text-muted { syntax: "<color>"; inherits: true; initial-value: black; }
+@property --color-border-subtle { syntax: "<color>"; inherits: true; initial-value: transparent; }
+@property --color-border-strong { syntax: "<color>"; inherits: true; initial-value: transparent; }
+@property --color-focus-ring { syntax: "<color>"; inherits: true; initial-value: black; }
 
-   Neutral / surface / identity / decorative / alias tokens are all
-   registered so the entire color system is animatable and queryable. */
-${props.join("\n")}`;
+@property --color-primary { syntax: "<color>"; inherits: true; initial-value: transparent; }
+@property --color-on-primary { syntax: "<color>"; inherits: true; initial-value: black; }
+@property --color-secondary { syntax: "<color>"; inherits: true; initial-value: transparent; }
+@property --color-on-secondary { syntax: "<color>"; inherits: true; initial-value: black; }
+@property --color-tertiary { syntax: "<color>"; inherits: true; initial-value: transparent; }
+@property --color-on-tertiary { syntax: "<color>"; inherits: true; initial-value: black; }
+
+@property --surface-color { syntax: "<color>"; inherits: true; initial-value: transparent; }
+@property --surface-contrast { syntax: "<color>"; inherits: true; initial-value: black; }`;
 }
 
 function formatDecorativeSection(decoratives) {
@@ -160,19 +139,12 @@ function formatDecorativeSection(decoratives) {
   return `\n  /* ─── Decorative ────────────────────────────────────────────────────\n     Colors preserved as authored. No contrast correction.\n     For gradients, shadows, ornamental accents, visual detail.\n     Do not use for body text or critical UI text. */\n${names.map((name) => `  --color-${name}: light-dark(var(--_color-${name}-light), var(--_color-${name}-dark));`).join("\n")}\n`;
 }
 
-function formatTuningContract(config, model) {
+function formatTuningContract(config) {
   const dark = config.derivation.dark;
   const surface = config.derivation.surface;
-  const identities = model?.identities ?? {};
-
-  const mixRatioTokens = Object.entries(identities)
-    .filter(([, identity]) => identity.mixRatio != null)
-    .map(([name, identity]) => `  --color-tune-${name}-dark-mix-ratio: ${identity.mixRatio}%;`)
-    .join("\n");
 
   return `  /* ─── Tuning contract ────────────────────────────────────────────────────
-     Project-level personalization knobs. Override these in colors-tuning.css
-     or another later token file; do not override generated --_* internals. */
+     Project-level knobs. Override in colors-tuning.css. */
   --color-tune-light-warmth: 100%;
   --color-tune-surface-lightness-shift: ${formatSignedNumber(surface.lightShift)};
   --color-tune-dark-warmth: 100%;
@@ -184,7 +156,7 @@ function formatTuningContract(config, model) {
   --color-tune-elevation-1-glow-alpha: 14%;
   --color-tune-elevation-2-shadow-alpha: 13%;
   --color-tune-elevation-2-border-alpha: 36%;
-  --color-tune-elevation-2-glow-alpha: 20%;${mixRatioTokens ? "\n" + mixRatioTokens : ""}`;
+  --color-tune-elevation-2-glow-alpha: 20%;`;
 }
 
 function formatNeutrals(neutrals, config) {
@@ -236,8 +208,7 @@ function formatIdentityInternals(name, identity, onColor, config) {
   ];
 
   if (mode === "relative" && identity.mixRatio != null) {
-    lines.push(`  --_color-${name}-dark-mix-ratio: var(--color-tune-${name}-dark-mix-ratio, ${identity.mixRatio}%);`);
-    lines.push(`  --_color-${name}-dark-generated: color-mix(in oklch, var(--_color-${name}-source) var(--_color-${name}-dark-mix-ratio), oklch(1 0 0));`);
+    lines.push(`  --_color-${name}-dark-generated: color-mix(in oklch, var(--_color-${name}-source) ${identity.mixRatio}%, oklch(1 0 0));`);
   } else {
     lines.push(`  --_color-${name}-dark-generated: ${oklch(identity.dark)};`);
   }
@@ -286,54 +257,6 @@ function formatSurfaceContract() {
     0 18px 48px light-dark(color-mix(in oklch, var(--surface-contrast) var(--color-tune-elevation-2-shadow-alpha), transparent), transparent),
     inset 0 0 0 1px light-dark(transparent, oklch(from var(--surface-color) calc(l + 0.40) c h / var(--color-tune-elevation-2-border-alpha))),
   	  0 0 26px light-dark(transparent, oklch(from var(--surface-color) calc(l + 0.36) c h / var(--color-tune-elevation-2-glow-alpha)));`;
-  }
-
-  function formatThemeTransition({ identityNames = [], onColors = {}, aliases = {}, decorativeNames = [] }) {
-    // --color-bg is excluded deliberately: it must snap instantly so Safari's
-    // frosted-glass toolbar sees a stable background color, not a mid-transition
-    // value. The "light switch" effect feels more natural for the page substrate.
-    const props = [
-      "--color-surface",
-      "--color-text",
-      "--color-text-muted",
-      "--color-border-subtle",
-      "--color-border-strong",
-      "--color-focus-ring",
-    ];
-
-    for (const name of identityNames) {
-      props.push(`--color-${name}`);
-      if (onColors[name]) props.push(`--color-on-${name}`);
-      props.push(`--ink-${name}`);
-    }
-
-    for (const name of decorativeNames) {
-      props.push(`--color-${name}`);
-    }
-
-    for (const [alias] of Object.entries(aliases)) {
-      props.push(`--color-${alias}`);
-    }
-
-    const transitions = props
-      .map((p) => `    ${p} var(--theme-transition-duration) ease`)
-      .join(",\n");
-
-    return `
-
-  /* ─── Theme transition ──────────────────────────────────────────────────
-     Smooth color interpolation on theme change (light ↔ dark).
-     Disabled by default (duration 0s = instant). To enable, set
-     --theme-transition-duration in colors-tuning.css to a positive value:
-
-       :root { --theme-transition-duration: 0.45s; }
-
-     Requires @property-registered tokens (Baseline 2024). On older
-     browsers the transition is a no-op; the theme switches instantly.
-     preferences.css already handles prefers-reduced-motion. */
-  --theme-transition-duration: 0s;
-  transition:
-${transitions};`;
   }
 
   function formatScaleSection(scales, onColors) {

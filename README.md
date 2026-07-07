@@ -46,9 +46,9 @@ export default defineSmartColorsConfig({
     bg: "--palette-bg",
     ink: "--palette-ink",
     identities: {
-      primary: { token: "--palette-primary", role: "accent-text" },
-      secondary: { token: "--palette-secondary", role: "accent-ui" },
-      tertiary: { token: "--palette-tertiary", role: "soft-surface" },
+      primary: { token: "--palette-primary", role: "content" },
+      secondary: { token: "--palette-secondary", role: "action" },
+      tertiary: { token: "--palette-tertiary", role: "fill" },
     },
     decoratives: {},
     focus: "primary",
@@ -98,14 +98,301 @@ Components should consume only the public tokens:
 --color-on-tertiary
 --color-on-accent
 
+--ink-primary
+--ink-secondary
+--ink-tertiary
+--ink-accent
+
+--color-<identity>-surface
+--color-<identity>-border
+--color-<identity>-solid
+--color-<identity>-on-solid
+--color-<identity>-text
+
 --color-border-subtle
 --color-border-strong
 --color-focus-ring
 
 --color-control-*
+
+--surface-color
+--surface-contrast
+--surface-text
+--surface-text-muted
+--surface-border
+
+--elevation-1
+--elevation-2
+
+--color-tune-light-warmth
+--color-tune-surface-lightness-shift
+--color-tune-dark-warmth
+--color-tune-dark-bg-depth
+--color-tune-dark-surface-depth
+--color-tune-dark-text-depth
+--color-tune-elevation-*
+--color-tune-<identity>-dark
 ```
 
 Generated internal tokens use the `--_color-*` prefix and should not be consumed by components.
+
+## Token consumption guide
+
+Use this hierarchy when writing components. It keeps component CSS readable and prevents accidental coupling to generated internals.
+
+### 1. Base components and neutral layout
+
+For ordinary text, page chrome, neutral cards and layout defaults, start with the global semantic tokens:
+
+```css
+.component {
+  background: var(--color-surface);
+  color: var(--color-text);
+  border-color: var(--color-border-subtle);
+}
+
+.component__meta {
+  color: var(--color-text-muted);
+}
+
+.component:focus-visible {
+  outline-color: var(--color-focus-ring);
+}
+```
+
+Recommended tokens:
+
+```css
+--color-bg
+--color-surface
+--color-text
+--color-text-muted
+--color-border-subtle
+--color-border-strong
+--color-focus-ring
+--color-control-*
+```
+
+### 2. Local surfaces
+
+When a section, card or component owns a local background, override only `--surface-color` and consume the derived surface contract:
+
+```css
+.feature-card {
+  --surface-color: var(--color-primary-surface);
+
+  background: var(--surface-color);
+  color: var(--surface-text);
+  border-color: var(--surface-border);
+  box-shadow: var(--elevation-1);
+}
+```
+
+Recommended tokens:
+
+```css
+--surface-color
+--surface-text
+--surface-text-muted
+--surface-border
+--surface-contrast
+--elevation-1
+--elevation-2
+```
+
+### 3. Buttons, badges, chips and colored states
+
+For colored UI, prefer the designer-facing aliases over raw numeric steps. They describe intent instead of tonal math:
+
+```css
+.button--primary {
+  background: var(--color-primary-solid);
+  color: var(--color-primary-on-solid);
+}
+
+.badge--primary {
+  background: var(--color-primary-surface);
+  color: var(--color-primary-text);
+  border-color: var(--color-primary-border);
+}
+```
+
+Recommended aliases:
+
+```css
+--color-<identity>-surface
+--color-<identity>-surface-strong
+--color-<identity>-border
+--color-<identity>-border-strong
+--color-<identity>-solid
+--color-<identity>-solid-hover
+--color-<identity>-on-solid
+--color-<identity>-text
+--color-<identity>-text-strong
+```
+
+Numeric steps such as `--color-primary-500` are available for fine tuning, but they should be the second choice after semantic aliases.
+
+### 4. Direct identity/on-color pairs
+
+Use the direct identity pair when you need the configured identity color itself and its safe companion color:
+
+```css
+.callout-icon {
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+}
+```
+
+Recommended tokens:
+
+```css
+--color-primary
+--color-on-primary
+--color-secondary
+--color-on-secondary
+--color-tertiary
+--color-on-tertiary
+--color-accent
+--color-on-accent
+```
+
+`--ink-*` tokens are native `contrast-color()` helpers for progressive enhancement. Keep `--color-on-*` as the deterministic baseline when text/icon contrast is critical.
+
+### 5. Forbidden in components
+
+Do not consume palette sources or generated internals from components, pages or layouts:
+
+```css
+/* Avoid */
+--palette-*
+--_color-*
+```
+
+`--palette-*` is editable input for the generator. `--_color-*` is implementation detail and may change when the generator changes.
+
+### Quick chooser
+
+| Case | Prefer |
+|---|---|
+| Body text | `--color-text` |
+| Muted text | `--color-text-muted` |
+| Page background | `--color-bg` |
+| Neutral card | `--color-surface`, `--surface-*`, `--elevation-1` |
+| Filled button | `--color-primary-solid`, `--color-primary-on-solid` |
+| Soft badge/callout | `--color-primary-surface`, `--color-primary-text`, `--color-primary-border` |
+| Generic border | `--color-border-subtle` |
+| Focus state | `--color-focus-ring` |
+| Form control | `--color-control-*` |
+| Decorative, non-textual detail | `--color-spark`, `--color-glow`, or another decorative token |
+| Never in component CSS | `--palette-*`, `--_color-*` |
+
+## Global surface substrate
+
+The generator emits a small global substrate for local theming before any component-specific CSS exists:
+
+```css
+@property --surface-color {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: transparent;
+}
+
+@property --surface-contrast {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: black;
+}
+
+:root {
+  --surface-color: var(--color-bg);
+  --surface-contrast: contrast-color(var(--surface-color));
+  --surface-text: var(--color-text);
+  --surface-text-muted: var(--color-text-muted);
+  --surface-border: var(--color-border-subtle);
+
+  --elevation-1: /* light shadows, dark tinted glow */;
+  --elevation-2: /* stronger light shadows, stronger dark glow */;
+}
+```
+
+Future sections, pages or surface primitives can override only `--surface-color`; text, borders and elevation stay tied to that local surface.
+
+## Component ink slot (`--ink`)
+
+The generator registers `@property --ink` as a **component-level slot** — it is not assigned at `:root`. Individual components set it locally to enable `@container style()` branching and animated surface transitions:
+
+```css
+.card {
+  container-type: inline-size;  /* required for @container style() */
+  --ink: contrast-color(var(--surface-color));
+  transition: --ink 0.3s ease;
+}
+
+/* Branch into tinted palettes based on the local surface */
+@container style(--ink: white) {
+  .card-body { color: oklch(from var(--surface-color) 0.9 0.06 h); }
+}
+
+@container style(--ink: black) {
+  .card-body { color: oklch(from var(--surface-color) 0.25 0.10 h); }
+}
+```
+
+The `@property` registration makes `--ink` **animatable** via CSS transitions. When `--surface-color` changes (e.g. on hover), `--ink` re-evaluates `contrast-color()` and the browser interpolates between the old and new computed colors — zero JavaScript required.
+
+## Project-level tuning contract
+
+The package emits public tuning knobs intended to be overridden by a project-level token file imported after `colors.css`, for example `src/styles/tokens/colors-tuning.css`:
+
+```css
+:root {
+  --color-tune-light-warmth: 45%;
+  --color-tune-dark-warmth: 75%;
+  --color-tune-dark-bg-depth: 14%;
+  --color-tune-dark-surface-depth: 19%;
+  --color-tune-dark-text-depth: 88%;
+
+  --color-tune-elevation-1-shadow-alpha: 10%;
+  --color-tune-elevation-1-border-alpha: 28%;
+  --color-tune-elevation-1-glow-alpha: 14%;
+}
+```
+
+For one-off dark identity corrections, prefer palette/config first. If a project still needs a CSS-level override, use public tuning tokens instead of internal generated variables:
+
+```css
+:root {
+  --color-tune-primary-dark: oklch(0.60 0.13 32);
+}
+```
+
+## Designer-facing semantic aliases
+
+When `scales.enabled` is true, each scaled identity also emits aliases that are easier for humans to choose than raw numeric steps:
+
+```css
+--color-primary-surface          /* subtle tinted background */
+--color-primary-surface-strong   /* stronger selected/active surface */
+--color-primary-border           /* chromatic border */
+--color-primary-border-strong    /* stronger border/accent line */
+--color-primary-solid            /* filled control / emphasis surface */
+--color-primary-solid-hover      /* hover/pressed solid tone */
+--color-primary-on-solid         /* text/icon on the solid color */
+--color-primary-text             /* colored text/icon on neutral surfaces */
+--color-primary-text-strong      /* stronger colored text/icon */
+```
+
+Numeric steps (`--color-primary-50` … `--color-primary-900`) remain available for fine tuning, but the recommended consumption path is semantic first. Steps are theme-adaptive: `50` is the softest tint in the current color scheme, `500` is the identity color, and `900` is the strongest readable tone in the current scheme.
+
+Paired hue variants use designer-facing names, for example:
+
+```css
+--color-primary-warm
+--color-primary-cool
+```
+
+When more than two hue shifts are configured, the package falls back to explicit technical names such as `--color-primary-hue-plus-30`.
 
 ## Logo / brand tokens
 

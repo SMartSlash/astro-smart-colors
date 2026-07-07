@@ -1,4 +1,4 @@
-export type SmartColorRole = "accent-text" | "accent-ui" | "soft-surface" | "decorative";
+export type SmartColorRole = "content" | "action" | "fill" | "decorative";
 
 export interface IdentityInputDef {
   token: string;

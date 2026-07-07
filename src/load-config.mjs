@@ -76,7 +76,7 @@ function normalizeConfig(config) {
   };
 }
 
-function normalizeIdentityDefs(identities, defaultRole = "accent-text") {
+function normalizeIdentityDefs(identities, defaultRole = "content") {
   const normalized = {};
   for (const [name, def] of Object.entries(identities)) {
     if (typeof def === "string") {

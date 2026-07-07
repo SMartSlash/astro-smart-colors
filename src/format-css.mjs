@@ -6,7 +6,9 @@ export function formatColorsCss(model, config) {
   const decorativeNames = Object.keys(decoratives ?? {});
   const generatedLogoCss = formatLogoSection(logoTokens);
 
-  return `:root {
+  return `${formatPropertyRegistrations({ identityNames, onColors, aliases: config.aliases, decorativeNames })}
+
+:root {
   color-scheme: light dark;
 
   /* ========================================================================
@@ -21,9 +23,20 @@ export function formatColorsCss(model, config) {
      - aliases such as \`--color-accent\` map to configured identity roles;
      - \`--color-on-*\` pairs target WCAG AA for text/icons on identity
        backgrounds;
+     - designer-facing aliases map numeric scales to surface, border, solid
+       and text roles; prefer them before raw scale steps;
+     - \`--ink-*\` tokens are native contrast helpers for progressive
+       enhancement; keep \`--color-on-*\` as the baseline;
+     - \`--surface-*\` and \`--elevation-*\` provide a global substrate for
+       local surface theming before component-specific CSS;
+     - \`--color-tune-*\` tokens are the public tuning contract for project-level
+       personalization; avoid overriding generated \`--_*\` internals;
      - identities without an on-color (e.g. decorative role) skip the pair;
      - optional logo/brand tokens are project-specific.
      ======================================================================== */
+${formatQuickReference(model)}
+
+${formatTuningContract(config)}
 
   /* ─── Internal light/dark pairs ───────────────────────────────────────── */
 ${formatNeutrals(neutrals, config)}
@@ -45,7 +58,7 @@ ${formatAliases(config.aliases, onColors)}
   --color-border-subtle: oklch(from var(--color-text) l c h / 14%);
   --color-border-strong: oklch(from var(--color-text) l c h / 28%);
   --color-focus-ring: light-dark(var(--_color-focus-ring-light), var(--_color-focus-ring-dark));
-${generatedLogoCss}${Object.keys(scales).length ? `\n  /* ─── Color scales (generated when scales.enabled = true) ──────────────── */\n${Object.entries(scales).map(([name, scale]) => formatScale(name, scale)).join("\n")}\n` : ""}${formatHueVariants(config, identities)}
+${formatSurfaceContract()}${generatedLogoCss}${formatScaleSection(scales, onColors)}${formatHueVariants(config, identities)}${formatThemeTransition({ identityNames, onColors, aliases: config.aliases, decorativeNames })}
   /* ─── Controls ────────────────────────────────────────────────────────── */
   --color-control-bg: var(--color-surface);
   --color-control-border: var(--color-border-subtle);
@@ -77,6 +90,69 @@ ${generatedLogoCss}${Object.keys(scales).length ? `\n  /* ─── Color scales
 `;
 }
 
+function formatPropertyRegistrations({ identityNames = [], onColors = {}, aliases = {}, decorativeNames = [] }) {
+  const props = [];
+
+  const add = (name, initial = "transparent") => {
+    props.push(`@property ${name} {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: ${initial};
+}`);
+  };
+
+  /* ─── Neutral tokens ──────────────────────────────────────────────────── */
+  add("--color-bg", "transparent");
+  add("--color-surface", "transparent");
+  add("--color-text", "black");
+  add("--color-text-muted", "black");
+  add("--color-border-subtle", "transparent");
+  add("--color-border-strong", "transparent");
+  add("--color-focus-ring", "black");
+
+  /* ─── Surface substrate ───────────────────────────────────────────────── */
+  add("--surface-color", "transparent");
+  add("--surface-contrast", "black");
+  add("--surface-text", "black");
+  add("--surface-text-muted", "black");
+  add("--surface-border", "transparent");
+
+  /* ─── Component ink slot ──────────────────────────────────────────────── */
+  add("--ink", "black");
+
+  /* ─── Identity colors ─────────────────────────────────────────────────── */
+  for (const name of identityNames) {
+    add(`--color-${name}`, "transparent");
+    if (onColors[name]) {
+      add(`--color-on-${name}`, "black");
+    }
+    add(`--ink-${name}`, "black");
+  }
+
+  /* ─── Decorative colors ───────────────────────────────────────────────── */
+  for (const name of decorativeNames) {
+    add(`--color-${name}`, "transparent");
+  }
+
+  /* ─── Aliases ─────────────────────────────────────────────────────────── */
+  for (const [alias, target] of Object.entries(aliases)) {
+    add(`--color-${alias}`, "transparent");
+    if (onColors[target]) {
+      add(`--color-on-${alias}`, "black");
+    }
+  }
+
+  return `/* ─── @property registrations ─────────────────────────────────────────────
+   Typed custom properties enable CSS transitions on colors and
+   @container style() queries. Baseline 2024 (Safari 17.4+, Chrome 85+,
+   Firefox 128+). Without @property the browser treats custom properties
+   as untyped strings and cannot interpolate them.
+
+   Neutral / surface / identity / decorative / alias tokens are all
+   registered so the entire color system is animatable and queryable. */
+${props.join("\n")}`;
+}
+
 function formatDecorativeSection(decoratives) {
   const names = Object.keys(decoratives ?? {});
   if (!names.length) return "";
@@ -84,22 +160,42 @@ function formatDecorativeSection(decoratives) {
   return `\n  /* ─── Decorative ────────────────────────────────────────────────────\n     Colors preserved as authored. No contrast correction.\n     For gradients, shadows, ornamental accents, visual detail.\n     Do not use for body text or critical UI text. */\n${names.map((name) => `  --color-${name}: light-dark(var(--_color-${name}-light), var(--_color-${name}-dark));`).join("\n")}\n`;
 }
 
+function formatTuningContract(config) {
+  const dark = config.derivation.dark;
+  const surface = config.derivation.surface;
+
+  return `  /* ─── Tuning contract ────────────────────────────────────────────────────
+     Project-level personalization knobs. Override these in colors-tuning.css
+     or another later token file; do not override generated --_* internals. */
+  --color-tune-light-warmth: 100%;
+  --color-tune-surface-lightness-shift: ${formatSignedNumber(surface.lightShift)};
+  --color-tune-dark-warmth: 100%;
+  --color-tune-dark-bg-depth: ${dark.bgMixRatio}%;
+  --color-tune-dark-surface-depth: ${dark.surfaceMixRatio}%;
+  --color-tune-dark-text-depth: ${dark.textMixRatio}%;
+  --color-tune-elevation-1-shadow-alpha: 10%;
+  --color-tune-elevation-1-border-alpha: 28%;
+  --color-tune-elevation-1-glow-alpha: 14%;
+  --color-tune-elevation-2-shadow-alpha: 13%;
+  --color-tune-elevation-2-border-alpha: 36%;
+  --color-tune-elevation-2-glow-alpha: 20%;`;
+}
+
 function formatNeutrals(neutrals, config) {
   const mode = config.derivation?.dark?.mode ?? "relative";
 
   if (mode === "relative") {
-    const bm = config.derivation.dark.bgMixRatio;
-    const sm = config.derivation.dark.surfaceMixRatio;
-    const tm = config.derivation.dark.textMixRatio;
+    return `  --_color-bg-source: ${oklch(neutrals.bgLight)};
+  --_color-bg-neutral: ${oklch({ ...neutrals.bgLight, c: 0, h: 0 })};
+  --_color-bg-light: color-mix(in oklch, var(--_color-bg-source) var(--color-tune-light-warmth), var(--_color-bg-neutral));
+  --_color-bg-warm: color-mix(in oklch, var(--_color-bg-source) var(--color-tune-dark-warmth), var(--_color-bg-neutral));
+  --_color-bg-dark: color-mix(in oklch, var(--_color-bg-warm) var(--color-tune-dark-bg-depth), oklch(0 0 0));
 
-    return `  --_color-bg-light: ${oklch(neutrals.bgLight)};
-  --_color-bg-dark: color-mix(in oklch, var(--_color-bg-light) ${bm}%, oklch(0 0 0));
-
-  --_color-surface-light: ${oklch(neutrals.surfaceLight)};
-  --_color-surface-dark: color-mix(in oklch, var(--_color-surface-light) ${sm}%, oklch(0 0 0));
+  --_color-surface-light: oklch(from var(--_color-bg-light) calc(l + var(--color-tune-surface-lightness-shift)) c h);
+  --_color-surface-dark: color-mix(in oklch, var(--_color-bg-warm) var(--color-tune-dark-surface-depth), oklch(0 0 0));
 
   --_color-text-light: ${oklch(neutrals.textLight)};
-  --_color-text-dark: color-mix(in oklch, var(--_color-bg-light) ${tm}%, oklch(0.99 0 0));
+  --_color-text-dark: color-mix(in oklch, var(--_color-bg-source) var(--color-tune-dark-text-depth), oklch(0.99 0 0));
 
   --_color-text-muted-light: ${oklch(neutrals.textMutedLight)};
   --_color-text-muted-dark: color-mix(in oklch, var(--_color-text-dark) 72%, var(--_color-bg-dark));`;
@@ -129,14 +225,17 @@ function formatDecorativeInternals(name, color, config) {
 function formatIdentityInternals(name, identity, onColor, config) {
   const mode = config.derivation?.dark?.mode ?? "relative";
   const lines = [
+    `  --_color-${name}-source: ${oklch(identity.source)};`,
     `  --_color-${name}-light: ${oklch(identity.light)};`,
   ];
 
   if (mode === "relative" && identity.mixRatio != null) {
-    lines.push(`  --_color-${name}-dark: color-mix(in oklch, var(--_color-${name}-light) ${identity.mixRatio}%, oklch(1 0 0));`);
+    lines.push(`  --_color-${name}-dark-generated: color-mix(in oklch, var(--_color-${name}-source) ${identity.mixRatio}%, oklch(1 0 0));`);
   } else {
-    lines.push(`  --_color-${name}-dark: ${oklch(identity.dark)};`);
+    lines.push(`  --_color-${name}-dark-generated: ${oklch(identity.dark)};`);
   }
+
+  lines.push(`  --_color-${name}-dark: var(--color-tune-${name}-dark, var(--_color-${name}-dark-generated));`);
 
   if (onColor) {
     lines.push(
@@ -152,6 +251,125 @@ function formatIdentityPublic(name, onColor) {
   const onToken = onColor ? `\n  --color-on-${name}: light-dark(var(--_color-on-${name}-light), var(--_color-on-${name}-dark));` : "";
   const inkToken = `\n  --ink-${name}: contrast-color(var(--color-${name}));`;
   return colorToken + onToken + inkToken;
+}
+
+function formatSurfaceContract() {
+  return `
+
+  /* ─── Surface contract ───────────────────────────────────────────────────
+     Global substrate for local theming. Override --surface-color in a section,
+     component or future .surface-scope; the remaining tokens derive from it. */
+  --surface-color: var(--color-bg);
+  --surface-contrast: contrast-color(var(--surface-color));
+  --surface-text: var(--color-text);
+  --surface-text-muted: var(--color-text-muted);
+  --surface-border: var(--color-border-subtle);
+
+  /* ─── Elevation ──────────────────────────────────────────────────────────
+     Light scheme uses soft shadows. Dark scheme swaps to tinted glow/border
+     derived from the active --surface-color. */
+  --elevation-1:
+    0 1px 2px light-dark(color-mix(in oklch, var(--surface-contrast) var(--color-tune-elevation-1-shadow-alpha), transparent), transparent),
+    0 8px 24px light-dark(color-mix(in oklch, var(--surface-contrast) var(--color-tune-elevation-1-shadow-alpha), transparent), transparent),
+    inset 0 0 0 1px light-dark(transparent, oklch(from var(--surface-color) calc(l + 0.34) c h / var(--color-tune-elevation-1-border-alpha))),
+    0 0 18px light-dark(transparent, oklch(from var(--surface-color) calc(l + 0.30) c h / var(--color-tune-elevation-1-glow-alpha)));
+
+  --elevation-2:
+    0 2px 6px light-dark(color-mix(in oklch, var(--surface-contrast) var(--color-tune-elevation-2-shadow-alpha), transparent), transparent),
+    0 18px 48px light-dark(color-mix(in oklch, var(--surface-contrast) var(--color-tune-elevation-2-shadow-alpha), transparent), transparent),
+    inset 0 0 0 1px light-dark(transparent, oklch(from var(--surface-color) calc(l + 0.40) c h / var(--color-tune-elevation-2-border-alpha))),
+  	  0 0 26px light-dark(transparent, oklch(from var(--surface-color) calc(l + 0.36) c h / var(--color-tune-elevation-2-glow-alpha)));`;
+  }
+
+  function formatThemeTransition({ identityNames = [], onColors = {}, aliases = {}, decorativeNames = [] }) {
+    // --color-bg is excluded deliberately: it must snap instantly so Safari's
+    // frosted-glass toolbar sees a stable background color, not a mid-transition
+    // value. The "light switch" effect feels more natural for the page substrate.
+    const props = [
+      "--color-surface",
+      "--color-text",
+      "--color-text-muted",
+      "--color-border-subtle",
+      "--color-border-strong",
+      "--color-focus-ring",
+    ];
+
+    for (const name of identityNames) {
+      props.push(`--color-${name}`);
+      if (onColors[name]) props.push(`--color-on-${name}`);
+      props.push(`--ink-${name}`);
+    }
+
+    for (const name of decorativeNames) {
+      props.push(`--color-${name}`);
+    }
+
+    for (const [alias] of Object.entries(aliases)) {
+      props.push(`--color-${alias}`);
+    }
+
+    const transitions = props
+      .map((p) => `    ${p} var(--theme-transition-duration) ease`)
+      .join(",\n");
+
+    return `
+
+  /* ─── Theme transition ──────────────────────────────────────────────────
+     Smooth color interpolation on theme change (light ↔ dark).
+     Disabled by default (duration 0s = instant). To enable, set
+     --theme-transition-duration in colors-tuning.css to a positive value:
+
+       :root { --theme-transition-duration: 0.45s; }
+
+     Requires @property-registered tokens (Baseline 2024). On older
+     browsers the transition is a no-op; the theme switches instantly.
+     preferences.css already handles prefers-reduced-motion. */
+  --theme-transition-duration: 0s;
+  transition:
+${transitions};`;
+  }
+
+  function formatScaleSection(scales, onColors) {
+  const entries = Object.entries(scales ?? {});
+  if (!entries.length) return "";
+
+  return `
+  /* ─── Designer-facing semantic aliases ───────────────────────────────────
+     Surface: subtle tinted backgrounds (badges, callouts, selected rows).
+     Border: chromatic outlines and dividers.
+     Solid: filled controls and emphasis surfaces.
+     Text: colored text/icons on neutral backgrounds.
+     Numeric steps remain available for fine tuning. */
+${entries.map(([name, scale]) => formatScaleSemanticAliases(name, scale, onColors[name])).join("\n")}
+
+  /* ─── Numeric tonal steps (theme-adaptive) ────────────────────────────────
+     50 = softest tint in the current scheme, 500 = identity color,
+     900 = strongest readable tone in the current scheme. */
+${entries.map(([name, scale]) => formatScale(name, scale)).join("\n")}
+`;
+}
+
+function formatScaleSemanticAliases(name, scale, onColor) {
+  const steps = Object.keys(scale.light).map(Number).sort((a, b) => a - b);
+  const token = (index) => `var(--color-${name}-${steps[clampIndex(index, steps.length)]})`;
+  const onSolid = onColor ? `\n  --color-${name}-on-solid: var(--color-on-${name});` : "";
+
+  return `  --color-${name}-surface: ${token(0)};
+  --color-${name}-surface-strong: ${token(1)};
+  --color-${name}-border: ${token(3)};
+  --color-${name}-border-strong: ${token(4)};
+  --color-${name}-solid: ${token(5)};
+  --color-${name}-solid-hover: ${token(6)};${onSolid}
+  --color-${name}-text: ${token(7)};
+  --color-${name}-text-strong: ${token(8)};`;
+}
+
+function clampIndex(index, length) {
+  return Math.min(length - 1, Math.max(0, index));
+}
+
+function formatSignedNumber(value) {
+  return Number(value.toFixed(4)).toString();
 }
 
 function formatScale(name, scale) {
@@ -212,12 +430,80 @@ function formatHueVariants(config, identities) {
     const identity = identities[name];
     if (!identity) continue;
 
-    for (const shift of hv.shifts) {
-      const suffix = shift >= 0 ? `h${shift}` : `h${shift}`;
-      const shifted = fitToSrgb({ ...identity.light, h: identity.light.h + shift });
-      css += `  --color-${name}-${suffix}: ${oklch(shifted)};\n`;
+    const variants = hv.shifts.map((shift) => ({
+      shift,
+      color: fitToSrgb({ ...identity.light, h: identity.light.h + shift }),
+    }));
+
+    if (variants.length === 2) {
+      const [warm, cool] = sortHueTemperatureVariants(variants);
+      css += `  --color-${name}-warm: ${oklch(warm.color)};\n`;
+      css += `  --color-${name}-cool: ${oklch(cool.color)};\n`;
+      continue;
+    }
+
+    for (const variant of variants) {
+      const direction = variant.shift >= 0 ? "plus" : "minus";
+      const amount = Math.abs(variant.shift);
+      css += `  --color-${name}-hue-${direction}-${amount}: ${oklch(variant.color)};\n`;
     }
   }
 
   return css;
+}
+
+function sortHueTemperatureVariants(variants) {
+  const coolHue = 240;
+  const sortedByCoolDistance = [...variants].sort((a, b) => {
+    return hueDistance(a.color.h, coolHue) - hueDistance(b.color.h, coolHue);
+  });
+  const cool = sortedByCoolDistance[0];
+  const warm = sortedByCoolDistance[1];
+  return [warm, cool];
+}
+
+function hueDistance(a, b) {
+  const diff = Math.abs((((a - b) % 360) + 360) % 360);
+  return Math.min(diff, 360 - diff);
+}
+
+function formatQuickReference(model) {
+  const { neutrals, identities } = model;
+  const identityNames = Object.keys(identities);
+
+  let ref = `  /* ─── Quick reference (resolved at generation time) ──────────────────────
+     Values before project overrides from colors-tuning.css.
+     Format: L C H  (oklch components).
+
+     Token                    Light               Dark`;
+
+  const rows = [
+    ["--color-bg", neutrals.bgLight, neutrals.bgDark],
+    ["--color-surface", neutrals.surfaceLight, neutrals.surfaceDark],
+    ["--color-text", neutrals.textLight, neutrals.textDark],
+    ["--color-text-muted", neutrals.textMutedLight, neutrals.textMutedDark],
+    ...identityNames.map((name) => [
+      `--color-${name}`,
+      identities[name].light,
+      identities[name].dark,
+    ]),
+  ];
+
+  for (const [name, light, dark] of rows) {
+    const pad = Math.max(1, 25 - name.length);
+    ref += `\n     ${name}${' '.repeat(pad)}${shortOklchStr(light)}      ${shortOklchStr(dark)}`;
+  }
+
+  ref += `\n
+     Semantic aliases: --color-*-surface / --solid / --border / --text
+     Elevation:     --elevation-1 / --elevation-2
+     Surface:       --surface-color / --surface-contrast / --surface-text
+     Controls:      --color-control-*
+     Tuning:        --color-tune-* (override in colors-tuning.css)
+     ======================================================================== */`;
+  return ref;
+}
+
+function shortOklchStr(color) {
+  return `${color.l.toFixed(3)} ${color.c.toFixed(3)} ${Math.round(color.h)}`;
 }

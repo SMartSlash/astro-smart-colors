@@ -22,6 +22,9 @@
   "bin": {
     "smart-colors": "./src/cli.mjs"
   },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
   "peerDependencies": {
     "astro": ">=5"
   },

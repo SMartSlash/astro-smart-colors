@@ -112,9 +112,18 @@ function buildColorModel(palette, config) {
 
     if (!source) continue;
 
-    const rolePreset = ROLE_PRESETS[identityDef.role] ?? ROLE_PRESETS["accent-text"];
+    const rolePreset = ROLE_PRESETS[identityDef.role] ?? ROLE_PRESETS["content"];
     const light = processIdentityColor(source, bgLight, identityDef.role, lightContrast);
-    const dark = processIdentityColor(source, bgDark, identityDef.role, darkContrast);
+    let dark = processIdentityColor(source, bgDark, identityDef.role, darkContrast);
+    let mixRatio = null;
+
+    if (rolePreset.adjustColor && config.derivation.dark.mode !== "static") {
+      const darkTarget = getIdentityContrastTarget(identityDef.role, darkContrast);
+      if (darkTarget) {
+        mixRatio = findDarkMixRatio(source, bgDark, darkTarget);
+        dark = mixWithWhite(source, mixRatio / 100);
+      }
+    }
 
     if (rolePreset.adjustColor) {
       const lightContrastTarget = getIdentityContrastTarget(identityDef.role, lightContrast);
@@ -125,11 +134,8 @@ function buildColorModel(palette, config) {
 
     identities[name] = { source, light, dark, role: identityDef.role };
 
-    if (rolePreset.adjustColor && config.derivation.dark.mode !== "static") {
-      const darkTarget = getIdentityContrastTarget(identityDef.role, darkContrast);
-      if (darkTarget) {
-        identities[name].mixRatio = findDarkMixRatio(source, bgDark, darkTarget);
-      }
+    if (mixRatio != null) {
+      identities[name].mixRatio = mixRatio;
     }
 
     if (rolePreset.generateOnColor) {
@@ -217,7 +223,7 @@ function buildColorModel(palette, config) {
 }
 
 function processIdentityColor(source, background, role, contrastConfig) {
-  const rolePreset = ROLE_PRESETS[role] ?? ROLE_PRESETS["accent-text"];
+  const rolePreset = ROLE_PRESETS[role] ?? ROLE_PRESETS["content"];
 
   if (!rolePreset.adjustColor) {
     if (background.l < 0.5) {
@@ -231,7 +237,7 @@ function processIdentityColor(source, background, role, contrastConfig) {
 }
 
 function getIdentityContrastTarget(role, contrastConfig) {
-  const rolePreset = ROLE_PRESETS[role] ?? ROLE_PRESETS["accent-text"];
+  const rolePreset = ROLE_PRESETS[role] ?? ROLE_PRESETS["content"];
   if (!rolePreset.minContrastKey) return null;
   return contrastConfig[rolePreset.minContrastKey];
 }
@@ -242,11 +248,7 @@ function findDarkMixRatio(source, bgDark, target) {
 
   for (let i = 0; i < 32; i += 1) {
     const mid = (pass + fail) / 2;
-    const mixed = fitToSrgb({
-      l: source.l * mid + 1 * (1 - mid),
-      c: source.c * mid,
-      h: source.h,
-    });
+    const mixed = mixWithWhite(source, mid);
 
     if (contrast(mixed, bgDark) >= target) {
       pass = mid;
@@ -258,59 +260,93 @@ function findDarkMixRatio(source, bgDark, target) {
   return Math.round(pass * 100);
 }
 
+function mixWithWhite(color, ratio) {
+  return fitToSrgb({
+    l: color.l * ratio + 1 * (1 - ratio),
+    c: color.c * ratio,
+    h: color.h,
+  });
+}
+
 
 
 function buildScale(lightColor, darkColor, scaleConfig) {
   const scale = { light: {}, dark: {} };
   const { steps, base } = scaleConfig;
-  const baseLightness = lightColor.l;
 
   for (const step of steps) {
-    const ratio = step / base;
-    scale.light[step] = fitToSrgb({
-      l: clamp(baseLightness * (2 - ratio), lightColor.l * 0.15, 0.98),
-      c: clamp(lightColor.c * ratio, 0.01, lightColor.c),
-      h: lightColor.h,
-    });
-    scale.dark[step] = buildDarkScaleStep(darkColor, step, steps, base);
+    scale.light[step] = buildThemeScaleStep(lightColor, step, steps, base, "light");
+    scale.dark[step] = buildThemeScaleStep(darkColor, step, steps, base, "dark");
   }
 
   return scale;
 }
 
-function buildDarkScaleStep(color, step, steps, base) {
+function buildThemeScaleStep(color, step, steps, base, scheme) {
   const minStep = Math.min(...steps);
   const maxStep = Math.max(...steps);
   const baseStep = clamp(base, minStep, maxStep);
-  const low = {
-    l: clamp(color.l * 0.18, 0.08, 0.24),
-    c: clamp(color.c * 0.18, 0.01, color.c),
-  };
-  const high = {
-    l: clamp(color.l + (1 - color.l) * 0.74, color.l + 0.12, 0.94),
-    c: clamp(color.c * 0.35, 0.01, color.c),
-  };
+  const anchors = scheme === "dark" ? getDarkScaleAnchors(color) : getLightScaleAnchors(color);
 
   if (step <= baseStep) {
-    const t = normalizeRange(step, minStep, baseStep);
-    return fitToSrgb({
-      l: lerp(low.l, color.l, t),
-      c: lerp(low.c, color.c, t),
-      h: color.h,
-    });
+    const t = smoothstep(normalizeRange(step, minStep, baseStep));
+    return interpolateColor(anchors.low, color, t);
   }
 
-  const t = normalizeRange(step, baseStep, maxStep);
+  const t = smoothstep(normalizeRange(step, baseStep, maxStep));
+  return interpolateColor(color, anchors.high, t);
+}
+
+function getLightScaleAnchors(color) {
+  return {
+    low: {
+      l: clamp(color.l + (1 - color.l) * 0.94, color.l + 0.08, 0.985),
+      c: scaledChroma(color, 0.12, 0.006),
+      h: color.h,
+    },
+    high: {
+      l: clamp(color.l * 0.22, 0.08, Math.min(0.34, Math.max(color.l - 0.18, 0.08))),
+      c: scaledChroma(color, 0.42, 0.008),
+      h: color.h,
+    },
+  };
+}
+
+function getDarkScaleAnchors(color) {
+  return {
+    low: {
+      l: clamp(color.l * 0.18, 0.08, Math.min(0.28, Math.max(color.l - 0.2, 0.08))),
+      c: scaledChroma(color, 0.18, 0.006),
+      h: color.h,
+    },
+    high: {
+      l: clamp(color.l + (1 - color.l) * 0.74, color.l + 0.12, 0.94),
+      c: scaledChroma(color, 0.35, 0.008),
+      h: color.h,
+    },
+  };
+}
+
+function interpolateColor(from, to, progress) {
   return fitToSrgb({
-    l: lerp(color.l, high.l, t),
-    c: lerp(color.c, high.c, t),
-    h: color.h,
+    l: lerp(from.l, to.l, progress),
+    c: lerp(from.c, to.c, progress),
+    h: to.h,
   });
+}
+
+function scaledChroma(color, factor, floor) {
+  if (color.c === 0) return 0;
+  return clamp(color.c * factor, Math.min(floor, color.c), color.c);
 }
 
 function normalizeRange(value, min, max) {
   if (max === min) return 1;
   return clamp((value - min) / (max - min), 0, 1);
+}
+
+function smoothstep(progress) {
+  return progress * progress * (3 - 2 * progress);
 }
 
 function lerp(from, to, progress) {
@@ -426,7 +462,8 @@ function adjustContrast(color, background, target) {
     }
   }
 
-  return fitToSrgb({ l: cappedL, c: passChroma, h: color.h });
+  const chromaAdjusted = fitToSrgb({ l: cappedL, c: passChroma, h: color.h });
+  return contrast(chromaAdjusted, background) >= target ? chromaAdjusted : lightnessOnly;
 }
 
 function reduceContrast(color, background, target, floor) {
@@ -438,12 +475,13 @@ function reduceContrast(color, background, target, floor) {
     const candidate = fitToSrgb({ l: mid, c: color.c, h: color.h });
     const ratio = contrast(candidate, background);
 
-    if (ratio >= target || ratio >= floor) {
+    if (ratio >= target) {
       pass = mid;
     } else {
       fail = mid;
     }
   }
 
-  return fitToSrgb({ l: pass, c: color.c, h: color.h });
+  const reduced = fitToSrgb({ l: pass, c: color.c, h: color.h });
+  return contrast(reduced, background) >= floor ? reduced : color;
 }

@@ -1,8 +1,37 @@
+/**
+ * Role presets — how the generator treats each identity color.
+ *
+ * Pipeline: palette input → [adjustColor?] → [generateOnColor?] → output
+ *
+ *   adjustColor
+ *     If true, shifts lightness/chroma to meet the contrast threshold
+ *     defined by minContrastKey. The original hue is preserved.
+ *   generateOnColor
+ *     If true, creates --color-on-* (WCAG-safe) and --ink-*
+ *     (contrast-color based) companion tokens.
+ *   minContrastKey
+ *     Picks the threshold from config.contrast: "text" (default 4.6)
+ *     or "ui" (default 3). Only consulted when adjustColor is true.
+ *
+ * ─── Role reference ─────────────────────────────────────────────────────
+ *
+ *   content     Colors meant to be read (text, icons, headings).
+ *               Adjusted to WCAG AA text contrast. Generates on-color + ink.
+ *
+ *   action      Colors for interactive elements (buttons, chips, controls).
+ *               Adjusted to WCAG AA UI contrast. Generates on-color + ink.
+ *
+ *   fill        Colors for tinted surfaces and background fills.
+ *               Kept as-is from the palette. Generates on-color + ink.
+ *
+ *   decorative  Colors for ornaments, gradients, visual detail.
+ *               No contrast correction. No companion tokens generated.
+ */
 export const ROLE_PRESETS = {
-  "accent-text": { minContrastKey: "text", generateOnColor: true, adjustColor: true },
-  "accent-ui": { minContrastKey: "ui", generateOnColor: true, adjustColor: true },
-  "soft-surface": { minContrastKey: "text", generateOnColor: true, adjustColor: false, onColorTarget: "text" },
-  decorative: { minContrastKey: null, generateOnColor: false, adjustColor: false },
+  content:     { minContrastKey: "text", generateOnColor: true,  adjustColor: true },
+  action:      { minContrastKey: "ui",   generateOnColor: true,  adjustColor: true },
+  fill:        { minContrastKey: null,   generateOnColor: true,  adjustColor: false },
+  decorative:  { minContrastKey: null,   generateOnColor: false, adjustColor: false },
 };
 
 export const defaultSmartColorsConfig = {
@@ -18,9 +47,9 @@ export const defaultSmartColorsConfig = {
     bg: "--palette-bg",
     ink: "--palette-ink",
     identities: {
-      primary: { token: "--palette-primary", role: "accent-text" },
-      secondary: { token: "--palette-secondary", role: "accent-ui" },
-      tertiary: { token: "--palette-tertiary", role: "soft-surface" },
+      primary: { token: "--palette-primary", role: "content" },
+      secondary: { token: "--palette-secondary", role: "action" },
+      tertiary: { token: "--palette-tertiary", role: "fill" },
     },
     decoratives: {},
     focus: "primary",
@@ -62,9 +91,9 @@ function normalizeIdentities(config) {
 
   for (const [name, def] of Object.entries(config.roles?.identities ?? {})) {
     if (typeof def === "string") {
-      identities[name] = { token: def, role: "accent-text" };
+      identities[name] = { token: def, role: "content" };
     } else {
-      identities[name] = { role: "accent-text", ...def };
+      identities[name] = { role: "content", ...def };
     }
   }
 

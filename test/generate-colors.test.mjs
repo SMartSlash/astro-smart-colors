@@ -64,11 +64,11 @@ function getDarkScaleColor(css, name, step) {
 }
 
 function getDarkMixRatio(css, name) {
-  const line = css.split("\n").find((candidate) => candidate.trim().startsWith(`--_color-${name}-dark-generated: color-mix(`));
-  assert.ok(line, `Expected generated dark mix for ${name}.`);
+  const line = css.split("\n").find((candidate) => candidate.trim().startsWith(`--_color-${name}-dark-mix-ratio: var(--color-tune-${name}-dark-mix-ratio,`));
+  assert.ok(line, `Expected generated dark mix ratio for ${name}.`);
 
-  const match = line.match(/source\) (\d+)%,/);
-  assert.ok(match, `Expected a numeric mix ratio for ${name}.`);
+  const match = line.match(/, (\d+)%\)/);
+  assert.ok(match, `Expected a numeric mix ratio fallback for ${name}.`);
   return Number(match[1]) / 100;
 }
 
@@ -121,7 +121,8 @@ test("relative dark identities mix from the palette source, not adjusted light o
 
   assert.match(report.css, /--_color-primary-source: oklch\(0\.62 0\.16 32\);/);
   assert.match(report.css, /--_color-primary-light: oklch\(0\.5547 0\.16 32\);/);
-  assert.match(report.css, /--_color-primary-dark-generated: color-mix\(in oklch, var\(--_color-primary-source\) \d+%, oklch\(1 0 0\)\);/);
+  assert.match(report.css, /--_color-primary-dark-mix-ratio: var\(--color-tune-primary-dark-mix-ratio, \d+%\);/);
+  assert.match(report.css, /--_color-primary-dark-generated: color-mix\(in oklch, var\(--_color-primary-source\) var\(--_color-primary-dark-mix-ratio\), oklch\(1 0 0\)\);/);
   assert.doesNotMatch(report.css, /--_color-primary-dark-generated: color-mix\(in oklch, var\(--_color-primary-light\)/);
 
   const source = getOklchToken(report.css, "--_color-primary-source");

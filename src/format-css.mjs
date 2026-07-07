@@ -36,7 +36,7 @@ export function formatColorsCss(model, config) {
      ======================================================================== */
 ${formatQuickReference(model)}
 
-${formatTuningContract(config)}
+${formatTuningContract(config, model)}
 
   /* ─── Internal light/dark pairs ───────────────────────────────────────── */
 ${formatNeutrals(neutrals, config)}
@@ -160,9 +160,15 @@ function formatDecorativeSection(decoratives) {
   return `\n  /* ─── Decorative ────────────────────────────────────────────────────\n     Colors preserved as authored. No contrast correction.\n     For gradients, shadows, ornamental accents, visual detail.\n     Do not use for body text or critical UI text. */\n${names.map((name) => `  --color-${name}: light-dark(var(--_color-${name}-light), var(--_color-${name}-dark));`).join("\n")}\n`;
 }
 
-function formatTuningContract(config) {
+function formatTuningContract(config, model) {
   const dark = config.derivation.dark;
   const surface = config.derivation.surface;
+  const identities = model?.identities ?? {};
+
+  const mixRatioTokens = Object.entries(identities)
+    .filter(([, identity]) => identity.mixRatio != null)
+    .map(([name, identity]) => `  --color-tune-${name}-dark-mix-ratio: ${identity.mixRatio}%;`)
+    .join("\n");
 
   return `  /* ─── Tuning contract ────────────────────────────────────────────────────
      Project-level personalization knobs. Override these in colors-tuning.css
@@ -178,7 +184,7 @@ function formatTuningContract(config) {
   --color-tune-elevation-1-glow-alpha: 14%;
   --color-tune-elevation-2-shadow-alpha: 13%;
   --color-tune-elevation-2-border-alpha: 36%;
-  --color-tune-elevation-2-glow-alpha: 20%;`;
+  --color-tune-elevation-2-glow-alpha: 20%;${mixRatioTokens ? "\n" + mixRatioTokens : ""}`;
 }
 
 function formatNeutrals(neutrals, config) {
@@ -230,7 +236,8 @@ function formatIdentityInternals(name, identity, onColor, config) {
   ];
 
   if (mode === "relative" && identity.mixRatio != null) {
-    lines.push(`  --_color-${name}-dark-generated: color-mix(in oklch, var(--_color-${name}-source) ${identity.mixRatio}%, oklch(1 0 0));`);
+    lines.push(`  --_color-${name}-dark-mix-ratio: var(--color-tune-${name}-dark-mix-ratio, ${identity.mixRatio}%);`);
+    lines.push(`  --_color-${name}-dark-generated: color-mix(in oklch, var(--_color-${name}-source) var(--_color-${name}-dark-mix-ratio), oklch(1 0 0));`);
   } else {
     lines.push(`  --_color-${name}-dark-generated: ${oklch(identity.dark)};`);
   }

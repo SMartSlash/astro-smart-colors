@@ -78,6 +78,71 @@ test("palette parser accepts only the designer-facing roles", () => {
   });
 });
 
+test("palette parser accepts dark-blend for ui and feedback roles", () => {
+  const report = parsePaletteWithDiagnostics(`@property --palette-primary {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.62 0.16 32);
+  role: ui;
+  dark-blend: 0;
+}
+@property --palette-success {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.62 0.14 160);
+  role: feedback;
+  dark-blend: 100;
+}`);
+
+  assert.deepEqual(report.errors, []);
+  assert.deepEqual(report.annotatedDarkBlends, {
+    "palette-primary": 0,
+    "palette-success": 100,
+  });
+});
+
+test("palette parser rejects invalid dark-blend values", () => {
+  for (const value of ["-1", "101", "50%", "auto"]) {
+    const report = parsePaletteWithDiagnostics(`@property --palette-primary {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.62 0.16 32);
+  role: ui;
+  dark-blend: ${value};
+}`);
+
+    assert.ok(
+      report.errors.some((error) => error.includes("dark-blend")),
+      `Expected dark-blend ${value} to be rejected, received: ${report.errors.join(" ") || "no errors"}`,
+    );
+  }
+});
+
+test("palette parser rejects duplicate dark-blend descriptors", () => {
+  const report = parsePaletteWithDiagnostics(`@property --palette-primary {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.62 0.16 32);
+  role: ui;
+  dark-blend: 25;
+  dark-blend: 75;
+}`);
+
+  assert.ok(report.errors.some((error) => error.includes("at most once")));
+});
+
+test("palette parser limits dark-blend to functional identity roles", () => {
+  const report = parsePaletteWithDiagnostics(`@property --palette-spark {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.72 0.18 280);
+  role: decorative;
+  dark-blend: 50;
+}`);
+
+  assert.ok(report.errors.some((error) => error.includes("only for roles ui and feedback")));
+});
+
 test("palette parser rejects legacy roles in @property blocks", () => {
   const legacyRoles = ["bg", "content", "action", "fill", "accent-text", "accent-ui", "soft-surface"];
 
@@ -167,6 +232,7 @@ test("validator rejects public token collisions", () => {
 test("validator rejects invalid contrast targets and dark mode", () => {
   const config = structuredClone(defaultSmartColorsConfig);
   config.contrast.text = 22;
+  config.contrast.onColor = 0;
   config.contrast.ui = 8;
   config.contrast.maxIdentity = 7;
   config.derivation.dark.mode = "automatic";
@@ -174,7 +240,8 @@ test("validator rejects invalid contrast targets and dark mode", () => {
   const report = validate(config);
 
   assert.ok(report.errors.some((error) => error.includes("contrast.text must be between 1 and 21")));
-  assert.ok(report.errors.some((error) => error.includes("both contrast.text and contrast.ui")));
+  assert.ok(report.errors.some((error) => error.includes("contrast.onColor must be between 1 and 21")));
+  assert.ok(report.errors.some((error) => error.includes("contrast.text, contrast.onColor and contrast.ui")));
   assert.ok(report.errors.some((error) => error.includes("derivation.dark.mode")));
 });
 

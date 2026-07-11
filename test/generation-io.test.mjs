@@ -67,6 +67,24 @@ test("generator creates missing output directories and leaves no temporary files
   assert.deepEqual(await readdir(path.dirname(outputPath)), ["colors.css"]);
 });
 
+test("concurrent generations use distinct temporary files", async (t) => {
+  const root = await createProject(t);
+  const output = "generated/theme/colors.css";
+  const originalNow = Date.now;
+  Date.now = () => 1_700_000_000_000;
+  t.after(() => { Date.now = originalNow; });
+
+  const reports = await Promise.all(Array.from(
+    { length: 12 },
+    () => generateColorTokens({ root, inlineConfig: { output } }),
+  ));
+  const outputPath = path.join(root, output);
+
+  assert.ok(reports.every((report) => report.changed));
+  assert.equal(await readFile(outputPath, "utf8"), reports[0].css);
+  assert.deepEqual(await readdir(path.dirname(outputPath)), ["colors.css"]);
+});
+
 test("optional motion output is separate and follows configured identities", async (t) => {
   const root = await createProject(t);
   const motionOutput = "generated/theme/colors-motion.css";

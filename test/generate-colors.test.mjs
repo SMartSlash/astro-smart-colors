@@ -143,12 +143,7 @@ function getLightnessSteps(css, name) {
     .sort((a, b) => a.step - b.step);
 }
 
-function getOklchToken(css, tokenName) {
-  const value = getDeclaration(css, tokenName);
-  const parsed = parseOklch(value);
-  assert.deepEqual(parsed.errors, []);
-  return parsed.color;
-}
+
 
 function getDarkScaleColor(css, name, step) {
   const value = getDeclaration(css, `--color-${name}-${step}`);
@@ -297,6 +292,57 @@ test("semantic role families meet essential light and dark contrast contracts", 
   }
 });
 
+test("text tokens can enforce WCAG AAA without raising on-color contrast", async (t) => {
+  const root = await createProject(t);
+  const report = await generateColorTokens({
+    root,
+    inlineConfig: {
+      contrast: {
+        text: 7,
+        onColor: 4.6,
+        darkRichness: 1,
+      },
+      derivation: {
+        dark: { mode: "static" },
+      },
+    },
+  });
+  const declarations = getDeclarations(report.css);
+
+  for (const scheme of ["light", "dark"]) {
+    const neutralBackgrounds = [
+      ["canvas", resolveThemeColor(declarations, "--color-bg", scheme)],
+      ["surface", resolveThemeColor(declarations, "--color-surface", scheme)],
+    ];
+
+    for (const tokenName of ["--color-text", "--color-text-muted"]) {
+      const text = resolveThemeColor(declarations, tokenName, scheme);
+      for (const [backgroundName, background] of neutralBackgrounds) {
+        assertMinContrast(text, background, 7, `${scheme} ${tokenName} vs ${backgroundName}`);
+      }
+    }
+
+    for (const name of ["primary", "secondary"]) {
+      const familyBackgrounds = [
+        ...neutralBackgrounds,
+        ["family surface", resolveThemeColor(declarations, `--color-${name}-surface`, scheme)],
+        ["family surface strong", resolveThemeColor(declarations, `--color-${name}-surface-strong`, scheme)],
+      ];
+
+      for (const suffix of ["text", "text-strong"]) {
+        const text = resolveThemeColor(declarations, `--color-${name}-${suffix}`, scheme);
+        for (const [backgroundName, background] of familyBackgrounds) {
+          assertMinContrast(text, background, 7, `${scheme} ${name}-${suffix} vs ${backgroundName}`);
+        }
+      }
+    }
+  }
+
+  const onColorWarnings = report.warnings.filter((warning) => warning.includes("on-solid"));
+  assert.ok(onColorWarnings.length > 0);
+  assert.ok(onColorWarnings.every((warning) => warning.includes("target 4.60:1")));
+});
+
 test("relative dark tuning defaults preserve the validated muted-text contract", async (t) => {
   const palette = DEFAULT_PALETTE.replace("oklch(0.962 0.015 88)", "oklch(0.7 0 88)");
   const root = await createProject(t, palette);
@@ -314,7 +360,7 @@ test("relative dark tuning defaults preserve the validated muted-text contract",
   assertMinContrast(mutedDark, surfaceDark, target, "relative dark muted text vs surface");
 });
 
-test("every identity emits an explicit dark variant used by the numeric scale base", async (t) => {
+test("adaptive dark fallback feeds the numeric scale base", async (t) => {
   const root = await createProject(t);
   const report = await generateColorTokens({
     root,
@@ -327,10 +373,85 @@ test("every identity emits an explicit dark variant used by the numeric scale ba
   });
 
   assert.match(report.css, /--_color-primary-source: oklch\(0\.62 0\.16 32\);/);
-  const generatedDark = getOklchToken(report.css, "--_color-primary-dark-generated");
+  assert.match(report.css, /--_color-primary-dark-generated: color-mix\(in oklch, var\(--_color-primary-source\) 81%, oklch\(1 0 0\)\);/);
+
+  const expectedDark = mixOklch(
+    { l: 0.62, c: 0.16, h: 32 },
+    { l: 1, c: 0, h: 32 },
+    0.81,
+  );
   const primaryScaleBaseDark = getDarkScaleColor(report.css, "primary", 500);
 
-  assertColorClose(primaryScaleBaseDark, generatedDark, "primary dark scale base");
+  assertColorClose(primaryScaleBaseDark, expectedDark, "adaptive primary dark scale base");
+});
+
+test("dark-blend maps 0–100 to a bounded 0–28% white wash", async (t) => {
+  for (const { darkBlend, sourceRatio } of [
+    { darkBlend: 0, sourceRatio: 1 },
+    { darkBlend: 50, sourceRatio: 0.86 },
+    { darkBlend: 100, sourceRatio: 0.72 },
+  ]) {
+    const palette = DEFAULT_PALETTE.replace(
+      "  role: ui;",
+      `  role: ui;\n  dark-blend: ${darkBlend};`,
+    );
+    const root = await createProject(t, palette);
+    const report = await generateColorTokens({
+      root,
+      inlineConfig: {
+        scales: {
+          enabled: true,
+          applyTo: ["primary"],
+        },
+      },
+    });
+    const sourcePercentage = sourceRatio * 100;
+
+    assert.match(
+      report.css,
+      new RegExp(`--_color-primary-dark-generated: color-mix\\(in oklch, var\\(--_color-primary-source\\) ${sourcePercentage}%, oklch\\(1 0 0\\)\\);`),
+    );
+
+    const expectedDark = mixOklch(
+      { l: 0.62, c: 0.16, h: 32 },
+      { l: 1, c: 0, h: 32 },
+      sourceRatio,
+    );
+    const primaryScaleBaseDark = getDarkScaleColor(report.css, "primary", 500);
+
+    assertColorClose(primaryScaleBaseDark, expectedDark, `dark-blend ${darkBlend} primary dark scale base`);
+  }
+});
+
+test("static mode materializes the dark-blend result as OKLCH", async (t) => {
+  const palette = DEFAULT_PALETTE.replace(
+    "  role: ui;",
+    "  role: ui;\n  dark-blend: 100;",
+  );
+  const root = await createProject(t, palette);
+  const report = await generateColorTokens({
+    root,
+    inlineConfig: {
+      derivation: {
+        dark: { mode: "static" },
+      },
+      scales: {
+        enabled: true,
+        applyTo: ["primary"],
+      },
+    },
+  });
+  const expectedDark = mixOklch(
+    { l: 0.62, c: 0.16, h: 32 },
+    { l: 1, c: 0, h: 32 },
+    0.72,
+  );
+  const generatedDark = parseOklch(getDeclaration(report.css, "--_color-primary-dark-generated"));
+  const primaryScaleBaseDark = getDarkScaleColor(report.css, "primary", 500);
+
+  assert.deepEqual(generatedDark.errors, []);
+  assertColorClose(generatedDark.color, expectedDark, "static primary dark identity");
+  assertColorClose(primaryScaleBaseDark, expectedDark, "static primary dark scale base");
 });
 
 test("generated numeric scales avoid clipped duplicate tints", async (t) => {

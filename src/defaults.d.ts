@@ -34,6 +34,7 @@ export type DecorativeConfig = DecorativeInputDef | string;
 
 export interface SmartColorsContrastConfig {
   text: number;
+  onColor: number;
   ui: number;
   maxIdentity: number;
   darkRichness: number;

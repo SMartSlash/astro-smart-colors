@@ -18,6 +18,7 @@ export const defaultSmartColorsConfig = {
   output: "src/styles/tokens/colors.css",
   contrast: {
     text: 4.6,
+    onColor: 4.6,
     ui: 3,
     maxIdentity: 7.5,
     darkRichness: 1.15,

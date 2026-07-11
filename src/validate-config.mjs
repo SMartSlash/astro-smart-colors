@@ -89,6 +89,7 @@ function validateConfigShape(config, errors) {
   }
 
   validateContrastRatio(config.contrast?.text, "contrast.text", errors);
+  validateContrastRatio(config.contrast?.onColor, "contrast.onColor", errors);
   validateContrastRatio(config.contrast?.ui, "contrast.ui", errors);
   validateContrastRatio(config.contrast?.maxIdentity, "contrast.maxIdentity", errors);
   validatePositiveNumber(config.contrast?.darkRichness, "contrast.darkRichness", errors);
@@ -96,10 +97,11 @@ function validateConfigShape(config, errors) {
   if (
     Number.isFinite(config.contrast?.maxIdentity)
     && Number.isFinite(config.contrast?.text)
+    && Number.isFinite(config.contrast?.onColor)
     && Number.isFinite(config.contrast?.ui)
-    && config.contrast.maxIdentity < Math.max(config.contrast.text, config.contrast.ui)
+    && config.contrast.maxIdentity < Math.max(config.contrast.text, config.contrast.onColor, config.contrast.ui)
   ) {
-    errors.push("contrast.maxIdentity must be greater than or equal to both contrast.text and contrast.ui.");
+    errors.push("contrast.maxIdentity must be greater than or equal to contrast.text, contrast.onColor and contrast.ui.");
   }
 
   validateNumber(config.derivation?.surface?.lightShift, "derivation.surface.lightShift", errors);

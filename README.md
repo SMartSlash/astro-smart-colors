@@ -39,6 +39,7 @@ export default defineSmartColorsConfig({
   output: "src/styles/tokens/colors.css",
   contrast: {
     text: 4.6,
+    onColor: 4.6,
     ui: 3,
     maxIdentity: 7.5,
   },
@@ -99,6 +100,7 @@ The parser accepts CSS-compatible numeric channels: lightness as a number or per
   inherits: true;
   initial-value: oklch(0.664 0.106 156.4);
   role: ui;
+  dark-blend: 80;
 }
 
 @property --palette-danger {
@@ -116,6 +118,18 @@ The parser accepts CSS-compatible numeric channels: lightness as a number or per
 }
 ```
 
+### Per-color dark blending
+
+`ui` and `feedback` colors may declare an optional unitless `dark-blend` descriptor from `0` to `100`. It controls a bounded white wash inspired by the Palette Lab rather than mapping directly to a CSS percentage:
+
+- `0` keeps `100%` of the source color and produces no light/dark identity variation;
+- `50` keeps `86%` of the source color and mixes `14%` white;
+- `100` keeps `72%` of the source color and mixes `28%` white.
+
+The generated source ratio is `100% - (dark-blend × 0.28%)`. When the descriptor is omitted, Smart Colors preserves the adaptive lightness-based fallback. `dark-blend` is rejected on `canvas`, `ink` and `decorative` colors because those roles use separate dark-mode derivations.
+
+The resolved dark identity feeds functional families, numeric scales, contrast validation and the generated quick reference. Relative mode emits the authored mix as `color-mix()`; static mode emits the equivalent resolved OKLCH value. Runtime `--color-tune-<name>-dark` overrides remain an unvalidated escape hatch.
+
 ## Contrast contract
 
 Contrast is validated as a relationship between generated foreground/background pairs, independently in light and dark mode:
@@ -126,9 +140,9 @@ Contrast is validated as a relationship between generated foreground/background 
 | `<name>-text` / canvas, neutral surface and family surfaces | `contrast.text` |
 | `<name>-border` / canvas and family surface | `contrast.ui` (`3`) |
 | `<name>-solid` / canvas and neutral surface | `contrast.ui` |
-| `<name>-on-solid` / solid and solid-hover | `contrast.text` |
+| `<name>-on-solid` / solid and solid-hover | `contrast.onColor` (`4.6`) |
 | focus ring / canvas and neutral surface | `contrast.ui` |
-| decorative `on-*` / decorative base | `contrast.text` |
+| decorative `on-*` / decorative base | `contrast.onColor` |
 
 A decorative color is reported but not forced to contrast against the canvas: doing so would turn subtle ornament into functional UI. Its companion is nevertheless corrected so optional overlaid text/icons remain readable. The generator aborts before writing CSS if a functional pair misses its target.
 

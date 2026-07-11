@@ -9,6 +9,7 @@ const TOKEN_DECLARATION_PER_LINE = /--([a-z0-9-]+)\s*:\s*(oklch\([^;]*\))\s*;/gi
 const PROPERTY_BLOCK_PATTERN = /@property\s+(--[a-z0-9-]+)\s*\{([^}]*)\}/gi;
 const PROPERTY_INITIAL_VALUE = /initial-value:\s*(oklch\([^;]*\))\s*;/i;
 const PROPERTY_ROLE = /role:\s*([a-z][a-z0-9-]*)\s*;/i;
+const PROPERTY_DARK_BLEND = /dark-blend:\s*([^;]+)\s*;/gi;
 
 const VALID_ROLES = new Set(["canvas", "ink", "ui", "feedback", "decorative"]);
 
@@ -25,6 +26,7 @@ export function parsePaletteWithDiagnostics(css) {
 function parsePropertyBlocks(css) {
   const tokens = {};
   const annotatedRoles = {};
+  const annotatedDarkBlends = {};
   const errors = [];
   const uncommentedCss = css.replace(/\/\*[\s\S]*?\*\//g, "");
 
@@ -63,15 +65,49 @@ function parsePropertyBlocks(css) {
     }
 
     annotatedRoles[name] = role;
+
+    const darkBlendMatches = [...body.matchAll(PROPERTY_DARK_BLEND)];
+    if (darkBlendMatches.length === 0) continue;
+
+    if (darkBlendMatches.length > 1) {
+      errors.push(`${propName}: dark-blend must be declared at most once.`);
+      continue;
+    }
+
+    const darkBlendErrors = [];
+    const darkBlend = parseNumberWithUnit(
+      darkBlendMatches[0][1],
+      "dark-blend",
+      new Set([""]),
+      darkBlendErrors,
+    );
+
+    if (!darkBlend) {
+      errors.push(`${propName}: ${darkBlendErrors.join(" ")}`);
+      continue;
+    }
+
+    if (darkBlend.number < 0 || darkBlend.number > 100) {
+      errors.push(`${propName}: dark-blend ${darkBlend.number} must be between 0 and 100.`);
+      continue;
+    }
+
+    if (role !== "ui" && role !== "feedback") {
+      errors.push(`${propName}: dark-blend is supported only for roles ui and feedback, received ${role}.`);
+      continue;
+    }
+
+    annotatedDarkBlends[name] = darkBlend.number;
   }
 
   validateFoundationRoles(annotatedRoles, errors);
-  return { tokens, errors, annotatedRoles };
+  return { tokens, errors, annotatedRoles, annotatedDarkBlends };
 }
 
 function parseRootBlock(css) {
   const tokens = {};
   const annotatedRoles = {};
+  const annotatedDarkBlends = {};
   const errors = [];
   let pendingRole = null;
   const lines = css.split("\n");
@@ -109,7 +145,7 @@ function parseRootBlock(css) {
   }
 
   validateFoundationRoles(annotatedRoles, errors);
-  return { tokens, errors, annotatedRoles };
+  return { tokens, errors, annotatedRoles, annotatedDarkBlends };
 }
 
 function validateFoundationRoles(annotatedRoles, errors) {

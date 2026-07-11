@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,6 +7,8 @@ import { formatColorsCss, formatColorsMotionCss } from "./format-css.mjs";
 import { loadSmartColorsConfig, resolveProjectUrl } from "./load-config.mjs";
 import { parseOklch, parsePalette, parsePaletteWithDiagnostics, tokenKey } from "./parse-palette.mjs";
 import { validateSmartColorsInput } from "./validate-config.mjs";
+
+const MAX_DARK_BLEND_WHITE_RATIO = 0.28;
 
 export async function generateColorTokens(options = {}) {
   const root = options.root ?? process.cwd();
@@ -20,6 +23,7 @@ export async function generateColorTokens(options = {}) {
   const parsedPalette = parsePaletteWithDiagnostics(paletteCss);
   const palette = parsedPalette.tokens;
   const annotatedRoles = parsedPalette.annotatedRoles ?? {};
+  const annotatedDarkBlends = parsedPalette.annotatedDarkBlends ?? {};
   const mergedConfig = mergeAnnotatedRoles(config, annotatedRoles, palette);
   const inputValidation = validateSmartColorsInput({ config: mergedConfig, palette, paletteErrors: parsedPalette.errors });
 
@@ -27,7 +31,7 @@ export async function generateColorTokens(options = {}) {
     throw new Error(`Smart Colors validation failed:\n${inputValidation.errors.map((error) => `- ${error}`).join("\n")}`);
   }
 
-  const model = buildColorModel(palette, mergedConfig);
+  const model = buildColorModel(palette, mergedConfig, annotatedDarkBlends);
   const warnings = [...inputValidation.warnings, ...model.warnings];
   const css = formatColorsCss(model, mergedConfig);
   const motionCss = mergedConfig.motion.enabled ? formatColorsMotionCss(model) : null;
@@ -131,19 +135,21 @@ function palettePublicName(tokenKey) {
   return tokenKey.startsWith("palette-") ? tokenKey.slice("palette-".length) : tokenKey;
 }
 
-function buildColorModel(palette, config) {
+function buildColorModel(palette, config, annotatedDarkBlends = {}) {
   const warnings = [];
   const minTextContrast = config.contrast.text;
+  const minOnColorContrast = config.contrast.onColor;
   const minUiContrast = config.contrast.ui;
   const maxIdentityContrast = config.contrast.maxIdentity;
   const darkRichness = config.contrast.darkRichness ?? 1;
-  const lightContrast = { baseText: minTextContrast, text: minTextContrast, ui: minUiContrast, maxIdentity: maxIdentityContrast };
+  const lightContrast = { baseText: minOnColorContrast, text: minTextContrast, ui: minUiContrast, maxIdentity: maxIdentityContrast };
   const darkContrast = {
-    baseText: minTextContrast,
+    baseText: minOnColorContrast,
     text: Math.min(maxIdentityContrast, minTextContrast * darkRichness),
     ui: Math.min(maxIdentityContrast, minUiContrast * darkRichness),
     maxIdentity: maxIdentityContrast,
   };
+  const darkOnColorContrast = Math.min(maxIdentityContrast, minOnColorContrast * darkRichness);
   const { derivation: deriv } = config;
 
   const bgLight = fitToSrgb(palette[tokenKey(config.roles.canvas)]);
@@ -205,28 +211,33 @@ function buildColorModel(palette, config) {
   const scales = {};
 
   for (const [name, identityDef] of Object.entries(config.roles.identities)) {
-    const source = palette[tokenKey(identityDef.token)];
+    const paletteKey = tokenKey(identityDef.token);
+    const source = palette[paletteKey];
     if (!source) continue;
 
-    const family = {
-      light: buildFunctionalFamily(source, bgLight, surfaceLight, textLight, lightContrast, "light"),
-      dark: buildFunctionalFamily(source, bgDark, surfaceDark, textDark, darkContrast, "dark"),
-    };
-    // Preserve the designer's source colour as the public identity.
-    // Contrast-adapted variants live in the functional families only.
     const light = fitToSrgb(source);
-    const dark = fitToSrgb(source);
+    const darkBlend = annotatedDarkBlends[paletteKey];
+    const darkMixRatio = resolveDarkMixRatio(light, darkBlend);
+    const dark = mixOklch(light, { l: 1, c: 0, h: light.h }, darkMixRatio);
+    const family = {
+      light: buildFunctionalFamily(light, bgLight, surfaceLight, textLight, lightContrast, "light"),
+      dark: buildFunctionalFamily(dark, bgDark, surfaceDark, textDark, darkContrast, "dark"),
+    };
 
-    // Adaptive dark-mode mix ratio: darker source → more white mixed in.
-    // Inspired by the Piccalilli color-mix approach in palette.astro.
-    const darkMixRatio = clamp(0.5 + source.l * 0.5, 0, 1);
-
-    identities[name] = { source, light, dark, role: identityDef.role, family, mixRatio: Math.round(darkMixRatio * 100) };
+    identities[name] = {
+      source: light,
+      light,
+      dark,
+      darkBlend: darkBlend ?? null,
+      role: identityDef.role,
+      family,
+      mixRatio: roundPercentage(darkMixRatio * 100),
+    };
 
     // On-colour is computed directly against the identity (source), not the solid.
     onColors[name] = {
-      light: oklch(chooseForeground([light], [{ l: 0.99, c: 0, h: 0 }, { l: 0.02, c: 0, h: 0 }, textLight], minTextContrast)),
-      dark: oklch(chooseForeground([dark], [{ l: 0.99, c: 0, h: 0 }, { l: 0.02, c: 0, h: 0 }, textDark], darkContrast.text)),
+      light: oklch(chooseForeground([light], [{ l: 0.99, c: 0, h: 0 }, { l: 0.02, c: 0, h: 0 }, textLight], minOnColorContrast)),
+      dark: oklch(chooseForeground([dark], [{ l: 0.99, c: 0, h: 0 }, { l: 0.02, c: 0, h: 0 }, textDark], darkOnColorContrast)),
     };
 
     if (config.scales.enabled && (config.scales.applyTo.includes(name) || config.scales.applyTo.length === 0)) {
@@ -238,13 +249,13 @@ function buildColorModel(palette, config) {
     const source = palette[tokenKey(decorativeDef.token)];
     if (!source) continue;
 
-    const lightPair = buildReadablePair(fitToSrgb(source), [bgLight, textLight], minTextContrast);
+    const lightPair = buildReadablePair(fitToSrgb(source), [bgLight, textLight], minOnColorContrast);
     const darkSource = fitToSrgb({
       l: clamp(lightPair.background.l * 0.72, 0.35, 0.65),
       c: clamp(lightPair.background.c * 0.95, 0.02, lightPair.background.c),
       h: lightPair.background.h,
     });
-    const darkPair = buildReadablePair(darkSource, [bgDark, textDark], darkContrast.text);
+    const darkPair = buildReadablePair(darkSource, [bgDark, textDark], darkOnColorContrast);
 
     decoratives[name] = {
       source,
@@ -307,6 +318,19 @@ function buildColorModel(palette, config) {
   model.warnings.push(...contrastResult.warnings);
 
   return model;
+}
+
+function resolveDarkMixRatio(source, darkBlend) {
+  if (darkBlend == null) {
+    return clamp(0.5 + source.l * 0.5, 0, 1);
+  }
+
+  const whiteRatio = (darkBlend / 100) * MAX_DARK_BLEND_WHITE_RATIO;
+  return 1 - whiteRatio;
+}
+
+function roundPercentage(value) {
+  return Number(value.toFixed(4));
 }
 
 function buildFunctionalFamily(source, background, neutralSurface, ink, contrastConfig, scheme) {
@@ -439,7 +463,7 @@ function validateGeneratedContrast(model, config) {
     const textTarget = isLight
       ? config.contrast.text
       : Math.min(config.contrast.maxIdentity, config.contrast.text * (config.contrast.darkRichness ?? 1));
-    const onSolidTextTarget = config.contrast.text;
+    const onSolidTextTarget = config.contrast.onColor;
     const uiTarget = isLight
       ? config.contrast.ui
       : Math.min(config.contrast.maxIdentity, config.contrast.ui * (config.contrast.darkRichness ?? 1));
@@ -736,7 +760,7 @@ async function writeOutputAtomically(outputUrl, css) {
   const outputDirectory = path.dirname(outputPath);
   const temporaryPath = path.join(
     outputDirectory,
-    `.${path.basename(outputPath)}.${process.pid}.${Date.now()}.tmp`,
+    `.${path.basename(outputPath)}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`,
   );
 
   await mkdir(outputDirectory, { recursive: true });

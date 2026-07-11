@@ -47,7 +47,7 @@ export function validateSmartColorsInput({ config, palette, paletteErrors = [] }
 }
 
 function validateConfigShape(config, errors) {
-  validateCustomProperty(config.roles?.bg, "roles.bg", errors);
+  validateCustomProperty(config.roles?.canvas, "roles.canvas", errors);
   validateCustomProperty(config.roles?.ink, "roles.ink", errors);
 
   const identityEntries = Object.entries(config.roles?.identities ?? {});
@@ -62,8 +62,8 @@ function validateConfigShape(config, errors) {
     validatePublicName(name, `roles.identities.${name}`, errors);
     validateCustomProperty(identityDef.token, `roles.identities.${name}.token`, errors);
 
-    if (!ROLE_PRESETS[identityDef.role]) {
-      errors.push(`roles.identities.${name}.role must be one of: ${Object.keys(ROLE_PRESETS).join(", ")}.`);
+    if (!new Set(["ui", "feedback"]).has(identityDef.role)) {
+      errors.push(`roles.identities.${name}.role must be either "ui" or "feedback".`);
     }
   }
 
@@ -209,17 +209,16 @@ function validatePublicTokenCollisions(config, errors) {
       register(`on-${name}`, owner);
     }
 
+    for (const suffix of SCALE_SEMANTIC_SUFFIXES) {
+      register(`${name}-${suffix}`, `${owner} functional family`);
+    }
+
     const scaleApplies = config.scales?.enabled
       && (config.scales.applyTo?.length === 0 || config.scales.applyTo?.includes(name));
 
     if (scaleApplies) {
       for (const step of config.scales.steps ?? []) {
         register(`${name}-${step}`, `${owner} scale`);
-      }
-
-      for (const suffix of SCALE_SEMANTIC_SUFFIXES) {
-        if (suffix === "on-solid" && !ROLE_PRESETS[identityDef.role]?.generateOnColor) continue;
-        register(`${name}-${suffix}`, `${owner} semantic scale`);
       }
     }
 
@@ -239,13 +238,17 @@ function validatePublicTokenCollisions(config, errors) {
 
   for (const name of Object.keys(config.roles?.decoratives ?? {})) {
     register(name, `roles.decoratives.${name}`);
+    register(`on-${name}`, `roles.decoratives.${name}`);
   }
 
   for (const [alias, target] of Object.entries(config.aliases ?? {})) {
     register(alias, `aliases.${alias}`);
-    const targetIdentity = config.roles?.identities?.[target];
-    if (targetIdentity && ROLE_PRESETS[targetIdentity.role]?.generateOnColor) {
-      register(`on-${alias}`, `aliases.${alias}`);
+    register(`on-${alias}`, `aliases.${alias}`);
+
+    if (config.roles?.identities?.[target]) {
+      for (const suffix of SCALE_SEMANTIC_SUFFIXES) {
+        register(`${alias}-${suffix}`, `aliases.${alias} functional family`);
+      }
     }
   }
 }
@@ -265,7 +268,7 @@ function validateLogoSources(logo, errors) {
 
 function validatePaletteTokens(palette, config, errors, warnings) {
   const required = [
-    { token: config.roles.bg, path: "roles.bg" },
+    { token: config.roles.canvas, path: "roles.canvas" },
     { token: config.roles.ink, path: "roles.ink" },
     ...Object.entries(config.roles.identities ?? {}).map(([name, identityDef]) => ({
       token: getPaletteToken(identityDef),

@@ -3,15 +3,14 @@ import { fitToSrgb } from "./color-math.mjs";
 const OKLCH_VALUE_PATTERN = /^oklch\(\s*([^\s()/]+)\s+([^\s()/]+)\s+([^\s()/]+)(?:\s*\/\s*([^\s()]+))?\s*\)$/i;
 const NUMBER_WITH_UNIT_PATTERN = /^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)([a-z%]*)$/i;
 
-const ROLE_ANNOTATION_PATTERN = /\/\*\s*@role\s+(bg|ink|content|action|fill|decorative)\s*\*\//i;
+const ROLE_ANNOTATION_PATTERN = /\/\*\s*@role\s+([a-z][a-z0-9-]*)\s*\*\//i;
 const TOKEN_DECLARATION_PER_LINE = /--([a-z0-9-]+)\s*:\s*(oklch\([^;]*\))\s*;/gi;
 
 const PROPERTY_BLOCK_PATTERN = /@property\s+(--[a-z0-9-]+)\s*\{([^}]*)\}/gi;
 const PROPERTY_INITIAL_VALUE = /initial-value:\s*(oklch\([^;]*\))\s*;/i;
-const PROPERTY_ROLE = /role:\s*(bg|ink|content|action|fill|decorative)\s*;/i;
+const PROPERTY_ROLE = /role:\s*([a-z][a-z0-9-]*)\s*;/i;
 
-const VALID_ROLES = new Set(["bg", "ink", "content", "action", "fill", "decorative"]);
-const DEFAULT_ROLE = "content";
+const VALID_ROLES = new Set(["canvas", "ink", "ui", "feedback", "decorative"]);
 
 export function parsePalette(css) {
   return parsePaletteWithDiagnostics(css).tokens;
@@ -27,9 +26,11 @@ function parsePropertyBlocks(css) {
   const tokens = {};
   const annotatedRoles = {};
   const errors = [];
+  const uncommentedCss = css.replace(/\/\*[\s\S]*?\*\//g, "");
 
+  PROPERTY_BLOCK_PATTERN.lastIndex = 0;
   let blockMatch;
-  while ((blockMatch = PROPERTY_BLOCK_PATTERN.exec(css))) {
+  while ((blockMatch = PROPERTY_BLOCK_PATTERN.exec(uncommentedCss))) {
     const [, propName, body] = blockMatch;
     const name = tokenKey(propName);
 
@@ -50,13 +51,21 @@ function parsePropertyBlocks(css) {
     tokens[name] = parsed.color;
 
     const roleMatch = PROPERTY_ROLE.exec(body);
-    if (roleMatch) {
-      annotatedRoles[name] = roleMatch[1].toLowerCase();
-    } else {
-      annotatedRoles[name] = DEFAULT_ROLE;
+    if (!roleMatch) {
+      errors.push(`${propName}: missing designer role. Expected one of: ${[...VALID_ROLES].join(", ")}.`);
+      continue;
     }
+
+    const role = roleMatch[1].toLowerCase();
+    if (!VALID_ROLES.has(role)) {
+      errors.push(`${propName}: unsupported role "${role}". Expected one of: ${[...VALID_ROLES].join(", ")}.`);
+      continue;
+    }
+
+    annotatedRoles[name] = role;
   }
 
+  validateFoundationRoles(annotatedRoles, errors);
   return { tokens, errors, annotatedRoles };
 }
 
@@ -70,7 +79,13 @@ function parseRootBlock(css) {
   for (const line of lines) {
     const roleMatch = ROLE_ANNOTATION_PATTERN.exec(line);
     if (roleMatch) {
-      pendingRole = roleMatch[1].toLowerCase();
+      const role = roleMatch[1].toLowerCase();
+      if (VALID_ROLES.has(role)) {
+        pendingRole = role;
+      } else {
+        errors.push(`Unsupported role "${role}". Expected one of: ${[...VALID_ROLES].join(", ")}.`);
+        pendingRole = null;
+      }
     }
 
     let declMatch;
@@ -93,7 +108,20 @@ function parseRootBlock(css) {
     }
   }
 
+  validateFoundationRoles(annotatedRoles, errors);
   return { tokens, errors, annotatedRoles };
+}
+
+function validateFoundationRoles(annotatedRoles, errors) {
+  for (const role of ["canvas", "ink"]) {
+    const matches = Object.entries(annotatedRoles)
+      .filter(([, annotatedRole]) => annotatedRole === role)
+      .map(([name]) => `--${name}`);
+
+    if (matches.length > 1) {
+      errors.push(`Role "${role}" must identify exactly one palette color; found ${matches.join(", ")}.`);
+    }
+  }
 }
 
 export function parseOklch(value) {

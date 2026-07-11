@@ -1,37 +1,16 @@
 /**
- * Role presets — how the generator treats each identity color.
+ * Designer-facing role presets.
  *
- * Pipeline: palette input → [adjustColor?] → [generateOnColor?] → output
- *
- *   adjustColor
- *     If true, shifts lightness/chroma to meet the contrast threshold
- *     defined by minContrastKey. The original hue is preserved.
- *   generateOnColor
- *     If true, creates --color-on-* (WCAG-safe) and --ink-*
- *     (contrast-color based) companion tokens.
- *   minContrastKey
- *     Picks the threshold from config.contrast: "text" (default 4.6)
- *     or "ui" (default 3). Only consulted when adjustColor is true.
- *
- * ─── Role reference ─────────────────────────────────────────────────────
- *
- *   content     Colors meant to be read (text, icons, headings).
- *               Adjusted to WCAG AA text contrast. Generates on-color + ink.
- *
- *   action      Colors for interactive elements (buttons, chips, controls).
- *               Adjusted to WCAG AA UI contrast. Generates on-color + ink.
- *
- *   fill        Colors for tinted surfaces and background fills.
- *               Kept as-is from the palette. Generates on-color + ink.
- *
- *   decorative  Colors for ornaments, gradients, visual detail.
- *               No contrast correction. No companion tokens generated.
+ * Roles classify intent; they do not select a single contrast threshold.
+ * Functional variants (`surface`, `border`, `solid`, `on-solid`, `text`) own
+ * their accessibility guarantees and are generated for every UI/feedback
+ * color. Decorative colors retain more of the authored appearance but still
+ * receive a deterministic readable companion.
  */
 export const ROLE_PRESETS = {
-  content:     { minContrastKey: "text", generateOnColor: true,  adjustColor: true },
-  action:      { minContrastKey: "ui",   generateOnColor: true,  adjustColor: true },
-  fill:        { minContrastKey: null,   generateOnColor: true,  adjustColor: false },
-  decorative:  { minContrastKey: null,   generateOnColor: false, adjustColor: false },
+  ui:          { generateFamily: true,  generateOnColor: true },
+  feedback:    { generateFamily: true,  generateOnColor: true },
+  decorative:  { generateFamily: false, generateOnColor: true },
 };
 
 export const defaultSmartColorsConfig = {
@@ -44,19 +23,13 @@ export const defaultSmartColorsConfig = {
     darkRichness: 1.15,
   },
   roles: {
-    bg: "--palette-bg",
-    ink: "--palette-ink",
-    identities: {
-      primary: { token: "--palette-primary", role: "content" },
-      secondary: { token: "--palette-secondary", role: "action" },
-      tertiary: { token: "--palette-tertiary", role: "fill" },
-    },
+    canvas: null,
+    ink: null,
+    identities: {},
     decoratives: {},
-    focus: "primary",
+    focus: null,
   },
-  aliases: {
-    accent: "secondary",
-  },
+  aliases: {},
   scales: {
     enabled: false,
     steps: [50, 100, 200, 300, 400, 500, 600, 700, 800, 900],
@@ -95,9 +68,9 @@ function normalizeIdentities(config) {
 
   for (const [name, def] of Object.entries(config.roles?.identities ?? {})) {
     if (typeof def === "string") {
-      identities[name] = { token: def, role: "content" };
+      identities[name] = { token: def, role: "ui" };
     } else {
-      identities[name] = { role: "content", ...def };
+      identities[name] = { role: "ui", ...def };
     }
   }
 

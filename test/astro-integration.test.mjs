@@ -6,12 +6,39 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import smartColors from "../src/astro-integration.mjs";
 
-const PALETTE = `:root {
-  --palette-bg: oklch(0.962 0.015 88);
-  --palette-ink: oklch(0.28 0.007 3.68);
-  --palette-primary: oklch(0.62 0.16 32);
-  --palette-secondary: oklch(0.54 0.108 198);
-  --palette-tertiary: oklch(0.88 0.12 85);
+const PALETTE = `@property --palette-canvas {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.962 0.015 88);
+  role: canvas;
+}
+
+@property --palette-ink {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.28 0.007 3.68);
+  role: ink;
+}
+
+@property --palette-primary {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.62 0.16 32);
+  role: ui;
+}
+
+@property --palette-secondary {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.54 0.108 198);
+  role: feedback;
+}
+
+@property --palette-tertiary {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.88 0.12 85);
+  role: decorative;
 }`;
 
 async function createProject(t) {

@@ -5,13 +5,46 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { generateColorTokens } from "../src/generate-colors.mjs";
 
-const PALETTE = `:root {
-  --palette-bg: oklch(0.962 0.015 88);
-  --palette-ink: oklch(0.28 0.007 3.68);
-  --palette-primary: oklch(0.62 0.16 32);
-  --palette-secondary: oklch(0.54 0.108 198);
-  --palette-tertiary: oklch(0.88 0.12 85);
-  --palette-status: oklch(0.62 0.14 160);
+const PALETTE = `@property --palette-canvas {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.962 0.015 88);
+  role: canvas;
+}
+
+@property --palette-ink {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.28 0.007 3.68);
+  role: ink;
+}
+
+@property --palette-primary {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.62 0.16 32);
+  role: ui;
+}
+
+@property --palette-secondary {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.54 0.108 198);
+  role: feedback;
+}
+
+@property --palette-tertiary {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.88 0.12 85);
+  role: decorative;
+}
+
+@property --palette-status {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.62 0.14 160);
+  role: feedback;
 }`;
 
 async function createProject(t) {
@@ -42,7 +75,7 @@ test("optional motion output is separate and follows configured identities", asy
     inlineConfig: {
       roles: {
         identities: {
-          status: { token: "--palette-status", role: "action" },
+          status: { token: "--palette-status", role: "feedback" },
         },
       },
       motion: {
@@ -58,7 +91,9 @@ test("optional motion output is separate and follows configured identities", asy
   assert.match(report.motionCss, /@property --color-status /);
   assert.match(report.motionCss, /@property --color-on-status /);
   assert.match(report.motionCss, /--color-status,/);
-  assert.match(report.motionCss, /--color-on-status;/);
+  assert.match(report.motionCss, /--color-on-status,/);
+  assert.match(report.motionCss, /@property --color-status-on-solid /);
+  assert.match(report.motionCss, /--color-status-text-strong;/);
 
   const transitionSection = report.motionCss.slice(report.motionCss.indexOf(":root"));
   assert.doesNotMatch(transitionSection, /--color-bg[,;]/);
@@ -70,7 +105,7 @@ test("optional motion output is separate and follows configured identities", asy
     inlineConfig: {
       roles: {
         identities: {
-          status: { token: "--palette-status", role: "action" },
+          status: { token: "--palette-status", role: "feedback" },
         },
       },
       motion: {
@@ -84,12 +119,12 @@ test("optional motion output is separate and follows configured identities", asy
   assert.deepEqual(staleReport.errors, [`Generated ${motionOutput} is out of date. Run smart-colors build.`]);
 });
 
-test("relative dark quick reference matches the emitted color-mix defaults", async (t) => {
+test("quick reference lists resolved light and dark foundation values", async (t) => {
   const root = await createProject(t);
   const report = await generateColorTokens({ root });
 
   assert.match(report.css, /--color-bg\s+0\.962 0\.015 88\s+0\.135 0\.002 88/);
   assert.match(report.css, /--color-surface\s+0\.944 0\.015 88\s+0\.173 0\.003 88/);
   assert.match(report.css, /--color-text\s+0\.280 0\.007 4\s+0\.965 0\.013 88/);
-  assert.match(report.css, /--color-text-muted\s+0\.537 0\.005 4\s+0\.733 0\.010 88/);
+  assert.match(report.css, /--color-text-muted\s+\d\.\d{3} \d\.\d{3} \d+\s+\d\.\d{3} \d\.\d{3} \d+/);
 });

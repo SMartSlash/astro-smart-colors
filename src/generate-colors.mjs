@@ -4,9 +4,8 @@ import { fileURLToPath } from "node:url";
 import { contrast, clamp, fitToSrgb, oklch } from "./color-math.mjs";
 import { formatColorsCss, formatColorsMotionCss } from "./format-css.mjs";
 import { loadSmartColorsConfig, resolveProjectUrl } from "./load-config.mjs";
-import { parsePalette, parsePaletteWithDiagnostics, tokenKey } from "./parse-palette.mjs";
+import { parseOklch, parsePalette, parsePaletteWithDiagnostics, tokenKey } from "./parse-palette.mjs";
 import { validateSmartColorsInput } from "./validate-config.mjs";
-import { ROLE_PRESETS } from "./defaults.mjs";
 
 export async function generateColorTokens(options = {}) {
   const root = options.root ?? process.cwd();
@@ -30,8 +29,8 @@ export async function generateColorTokens(options = {}) {
 
   const model = buildColorModel(palette, mergedConfig);
   const warnings = [...inputValidation.warnings, ...model.warnings];
-  const css = formatColorsCss(model, config);
-  const motionCss = config.motion.enabled ? formatColorsMotionCss(model) : null;
+  const css = formatColorsCss(model, mergedConfig);
+  const motionCss = mergedConfig.motion.enabled ? formatColorsMotionCss(model) : null;
   const outputSpecs = [
     { path: config.output, css },
     ...(motionCss == null ? [] : [{ path: config.motion.output, css: motionCss }]),
@@ -72,11 +71,11 @@ function mergeAnnotatedRoles(config, annotatedRoles, palette) {
 
   const merged = structuredClone(config);
 
-  // Auto-detect bg and ink from annotated roles (config takes precedence)
-  if (!merged.roles.bg) {
+  // Auto-detect the foundation from palette annotations (explicit config wins).
+  if (!merged.roles.canvas) {
     for (const [tokenKey, role] of Object.entries(annotatedRoles)) {
-      if (role === "bg") {
-        merged.roles.bg = `--${tokenKey}`;
+      if (role === "canvas") {
+        merged.roles.canvas = `--${tokenKey}`;
         break;
       }
     }
@@ -91,11 +90,12 @@ function mergeAnnotatedRoles(config, annotatedRoles, palette) {
     }
   }
 
-  // Auto-detect focus from annotated roles (first identity, config takes precedence)
+  // Prefer the first UI identity for focus; feedback is a safe fallback.
   if (!merged.roles.focus) {
-    for (const [tokenKey, role] of Object.entries(annotatedRoles)) {
-      if (role === "content" || role === "action" || role === "fill") {
-        merged.roles.focus = palettePublicName(tokenKey);
+    for (const preferredRole of ["ui", "feedback"]) {
+      const match = Object.entries(annotatedRoles).find(([, role]) => role === preferredRole);
+      if (match) {
+        merged.roles.focus = palettePublicName(match[0]);
         break;
       }
     }
@@ -106,7 +106,7 @@ function mergeAnnotatedRoles(config, annotatedRoles, palette) {
   const detectedDecoratives = {};
 
   for (const [tokenKey, role] of Object.entries(annotatedRoles)) {
-    if (role === "bg" || role === "ink") continue;
+    if (role === "canvas" || role === "ink") continue;
     if (!palette[tokenKey]) continue;
 
     const publicName = palettePublicName(tokenKey);
@@ -119,21 +119,10 @@ function mergeAnnotatedRoles(config, annotatedRoles, palette) {
     }
   }
 
-  // Merge: config-registered identities/decoratives take precedence over auto-detected.
-  // Only keep config entries whose palette tokens actually exist.
-  const configIdentities = {};
-  for (const [name, def] of Object.entries(merged.roles.identities ?? {})) {
-    const key = tokenKey(def.token);
-    if (palette[key]) configIdentities[name] = def;
-  }
-  const configDecoratives = {};
-  for (const [name, def] of Object.entries(merged.roles.decoratives ?? {})) {
-    const key = tokenKey(def.token);
-    if (palette[key]) configDecoratives[name] = def;
-  }
-
-  merged.roles.identities = { ...detectedIdentities, ...configIdentities };
-  merged.roles.decoratives = { ...detectedDecoratives, ...configDecoratives };
+  // Explicit config overrides annotations, but missing entries remain available
+  // to input validation instead of being silently removed.
+  merged.roles.identities = { ...detectedIdentities, ...(merged.roles.identities ?? {}) };
+  merged.roles.decoratives = { ...detectedDecoratives, ...(merged.roles.decoratives ?? {}) };
 
   return merged;
 }
@@ -147,13 +136,8 @@ function buildColorModel(palette, config) {
   const minTextContrast = config.contrast.text;
   const minUiContrast = config.contrast.ui;
   const maxIdentityContrast = config.contrast.maxIdentity;
-  const minFocusContrast = config.contrast.ui;
   const darkRichness = config.contrast.darkRichness ?? 1;
-  const lightContrast = {
-    text: minTextContrast,
-    ui: minUiContrast,
-    maxIdentity: maxIdentityContrast,
-  };
+  const lightContrast = { text: minTextContrast, ui: minUiContrast, maxIdentity: maxIdentityContrast };
   const darkContrast = {
     text: Math.min(maxIdentityContrast, minTextContrast * darkRichness),
     ui: Math.min(maxIdentityContrast, minUiContrast * darkRichness),
@@ -161,8 +145,8 @@ function buildColorModel(palette, config) {
   };
   const { derivation: deriv } = config;
 
-  const bgLight = fitToSrgb(palette[tokenKey(config.roles.bg)]);
-  const textLight = fitToSrgb(palette[tokenKey(config.roles.ink)]);
+  const bgLight = fitToSrgb(palette[tokenKey(config.roles.canvas)]);
+  const inkSource = fitToSrgb(palette[tokenKey(config.roles.ink)]);
   const relativeDark = deriv.dark.mode === "relative";
   const bgDark = relativeDark
     ? mixOklch(bgLight, { l: 0, c: 0, h: bgLight.h }, deriv.dark.bgMixRatio / 100)
@@ -171,16 +155,9 @@ function buildColorModel(palette, config) {
       c: clamp(bgLight.c * 1.7, 0, 0.05),
       h: bgLight.h,
     });
-  const textDark = relativeDark
-    ? mixOklch(bgLight, { l: 0.99, c: 0, h: bgLight.h }, deriv.dark.textMixRatio / 100)
-    : fitToSrgb({
-      l: clamp(textLight.l * deriv.dark.textLightnessFactor, 0.86, 0.96),
-      c: clamp(textLight.c * 0.1, 0, 0.02),
-      h: textLight.h,
-    });
 
   const surfaceLight = fitToSrgb({
-    l: clamp(bgLight.l + deriv.surface.lightShift, 0.9, 0.99),
+    l: clamp(bgLight.l + deriv.surface.lightShift, 0, 1),
     c: bgLight.c,
     h: bgLight.h,
   });
@@ -192,87 +169,90 @@ function buildColorModel(palette, config) {
       h: bgDark.h,
     });
 
-  const textMutedLight = deriveMutedText(textLight, bgLight, minTextContrast, deriv.muted.chromaFactor);
+  const textLight = ensureContrast(inkSource, [bgLight, surfaceLight], minTextContrast + 0.02);
+  const white = { l: 0.99, c: 0, h: bgLight.h };
+  const textDarkMixRatio = relativeDark
+    ? findAccessibleMixRatio(bgLight, white, [bgDark, surfaceDark], darkContrast.text + 0.02, deriv.dark.textMixRatio / 100, "toward-second")
+    : null;
+  const textDarkSource = relativeDark
+    ? mixOklch(bgLight, white, textDarkMixRatio)
+    : fitToSrgb({
+      l: clamp(inkSource.l * deriv.dark.textLightnessFactor, 0.86, 0.96),
+      c: clamp(inkSource.c * 0.1, 0, 0.02),
+      h: inkSource.h,
+    });
+  const textDark = ensureContrast(textDarkSource, [bgDark, surfaceDark], darkContrast.text + 0.02);
+  const textMutedLight = ensureContrast(
+    deriveMutedText(textLight, bgLight, minTextContrast + 0.02, deriv.muted.chromaFactor),
+    [bgLight, surfaceLight],
+    minTextContrast + 0.02,
+  );
+  const textMutedDarkMixRatio = relativeDark
+    ? findAccessibleMixRatio(textDark, bgDark, [bgDark, surfaceDark], darkContrast.text + 0.02, 0.72, "toward-first")
+    : null;
   const textMutedDark = relativeDark
-    ? mixOklch(textDark, bgDark, 0.72)
-    : deriveMutedText(textDark, bgDark, minTextContrast, deriv.muted.chromaFactor);
+    ? mixOklch(textDark, bgDark, textMutedDarkMixRatio)
+    : ensureContrast(
+      deriveMutedText(textDark, bgDark, darkContrast.text + 0.02, deriv.muted.chromaFactor),
+      [bgDark, surfaceDark],
+      darkContrast.text + 0.02,
+    );
 
   const identities = {};
+  const decoratives = {};
   const onColors = {};
   const scales = {};
 
   for (const [name, identityDef] of Object.entries(config.roles.identities)) {
-    const paletteKey = tokenKey(identityDef.token);
-    const source = palette[paletteKey];
-
+    const source = palette[tokenKey(identityDef.token)];
     if (!source) continue;
 
-    const rolePreset = ROLE_PRESETS[identityDef.role] ?? ROLE_PRESETS["content"];
-    const light = processIdentityColor(source, bgLight, identityDef.role, lightContrast);
-    let dark = processIdentityColor(source, bgDark, identityDef.role, darkContrast);
-    let mixRatio = null;
+    const family = {
+      light: buildFunctionalFamily(source, bgLight, surfaceLight, textLight, lightContrast, "light"),
+      dark: buildFunctionalFamily(source, bgDark, surfaceDark, textDark, darkContrast, "dark"),
+    };
+    const light = family.light.solid;
+    const dark = family.dark.solid;
 
-    if (rolePreset.adjustColor && config.derivation.dark.mode !== "static") {
-      const darkTarget = getIdentityContrastTarget(identityDef.role, darkContrast);
-      if (darkTarget) {
-        mixRatio = findDarkMixRatio(source, bgDark, darkTarget);
-        dark = mixWithWhite(source, mixRatio / 100);
-      }
-    }
+    maybeWarnShift(warnings, identityDef.token, name, "light solid", source, light, bgLight, lightContrast.ui);
+    maybeWarnShift(warnings, identityDef.token, name, "dark solid", source, dark, bgDark, darkContrast.ui);
 
-    if (rolePreset.adjustColor) {
-      const lightContrastTarget = getIdentityContrastTarget(identityDef.role, lightContrast);
-      const darkContrastTarget = getIdentityContrastTarget(identityDef.role, darkContrast);
-      maybeWarnShift(warnings, identityDef.token, name, "light", source, light, bgLight, lightContrastTarget);
-      maybeWarnShift(warnings, identityDef.token, name, "dark", source, dark, bgDark, darkContrastTarget);
-    }
-
-    identities[name] = { source, light, dark, role: identityDef.role };
-
-    if (mixRatio != null) {
-      identities[name].mixRatio = mixRatio;
-    }
-
-    if (rolePreset.generateOnColor) {
-      onColors[name] = {
-        light: selectOnColor(light, minTextContrast, [
-          { ref: "var(--_color-bg-light)", value: bgLight },
-          { ref: "var(--_color-text-light)", value: textLight },
-        ]),
-        dark: selectOnColor(dark, minTextContrast, [
-          { ref: "var(--_color-bg-dark)", value: bgDark },
-          { ref: "var(--_color-text-dark)", value: textDark },
-        ]),
-      };
-    } else {
-      onColors[name] = null;
-    }
+    identities[name] = { source, light, dark, role: identityDef.role, family };
+    onColors[name] = {
+      light: oklch(family.light.onSolid),
+      dark: oklch(family.dark.onSolid),
+    };
 
     if (config.scales.enabled && (config.scales.applyTo.includes(name) || config.scales.applyTo.length === 0)) {
       scales[name] = buildScale(light, dark, config.scales);
     }
   }
 
-  const decoratives = {};
-
   for (const [name, decorativeDef] of Object.entries(config.roles.decoratives ?? {})) {
-    const paletteKey = tokenKey(decorativeDef.token);
-    const source = palette[paletteKey];
-
+    const source = palette[tokenKey(decorativeDef.token)];
     if (!source) continue;
 
-    const light = fitToSrgb(source);
-    const dark = fitToSrgb({
-      l: clamp(light.l * 0.72, 0.35, 0.65),
-      c: clamp(light.c * 0.95, 0.02, light.c),
-      h: light.h,
+    const lightPair = buildReadablePair(fitToSrgb(source), [bgLight, textLight], minTextContrast);
+    const darkSource = fitToSrgb({
+      l: clamp(lightPair.background.l * 0.72, 0.35, 0.65),
+      c: clamp(lightPair.background.c * 0.95, 0.02, lightPair.background.c),
+      h: lightPair.background.h,
     });
+    const darkPair = buildReadablePair(darkSource, [bgDark, textDark], darkContrast.text);
 
-    decoratives[name] = { source, light, dark, role: "decorative" };
+    decoratives[name] = {
+      source,
+      light: lightPair.background,
+      dark: darkPair.background,
+      role: "decorative",
+    };
+    onColors[name] = {
+      light: oklch(lightPair.foreground),
+      dark: oklch(darkPair.foreground),
+    };
   }
 
   const logoTokens = {};
-
   if (config.logo.enabled && Object.keys(config.logo.sources ?? {}).length) {
     for (const [name, value] of Object.entries(config.logo.sources)) {
       const parsed = parsePalette(`:root { --l: ${value}; }`);
@@ -290,10 +270,9 @@ function buildColorModel(palette, config) {
     throw new Error(`Configured focus role "${focusRole}" does not exist in roles.identities.`);
   }
 
-  const focusLight = ensureContrast(identities[focusRole].light, [bgLight, surfaceLight], minFocusContrast);
-  const focusDark = ensureContrast(identities[focusRole].dark, [bgDark, surfaceDark], minFocusContrast);
-
-  return {
+  const focusLight = ensureContrast(identities[focusRole].family.light.borderStrong, [bgLight, surfaceLight], minUiContrast + 0.02);
+  const focusDark = ensureContrast(identities[focusRole].family.dark.borderStrong, [bgDark, surfaceDark], minUiContrast + 0.02);
+  const model = {
     warnings,
     neutrals: {
       bgLight,
@@ -304,59 +283,183 @@ function buildColorModel(palette, config) {
       textMutedDark,
       surfaceLight,
       surfaceDark,
+      textDarkMixRatio: textDarkMixRatio == null ? null : textDarkMixRatio * 100,
+      textMutedDarkMixRatio: textMutedDarkMixRatio == null ? null : textMutedDarkMixRatio * 100,
     },
     identities,
     decoratives,
     logoTokens,
     onColors,
     scales,
-    focus: {
-      light: focusLight,
-      dark: focusDark,
-    },
+    focus: { light: focusLight, dark: focusDark },
+  };
+
+  const contrastErrors = validateGeneratedContrast(model, config);
+  if (contrastErrors.length) {
+    throw new Error(`Smart Colors generated an invalid contrast contract:\n${contrastErrors.map((error) => `- ${error}`).join("\n")}`);
+  }
+
+  return model;
+}
+
+function buildFunctionalFamily(source, background, neutralSurface, ink, contrastConfig, scheme) {
+  const textTarget = Math.min(contrastConfig.maxIdentity, contrastConfig.text + 0.02);
+  const uiTarget = Math.min(contrastConfig.maxIdentity, contrastConfig.ui + 0.02);
+  const surface = mixOklch(source, background, scheme === "light" ? 0.1 : 0.18);
+  const surfaceStrong = mixOklch(source, background, scheme === "light" ? 0.18 : 0.28);
+
+  const text = ensureContrast(
+    fitContrastBand(source, background, { min: textTarget, max: contrastConfig.maxIdentity }),
+    [background, neutralSurface, surface, surfaceStrong],
+    textTarget,
+  );
+  const textStrongTarget = Math.min(contrastConfig.maxIdentity, textTarget + 1);
+  const textStrong = ensureContrast(text, [background, neutralSurface, surface, surfaceStrong], textStrongTarget);
+  const border = ensureContrast(source, [background, neutralSurface, surface], uiTarget);
+  const borderStrongTarget = Math.min(contrastConfig.maxIdentity, uiTarget + 1);
+  const borderStrong = ensureContrast(border, [background, neutralSurface, surfaceStrong], borderStrongTarget);
+  const solidPair = buildSolidPair(source, background, neutralSurface, ink, uiTarget, textTarget);
+
+  return {
+    surface,
+    surfaceStrong,
+    border,
+    borderStrong,
+    solid: solidPair.solid,
+    solidHover: solidPair.solidHover,
+    onSolid: solidPair.onSolid,
+    text,
+    textStrong,
   };
 }
 
-function processIdentityColor(source, background, role, contrastConfig) {
-  const rolePreset = ROLE_PRESETS[role] ?? ROLE_PRESETS["content"];
+function buildSolidPair(source, background, neutralSurface, ink, uiTarget, textTarget) {
+  let solid = ensureContrast(source, [background, neutralSurface], uiTarget);
+  const direction = background.l > solid.l ? -1 : 1;
+  let solidHover = fitToSrgb({
+    l: clamp(solid.l + direction * 0.055, 0.02, 0.98),
+    c: solid.c,
+    h: solid.h,
+  });
+  solidHover = ensureContrast(solidHover, [background, neutralSurface], uiTarget);
 
-  if (!rolePreset.adjustColor) {
-    if (background.l < 0.5) {
-      return fitToSrgb({ l: clamp(source.l * 1.5, 0.48, 0.82), c: source.c, h: source.h });
-    }
-    return fitToSrgb(source);
+  const candidates = [background, ink, { l: 0.99, c: 0, h: 0 }, { l: 0.02, c: 0, h: 0 }];
+  let onSolid = chooseForeground([solid, solidHover], candidates, textTarget);
+
+  if (Math.min(contrast(onSolid, solid), contrast(onSolid, solidHover)) < textTarget) {
+    solid = adjustContrast(solid, onSolid, textTarget);
+    solidHover = adjustContrast(solidHover, onSolid, textTarget);
+    solid = ensureContrast(solid, [background, neutralSurface], uiTarget);
+    solidHover = ensureContrast(solidHover, [background, neutralSurface], uiTarget);
+    onSolid = chooseForeground([solid, solidHover], candidates, textTarget);
   }
 
-  const target = getIdentityContrastTarget(role, contrastConfig);
-  return fitContrastBand(source, background, { min: target, max: contrastConfig.maxIdentity });
+  return { solid, solidHover, onSolid };
 }
 
-function getIdentityContrastTarget(role, contrastConfig) {
-  const rolePreset = ROLE_PRESETS[role] ?? ROLE_PRESETS["content"];
-  if (!rolePreset.minContrastKey) return null;
-  return contrastConfig[rolePreset.minContrastKey];
+function buildReadablePair(background, preferredForegrounds, textTarget) {
+  const candidates = [...preferredForegrounds, { l: 0.99, c: 0, h: 0 }, { l: 0.02, c: 0, h: 0 }];
+  let adjustedBackground = fitToSrgb(background);
+  let foreground = chooseForeground([adjustedBackground], candidates, textTarget + 0.02);
+
+  if (contrast(foreground, adjustedBackground) < textTarget + 0.02) {
+    adjustedBackground = adjustContrast(adjustedBackground, foreground, textTarget + 0.02);
+    foreground = chooseForeground([adjustedBackground], candidates, textTarget + 0.02);
+  }
+
+  return { background: adjustedBackground, foreground };
 }
 
-function findDarkMixRatio(source, bgDark, target) {
-  let pass = 0.3;
-  let fail = 1.0;
+function chooseForeground(backgrounds, candidates, target) {
+  const ranked = candidates
+    .map((candidate) => ({
+      candidate: fitToSrgb(candidate),
+      score: Math.min(...backgrounds.map((background) => contrast(candidate, background))),
+    }))
+    .sort((a, b) => b.score - a.score);
 
-  for (let i = 0; i < 32; i += 1) {
-    const mid = (pass + fail) / 2;
-    const mixed = mixWithWhite(source, mid);
+  return (ranked.find(({ score }) => score >= target) ?? ranked[0]).candidate;
+}
 
-    if (contrast(mixed, bgDark) >= target) {
-      pass = mid;
+function validateGeneratedContrast(model, config) {
+  const errors = [];
+  const tolerance = 0.005;
+  const check = (label, foreground, background, target) => {
+    const ratio = contrast(foreground, background);
+    if (ratio + tolerance < target) {
+      errors.push(`${label} is ${ratio.toFixed(2)}:1; expected at least ${target.toFixed(2)}:1.`);
+    }
+  };
+
+  for (const scheme of ["light", "dark"]) {
+    const isLight = scheme === "light";
+    const background = isLight ? model.neutrals.bgLight : model.neutrals.bgDark;
+    const surface = isLight ? model.neutrals.surfaceLight : model.neutrals.surfaceDark;
+    const text = isLight ? model.neutrals.textLight : model.neutrals.textDark;
+    const muted = isLight ? model.neutrals.textMutedLight : model.neutrals.textMutedDark;
+    const textTarget = isLight
+      ? config.contrast.text
+      : Math.min(config.contrast.maxIdentity, config.contrast.text * (config.contrast.darkRichness ?? 1));
+    const uiTarget = isLight
+      ? config.contrast.ui
+      : Math.min(config.contrast.maxIdentity, config.contrast.ui * (config.contrast.darkRichness ?? 1));
+
+    check(`${scheme} neutral text / canvas`, text, background, textTarget);
+    check(`${scheme} neutral text / surface`, text, surface, textTarget);
+    check(`${scheme} muted text / canvas`, muted, background, textTarget);
+    check(`${scheme} muted text / surface`, muted, surface, textTarget);
+    check(`${scheme} focus / canvas`, model.focus[scheme], background, config.contrast.ui);
+    check(`${scheme} focus / surface`, model.focus[scheme], surface, config.contrast.ui);
+
+    for (const [name, identity] of Object.entries(model.identities)) {
+      const family = identity.family[scheme];
+      check(`${scheme} ${name}-text / canvas`, family.text, background, textTarget);
+      check(`${scheme} ${name}-text / neutral surface`, family.text, surface, textTarget);
+      check(`${scheme} ${name}-text / family surface`, family.text, family.surface, textTarget);
+      check(`${scheme} ${name}-text / family surface strong`, family.text, family.surfaceStrong, textTarget);
+      check(`${scheme} ${name}-text-strong / canvas`, family.textStrong, background, textTarget);
+      check(`${scheme} ${name}-text-strong / family surface strong`, family.textStrong, family.surfaceStrong, textTarget);
+      check(`${scheme} ${name}-border / canvas`, family.border, background, uiTarget);
+      check(`${scheme} ${name}-border / family surface`, family.border, family.surface, uiTarget);
+      check(`${scheme} ${name}-solid / canvas`, family.solid, background, uiTarget);
+      check(`${scheme} ${name}-solid / surface`, family.solid, surface, uiTarget);
+      check(`${scheme} ${name}-on-solid / solid`, family.onSolid, family.solid, textTarget);
+      check(`${scheme} ${name}-on-solid / solid-hover`, family.onSolid, family.solidHover, textTarget);
+    }
+
+    for (const [name, decorative] of Object.entries(model.decoratives)) {
+      const decorativeColor = decorative[scheme];
+      const onColor = parseOklch(model.onColors[name][scheme]).color;
+      check(`${scheme} on-${name} / ${name}`, onColor, decorativeColor, textTarget);
+    }
+  }
+
+  return errors;
+}
+
+function findAccessibleMixRatio(first, second, backgrounds, target, preferredRatio, direction) {
+  const preferred = clamp(preferredRatio, 0, 1);
+  const meetsTarget = (ratio) => {
+    const candidate = mixOklch(first, second, ratio);
+    return backgrounds.every((background) => contrast(candidate, background) >= target);
+  };
+
+  if (meetsTarget(preferred)) return preferred;
+
+  let pass = direction === "toward-second" ? 0 : 1;
+  let fail = preferred;
+  if (!meetsTarget(pass)) return preferred;
+
+  for (let index = 0; index < 44; index += 1) {
+    const middle = (pass + fail) / 2;
+    if (meetsTarget(middle)) {
+      pass = middle;
     } else {
-      fail = mid;
+      fail = middle;
     }
   }
 
-  return Math.round(pass * 100);
-}
-
-function mixWithWhite(color, ratio) {
-  return mixOklch(color, { l: 1, c: 0, h: color.h }, ratio);
+  return pass;
 }
 
 function mixOklch(first, second, firstRatio) {
@@ -467,18 +570,7 @@ function maybeWarnShift(warnings, token, name, mode, source, generated, backgrou
   }
 }
 
-function selectOnColor(background, minTextContrast, candidates) {
-  const ranked = candidates
-    .map((candidate) => ({ ...candidate, contrast: contrast(candidate.value, background) }))
-    .sort((a, b) => b.contrast - a.contrast);
 
-  const passing = ranked.find((candidate) => candidate.contrast >= minTextContrast);
-  if (passing) return passing.ref;
-
-  const black = { l: 0.02, c: 0, h: 0 };
-  const white = { l: 0.99, c: 0, h: 0 };
-  return contrast(black, background) > contrast(white, background) ? oklch(black) : oklch(white);
-}
 
 function deriveMutedText(text, background, minTextContrast, chromaFactor) {
   if (contrast(text, background) < minTextContrast) {

@@ -3,27 +3,56 @@ import test from "node:test";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { contrast } from "../src/color-math.mjs";
+import { contrast, fitToSrgb } from "../src/color-math.mjs";
 import { generateColorTokens } from "../src/generate-colors.mjs";
 import { parseOklch } from "../src/parse-palette.mjs";
 
-const DEFAULT_PALETTE = `:root {
-  --palette-bg: oklch(0.962 0.015 88);
-  --palette-ink: oklch(0.28 0.007 3.68);
-  --palette-primary: oklch(0.62 0.16 32);
-  --palette-secondary: oklch(0.540 0.108 198);
-  --palette-tertiary: oklch(0.880 0.120 85);
+const DEFAULT_PALETTE = `@property --palette-canvas {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.962 0.015 88);
+  role: canvas;
+}
+
+@property --palette-ink {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.28 0.007 3.68);
+  role: ink;
+}
+
+@property --palette-primary {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.62 0.16 32);
+  role: ui;
+}
+
+@property --palette-secondary {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.54 0.108 198);
+  role: feedback;
+}
+
+@property --palette-tertiary {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.88 0.12 85);
+  role: decorative;
 }`;
 
-const CONTRAST_PALETTE = `:root {
-  --palette-bg: oklch(0.962 0.015 88);
-  --palette-ink: oklch(0.28 0.007 3.68);
-  --palette-primary: oklch(0.62 0.16 32);
-  --palette-secondary: oklch(0.540 0.108 198);
-  --palette-tertiary: oklch(0.880 0.120 85);
-  --palette-warning: oklch(0.68 0.17 65);
-  --palette-high-contrast: oklch(0.22 0.05 32);
-}`;
+const SEMANTIC_SUFFIXES = [
+  "surface",
+  "surface-strong",
+  "border",
+  "border-strong",
+  "solid",
+  "solid-hover",
+  "on-solid",
+  "text",
+  "text-strong",
+];
 
 async function createProject(t, paletteCss = DEFAULT_PALETTE) {
   const root = await mkdtemp(path.join(tmpdir(), "smart-colors-"));
@@ -35,6 +64,79 @@ async function createProject(t, paletteCss = DEFAULT_PALETTE) {
   return root;
 }
 
+function getDeclarations(css) {
+  const declarations = new Map();
+  const pattern = /(?:^|\n)\s*(--[a-z0-9_-]+)\s*:\s*([^;]+);/gi;
+
+  for (const match of css.matchAll(pattern)) {
+    declarations.set(match[1], match[2].trim());
+  }
+
+  return declarations;
+}
+
+function getDeclaration(css, tokenName) {
+  const value = getDeclarations(css).get(tokenName);
+  assert.ok(value, `Expected generated token ${tokenName}.`);
+  return value;
+}
+
+function splitTopLevel(value) {
+  const parts = [];
+  let depth = 0;
+  let start = 0;
+
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (character === "(") depth += 1;
+    if (character === ")") depth -= 1;
+
+    if (character === "," && depth === 0) {
+      parts.push(value.slice(start, index).trim());
+      start = index + 1;
+    }
+  }
+
+  parts.push(value.slice(start).trim());
+  return parts;
+}
+
+function unwrapFunction(value, functionName) {
+  const prefix = `${functionName}(`;
+  if (!value.startsWith(prefix) || !value.endsWith(")")) return null;
+  return value.slice(prefix.length, -1).trim();
+}
+
+function resolveThemeColor(declarations, tokenName, scheme, stack = []) {
+  assert.ok(!stack.includes(tokenName), `Circular custom-property reference: ${[...stack, tokenName].join(" -> ")}`);
+  const value = declarations.get(tokenName);
+  assert.ok(value, `Expected generated token ${tokenName}.`);
+  return resolveColorExpression(declarations, value, scheme, [...stack, tokenName]);
+}
+
+function resolveColorExpression(declarations, expression, scheme, stack) {
+  const value = expression.trim();
+  const lightDarkBody = unwrapFunction(value, "light-dark");
+
+  if (lightDarkBody != null) {
+    const choices = splitTopLevel(lightDarkBody);
+    assert.equal(choices.length, 2, `Expected two light-dark() colors in ${value}.`);
+    return resolveColorExpression(declarations, choices[scheme === "light" ? 0 : 1], scheme, stack);
+  }
+
+  const varBody = unwrapFunction(value, "var");
+  if (varBody != null) {
+    const [reference, fallback] = splitTopLevel(varBody);
+    if (declarations.has(reference)) return resolveThemeColor(declarations, reference, scheme, stack);
+    assert.ok(fallback, `Expected ${reference} or a fallback in ${value}.`);
+    return resolveColorExpression(declarations, fallback, scheme, stack);
+  }
+
+  const parsed = parseOklch(value);
+  assert.deepEqual(parsed.errors, [], `Expected a resolvable OKLCH color, received ${value}.`);
+  return parsed.color;
+}
+
 function getLightnessSteps(css, name) {
   return [...css.matchAll(new RegExp(`--color-${name}-(\\d+): light-dark\\(oklch\\(([^\\s]+)`, "g"))]
     .map((match) => ({ step: Number(match[1]), lightness: Number(match[2]) }))
@@ -42,35 +144,23 @@ function getLightnessSteps(css, name) {
 }
 
 function getOklchToken(css, tokenName) {
-  const line = css.split("\n").find((candidate) => candidate.trim().startsWith(`${tokenName}: oklch(`));
-  assert.ok(line, `Expected generated token ${tokenName}.`);
-
-  const value = line.slice(line.indexOf("oklch(")).replace(/;$/, "");
+  const value = getDeclaration(css, tokenName);
   const parsed = parseOklch(value);
   assert.deepEqual(parsed.errors, []);
   return parsed.color;
 }
 
 function getDarkScaleColor(css, name, step) {
-  const line = css.split("\n").find((candidate) => candidate.trim().startsWith(`--color-${name}-${step}: light-dark(`));
-  assert.ok(line, `Expected generated scale token --color-${name}-${step}.`);
-
-  const match = line.match(/,\s*(oklch\([^)]*\))\);$/);
-  assert.ok(match, `Expected a dark OKLCH value in --color-${name}-${step}.`);
-
-  const parsed = parseOklch(match[1]);
+  const value = getDeclaration(css, `--color-${name}-${step}`);
+  const lightDarkBody = unwrapFunction(value, "light-dark");
+  assert.ok(lightDarkBody, `Expected light-dark() in --color-${name}-${step}.`);
+  const choices = splitTopLevel(lightDarkBody);
+  const parsed = parseOklch(choices[1]);
   assert.deepEqual(parsed.errors, []);
   return parsed.color;
 }
 
-function getDarkMixRatio(css, name) {
-  const line = css.split("\n").find((candidate) => candidate.trim().startsWith(`--_color-${name}-dark-generated: color-mix(in oklch, var(--_color-${name}-source)`));
-  assert.ok(line, `Expected generated dark mix for ${name}.`);
 
-  const match = line.match(/source\) (\d+)%,/);
-  assert.ok(match, `Expected a numeric mix ratio for ${name}.`);
-  return Number(match[1]) / 100;
-}
 
 function assertColorClose(actual, expected, label) {
   assert.ok(Math.abs(actual.l - expected.l) <= 0.001, `${label} lightness ${actual.l} should be close to ${expected.l}.`);
@@ -78,36 +168,153 @@ function assertColorClose(actual, expected, label) {
   assert.ok(Math.abs(actual.h - expected.h) <= 0.001, `${label} hue ${actual.h} should be close to ${expected.h}.`);
 }
 
-test("content role contrast corrections meet min and max targets", async (t) => {
-  const root = await createProject(t, CONTRAST_PALETTE);
+function mixOklch(first, second, firstRatio) {
+  return fitToSrgb({
+    l: first.l * firstRatio + second.l * (1 - firstRatio),
+    c: first.c * firstRatio + second.c * (1 - firstRatio),
+    h: first.h,
+  });
+}
+
+function getPercentageDeclaration(css, tokenName) {
+  const value = getDeclaration(css, tokenName);
+  assert.match(value, /^\d+(?:\.\d+)?%$/);
+  return Number.parseFloat(value) / 100;
+}
+
+function assertMinContrast(foreground, background, target, label) {
+  const ratio = contrast(foreground, background);
+  assert.ok(
+    ratio >= target - 0.005,
+    `${label} contrast ${ratio.toFixed(3)} should be at least ${target.toFixed(1)} (tolerance 0.005).`,
+  );
+}
+
+test("designer-facing roles map to canvas, ui, feedback and decorative output", async (t) => {
+  const root = await createProject(t);
+  const report = await generateColorTokens({ root });
+  const declarations = getDeclarations(report.css);
+
+  assert.equal(report.config.roles.canvas, "--palette-canvas");
+  assert.equal(Object.hasOwn(report.config.roles, "bg"), false);
+  assert.equal(report.config.roles.identities.primary.role, "ui");
+  assert.equal(report.config.roles.identities.secondary.role, "feedback");
+  assert.equal(report.config.roles.decoratives.tertiary.role, "decorative");
+
+  for (const name of ["primary", "secondary"]) {
+    for (const suffix of SEMANTIC_SUFFIXES) {
+      assert.ok(declarations.has(`--color-${name}-${suffix}`), `Expected --color-${name}-${suffix} without numeric scales.`);
+    }
+  }
+
+  assert.doesNotMatch(report.css, /--color-(?:primary|secondary)-\d+:/);
+  assert.match(getDeclaration(report.css, "--color-tertiary"), /^light-dark\(/);
+  assert.match(getDeclaration(report.css, "--color-on-tertiary"), /^light-dark\(/);
+
+  for (const scheme of ["light", "dark"]) {
+    assert.ok(declarations.has(`--_color-tertiary-${scheme}`));
+    assert.ok(declarations.has(`--_color-on-tertiary-${scheme}`));
+  }
+});
+
+test("numeric scales are optional and never source semantic role families", async (t) => {
+  const root = await createProject(t);
+  const withoutScales = await generateColorTokens({ root });
+  const withScales = await generateColorTokens({
+    root,
+    inlineConfig: {
+      scales: {
+        enabled: true,
+        applyTo: ["primary", "secondary"],
+      },
+    },
+  });
+
+  assert.match(withScales.css, /--color-primary-500: light-dark\(/);
+  assert.match(withScales.css, /--color-secondary-500: light-dark\(/);
+
+  for (const name of ["primary", "secondary"]) {
+    for (const suffix of SEMANTIC_SUFFIXES) {
+      const tokenName = `--color-${name}-${suffix}`;
+      const withoutScaleValue = getDeclaration(withoutScales.css, tokenName);
+      const withScaleValue = getDeclaration(withScales.css, tokenName);
+
+      assert.equal(withScaleValue, withoutScaleValue, `${tokenName} must not change when numeric scales are enabled.`);
+      assert.doesNotMatch(withScaleValue, new RegExp(`var\\(--color-${name}-\\d+\\)`));
+    }
+  }
+});
+
+test("semantic role families meet essential light and dark contrast contracts", async (t) => {
+  const root = await createProject(t);
   const report = await generateColorTokens({
     root,
     inlineConfig: {
-      roles: {
-        identities: {
-          warning: { token: "--palette-warning", role: "content" },
-          high: { token: "--palette-high-contrast", role: "content" },
-        },
-      },
       derivation: {
         dark: { mode: "static" },
       },
     },
   });
+  const declarations = getDeclarations(report.css);
 
-  const bgLight = getOklchToken(report.css, "--_color-bg-light");
-  const warningLight = getOklchToken(report.css, "--_color-warning-light");
-  const highLight = getOklchToken(report.css, "--_color-high-light");
+  for (const scheme of ["light", "dark"]) {
+    const neutralBackgrounds = [
+      ["bg", resolveThemeColor(declarations, "--color-bg", scheme)],
+      ["surface", resolveThemeColor(declarations, "--color-surface", scheme)],
+    ];
 
-  const warningContrast = contrast(warningLight, bgLight);
-  const highContrast = contrast(highLight, bgLight);
+    for (const name of ["primary", "secondary"]) {
+      const familyBackgrounds = [
+        ...neutralBackgrounds,
+        ["family surface", resolveThemeColor(declarations, `--color-${name}-surface`, scheme)],
+        ["family surface-strong", resolveThemeColor(declarations, `--color-${name}-surface-strong`, scheme)],
+      ];
 
-  assert.ok(warningContrast >= 4.595, `warning contrast ${warningContrast.toFixed(2)} should meet text target.`);
-  assert.ok(highContrast >= 7.2, `high contrast ${highContrast.toFixed(2)} should stay near maxIdentity, not collapse to text minimum.`);
-  assert.ok(highContrast <= 7.51, `high contrast ${highContrast.toFixed(2)} should respect maxIdentity.`);
+      for (const textToken of ["text", "text-strong"]) {
+        const text = resolveThemeColor(declarations, `--color-${name}-${textToken}`, scheme);
+        for (const [backgroundName, background] of familyBackgrounds) {
+          assertMinContrast(text, background, 4.6, `${scheme} ${name}-${textToken} vs ${backgroundName}`);
+        }
+      }
+
+      for (const foregroundToken of ["border", "border-strong", "solid", "solid-hover"]) {
+        const foreground = resolveThemeColor(declarations, `--color-${name}-${foregroundToken}`, scheme);
+        for (const [backgroundName, background] of neutralBackgrounds) {
+          assertMinContrast(foreground, background, 3, `${scheme} ${name}-${foregroundToken} vs ${backgroundName}`);
+        }
+      }
+
+      const onSolid = resolveThemeColor(declarations, `--color-${name}-on-solid`, scheme);
+      for (const solidToken of ["solid", "solid-hover"]) {
+        const solid = resolveThemeColor(declarations, `--color-${name}-${solidToken}`, scheme);
+        assertMinContrast(onSolid, solid, 4.6, `${scheme} ${name}-on-solid vs ${solidToken}`);
+      }
+    }
+
+    const decorative = resolveThemeColor(declarations, "--color-tertiary", scheme);
+    const onDecorative = resolveThemeColor(declarations, "--color-on-tertiary", scheme);
+    assertMinContrast(onDecorative, decorative, 4.6, `${scheme} on-tertiary vs tertiary`);
+  }
 });
 
-test("relative dark identities mix from the palette source, not adjusted light output", async (t) => {
+test("relative dark tuning defaults preserve the validated muted-text contract", async (t) => {
+  const palette = DEFAULT_PALETTE.replace("oklch(0.962 0.015 88)", "oklch(0.7 0 88)");
+  const root = await createProject(t, palette);
+  const report = await generateColorTokens({ root });
+  const source = { l: 0.7, c: 0, h: 88 };
+  const black = { l: 0, c: 0, h: 88 };
+  const white = { l: 0.99, c: 0, h: 88 };
+  const bgDark = mixOklch(source, black, 0.14);
+  const surfaceDark = mixOklch(source, black, 0.18);
+  const textDark = mixOklch(source, white, getPercentageDeclaration(report.css, "--color-tune-dark-text-depth"));
+  const mutedDark = mixOklch(textDark, bgDark, getPercentageDeclaration(report.css, "--color-tune-dark-muted-depth"));
+  const target = 4.6 * 1.15;
+
+  assertMinContrast(mutedDark, bgDark, target, "relative dark muted text vs canvas");
+  assertMinContrast(mutedDark, surfaceDark, target, "relative dark muted text vs surface");
+});
+
+test("every identity emits an explicit dark variant used by the numeric scale base", async (t) => {
   const root = await createProject(t);
   const report = await generateColorTokens({
     root,
@@ -120,40 +327,25 @@ test("relative dark identities mix from the palette source, not adjusted light o
   });
 
   assert.match(report.css, /--_color-primary-source: oklch\(0\.62 0\.16 32\);/);
-  assert.match(report.css, /--_color-primary-light: oklch\(0\.5547 0\.16 32\);/);
-  assert.match(report.css, /--_color-primary-dark-generated: color-mix\(in oklch, var\(--_color-primary-source\) \d+%, oklch\(1 0 0\)\);/);
-  assert.doesNotMatch(report.css, /--_color-primary-dark-generated: color-mix\(in oklch, var\(--_color-primary-light\)/);
-
-  const source = getOklchToken(report.css, "--_color-primary-source");
-  const mixRatio = getDarkMixRatio(report.css, "primary");
+  const generatedDark = getOklchToken(report.css, "--_color-primary-dark-generated");
   const primaryScaleBaseDark = getDarkScaleColor(report.css, "primary", 500);
 
-  assertColorClose(primaryScaleBaseDark, {
-    l: source.l * mixRatio + 1 * (1 - mixRatio),
-    c: source.c * mixRatio,
-    h: source.h,
-  }, "primary dark scale base");
+  assertColorClose(primaryScaleBaseDark, generatedDark, "primary dark scale base");
 });
 
-test("generated scales expose designer-facing aliases and avoid clipped duplicate tints", async (t) => {
+test("generated numeric scales avoid clipped duplicate tints", async (t) => {
   const root = await createProject(t);
   const report = await generateColorTokens({
     root,
     inlineConfig: {
       scales: {
         enabled: true,
-        applyTo: ["tertiary"],
+        applyTo: ["primary"],
       },
     },
   });
 
-  assert.match(report.css, /--color-tertiary-surface: var\(--color-tertiary-50\);/);
-  assert.match(report.css, /--color-tertiary-border: var\(--color-tertiary-300\);/);
-  assert.match(report.css, /--color-tertiary-solid: var\(--color-tertiary-500\);/);
-  assert.match(report.css, /--color-tertiary-on-solid: var\(--color-on-tertiary\);/);
-  assert.match(report.css, /--color-tertiary-text: var\(--color-tertiary-700\);/);
-
-  const softTintSteps = getLightnessSteps(report.css, "tertiary").filter(({ step }) => step <= 400);
+  const softTintSteps = getLightnessSteps(report.css, "primary").filter(({ step }) => step <= 400);
   assert.equal(softTintSteps.length, 5);
   assert.equal(new Set(softTintSteps.map(({ lightness }) => lightness.toFixed(4))).size, 5);
 

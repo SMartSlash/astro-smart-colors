@@ -1,24 +1,36 @@
-export type SmartColorRole = "content" | "action" | "fill" | "decorative";
+export type SmartPaletteRole = "canvas" | "ink" | "ui" | "feedback" | "decorative";
+export type SmartFunctionalColorRole = "ui" | "feedback";
+export type SmartColorRole = SmartFunctionalColorRole | "decorative";
 
 export interface SmartColorRolePreset {
-  minContrastKey: "text" | "ui" | null;
+  generateFamily: boolean;
   generateOnColor: boolean;
-  adjustColor: boolean;
 }
 
 export declare const ROLE_PRESETS: Record<SmartColorRole, SmartColorRolePreset>;
 
 export interface IdentityInputDef {
   token: string;
-  role?: SmartColorRole;
+  role?: SmartFunctionalColorRole;
 }
 
 export interface ResolvedIdentityDef {
   token: string;
-  role: SmartColorRole;
+  role: SmartFunctionalColorRole;
+}
+
+export interface DecorativeInputDef {
+  token: string;
+  role?: "decorative";
+}
+
+export interface ResolvedDecorativeDef {
+  token: string;
+  role: "decorative";
 }
 
 export type IdentityConfig = IdentityInputDef | string;
+export type DecorativeConfig = DecorativeInputDef | string;
 
 export interface SmartColorsContrastConfig {
   text: number;
@@ -69,11 +81,11 @@ export interface SmartColorsConfig {
   output: string;
   contrast: SmartColorsContrastConfig;
   roles: {
-    bg: string;
-    ink: string;
+    canvas: string | null;
+    ink: string | null;
     identities: Record<string, ResolvedIdentityDef>;
-    decoratives: Record<string, ResolvedIdentityDef>;
-    focus: string;
+    decoratives: Record<string, ResolvedDecorativeDef>;
+    focus: string | null;
   };
   aliases: Record<string, string>;
   scales: SmartColorScalesConfig;
@@ -96,11 +108,11 @@ export interface SmartColorsUserConfig {
   output?: string;
   contrast?: Partial<SmartColorsContrastConfig>;
   roles?: {
-    bg?: string;
-    ink?: string;
+    canvas?: string | null;
+    ink?: string | null;
     identities?: Record<string, IdentityConfig>;
-    decoratives?: Record<string, IdentityConfig>;
-    focus?: string;
+    decoratives?: Record<string, DecorativeConfig>;
+    focus?: string | null;
   };
   aliases?: Record<string, string>;
   scales?: SmartColorScalesUserConfig;

@@ -34,7 +34,9 @@ function deepMerge(target, source) {
   const output = { ...target };
 
   for (const [key, value] of Object.entries(source)) {
-    if (isPlainObject(value) && isPlainObject(output[key])) {
+    if (key === "aliases" && isPlainObject(value)) {
+      output[key] = { ...value };
+    } else if (isPlainObject(value) && isPlainObject(output[key])) {
       output[key] = deepMerge(output[key], value);
     } else {
       output[key] = value;
@@ -80,7 +82,7 @@ function normalizeConfig(config) {
   };
 }
 
-function normalizeIdentityDefs(identities, defaultRole = "content") {
+function normalizeIdentityDefs(identities, defaultRole = "ui") {
   const normalized = {};
   for (const [name, def] of Object.entries(identities)) {
     if (typeof def === "string") {

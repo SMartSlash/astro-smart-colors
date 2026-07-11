@@ -250,13 +250,16 @@ function formatFunctionalFamilies(identities) {
   const definitions = entries.map(([name, identity]) => {
     const light = identity.family.light;
     const dark = identity.family.dark;
+    // Solid, border and hover reference the adaptive dark identity var,
+    // so they inherit the per-colour color-mix ratio automatically.
+    const darkVar = `var(--_color-${name}-dark)`;
     return `  /* ${name}: ${identity.role} functional family */
   --color-${name}-surface: light-dark(${oklch(light.surface)}, ${oklch(dark.surface)});
   --color-${name}-surface-strong: light-dark(${oklch(light.surfaceStrong)}, ${oklch(dark.surfaceStrong)});
-  --color-${name}-border: light-dark(${oklch(light.border)}, ${oklch(dark.border)});
+  --color-${name}-border: light-dark(${oklch(light.border)}, ${darkVar});
   --color-${name}-border-strong: light-dark(${oklch(light.borderStrong)}, ${oklch(dark.borderStrong)});
-  --color-${name}-solid: light-dark(${oklch(light.solid)}, ${oklch(dark.solid)});
-  --color-${name}-solid-hover: light-dark(${oklch(light.solidHover)}, ${oklch(dark.solidHover)});
+  --color-${name}-solid: light-dark(${oklch(light.solid)}, ${darkVar});
+  --color-${name}-solid-hover: light-dark(${oklch(light.solidHover)}, ${darkVar});
   --color-${name}-on-solid: light-dark(${oklch(light.onSolid)}, ${oklch(dark.onSolid)});
   --color-${name}-text: light-dark(${oklch(light.text)}, ${oklch(dark.text)});
   --color-${name}-text-strong: light-dark(${oklch(light.textStrong)}, ${oklch(dark.textStrong)});`;

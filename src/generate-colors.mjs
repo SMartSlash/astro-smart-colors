@@ -137,8 +137,9 @@ function buildColorModel(palette, config) {
   const minUiContrast = config.contrast.ui;
   const maxIdentityContrast = config.contrast.maxIdentity;
   const darkRichness = config.contrast.darkRichness ?? 1;
-  const lightContrast = { text: minTextContrast, ui: minUiContrast, maxIdentity: maxIdentityContrast };
+  const lightContrast = { baseText: minTextContrast, text: minTextContrast, ui: minUiContrast, maxIdentity: maxIdentityContrast };
   const darkContrast = {
+    baseText: minTextContrast,
     text: Math.min(maxIdentityContrast, minTextContrast * darkRichness),
     ui: Math.min(maxIdentityContrast, minUiContrast * darkRichness),
     maxIdentity: maxIdentityContrast,
@@ -211,20 +212,25 @@ function buildColorModel(palette, config) {
       light: buildFunctionalFamily(source, bgLight, surfaceLight, textLight, lightContrast, "light"),
       dark: buildFunctionalFamily(source, bgDark, surfaceDark, textDark, darkContrast, "dark"),
     };
-    const light = family.light.solid;
-    const dark = family.dark.solid;
+    // Preserve the designer's source colour as the public identity.
+    // Contrast-adapted variants live in the functional families only.
+    const light = fitToSrgb(source);
+    const dark = fitToSrgb(source);
 
-    maybeWarnShift(warnings, identityDef.token, name, "light solid", source, light, bgLight, lightContrast.ui);
-    maybeWarnShift(warnings, identityDef.token, name, "dark solid", source, dark, bgDark, darkContrast.ui);
+    // Adaptive dark-mode mix ratio: darker source → more white mixed in.
+    // Inspired by the Piccalilli color-mix approach in palette.astro.
+    const darkMixRatio = clamp(0.5 + source.l * 0.5, 0, 1);
 
-    identities[name] = { source, light, dark, role: identityDef.role, family };
+    identities[name] = { source, light, dark, role: identityDef.role, family, mixRatio: Math.round(darkMixRatio * 100) };
+
+    // On-colour is computed directly against the identity (source), not the solid.
     onColors[name] = {
-      light: oklch(family.light.onSolid),
-      dark: oklch(family.dark.onSolid),
+      light: oklch(chooseForeground([light], [{ l: 0.99, c: 0, h: 0 }, { l: 0.02, c: 0, h: 0 }, textLight], minTextContrast)),
+      dark: oklch(chooseForeground([dark], [{ l: 0.99, c: 0, h: 0 }, { l: 0.02, c: 0, h: 0 }, textDark], darkContrast.text)),
     };
 
     if (config.scales.enabled && (config.scales.applyTo.includes(name) || config.scales.applyTo.length === 0)) {
-      scales[name] = buildScale(light, dark, config.scales);
+      scales[name] = buildScale(family.light.solid, family.dark.solid, config.scales);
     }
   }
 
@@ -294,10 +300,11 @@ function buildColorModel(palette, config) {
     focus: { light: focusLight, dark: focusDark },
   };
 
-  const contrastErrors = validateGeneratedContrast(model, config);
-  if (contrastErrors.length) {
-    throw new Error(`Smart Colors generated an invalid contrast contract:\n${contrastErrors.map((error) => `- ${error}`).join("\n")}`);
+  const contrastResult = validateGeneratedContrast(model, config);
+  if (contrastResult.errors.length) {
+    throw new Error(`Smart Colors generated an invalid contrast contract:\n${contrastResult.errors.map((error) => `- ${error}`).join("\n")}`);
   }
+  model.warnings.push(...contrastResult.warnings);
 
   return model;
 }
@@ -305,6 +312,9 @@ function buildColorModel(palette, config) {
 function buildFunctionalFamily(source, background, neutralSurface, ink, contrastConfig, scheme) {
   const textTarget = Math.min(contrastConfig.maxIdentity, contrastConfig.text + 0.02);
   const uiTarget = Math.min(contrastConfig.maxIdentity, contrastConfig.ui + 0.02);
+  // On-solid readability uses the base (un-amplified) text target;
+  // darkRichness applies to body text only, not to text-on-colour.
+  const onSolidTextTarget = Math.min(contrastConfig.maxIdentity, (contrastConfig.baseText ?? contrastConfig.text) + 0.02);
   const surface = mixOklch(source, background, scheme === "light" ? 0.1 : 0.18);
   const surfaceStrong = mixOklch(source, background, scheme === "light" ? 0.18 : 0.28);
 
@@ -315,10 +325,12 @@ function buildFunctionalFamily(source, background, neutralSurface, ink, contrast
   );
   const textStrongTarget = Math.min(contrastConfig.maxIdentity, textTarget + 1);
   const textStrong = ensureContrast(text, [background, neutralSurface, surface, surfaceStrong], textStrongTarget);
-  const border = ensureContrast(source, [background, neutralSurface, surface], uiTarget);
+  // Border and solid preserve the designer's source colour.
+  // Contrast against the canvas is the designer's responsibility.
+  const border = fitToSrgb(source);
   const borderStrongTarget = Math.min(contrastConfig.maxIdentity, uiTarget + 1);
   const borderStrong = ensureContrast(border, [background, neutralSurface, surfaceStrong], borderStrongTarget);
-  const solidPair = buildSolidPair(source, background, neutralSurface, ink, uiTarget, textTarget);
+  const solidPair = buildSolidPair(source, background, neutralSurface, ink, uiTarget, onSolidTextTarget);
 
   return {
     surface,
@@ -334,27 +346,47 @@ function buildFunctionalFamily(source, background, neutralSurface, ink, contrast
 }
 
 function buildSolidPair(source, background, neutralSurface, ink, uiTarget, textTarget) {
-  let solid = ensureContrast(source, [background, neutralSurface], uiTarget);
+  // Preserve the designer's source colour as the solid.
+  // Contrast adaptation against the background is the designer's responsibility.
+  const solid = fitToSrgb(source);
   const direction = background.l > solid.l ? -1 : 1;
   let solidHover = fitToSrgb({
-    l: clamp(solid.l + direction * 0.055, 0.02, 0.98),
+    l: clamp(solid.l + direction * 0.04, 0.02, 0.98),
     c: solid.c,
     h: solid.h,
   });
-  solidHover = ensureContrast(solidHover, [background, neutralSurface], uiTarget);
 
-  const candidates = [background, ink, { l: 0.99, c: 0, h: 0 }, { l: 0.02, c: 0, h: 0 }];
-  let onSolid = chooseForeground([solid, solidHover], candidates, textTarget);
-
-  if (Math.min(contrast(onSolid, solid), contrast(onSolid, solidHover)) < textTarget) {
-    solid = adjustContrast(solid, onSolid, textTarget);
-    solidHover = adjustContrast(solidHover, onSolid, textTarget);
-    solid = ensureContrast(solid, [background, neutralSurface], uiTarget);
-    solidHover = ensureContrast(solidHover, [background, neutralSurface], uiTarget);
-    onSolid = chooseForeground([solid, solidHover], candidates, textTarget);
-  }
+  // Try dark then light foreground; adjust whichever gets closest to target.
+  let onSolid = bestOnSolid([solid, solidHover], ink, textTarget);
 
   return { solid, solidHover, onSolid };
+}
+
+function bestOnSolid(backgrounds, ink, textTarget) {
+  const dark = { l: 0.02, c: 0, h: 0 };
+  const light = { l: 0.99, c: 0, h: 0 };
+  let darkOn = chooseForeground(backgrounds, [ink, dark, light], textTarget);
+  if (Math.min(...backgrounds.map((bg) => contrast(darkOn, bg))) < textTarget) {
+    darkOn = adjustContrast(darkOn, backgrounds[0], textTarget);
+    for (const bg of backgrounds.slice(1)) {
+      if (contrast(darkOn, bg) < textTarget) darkOn = adjustContrast(darkOn, bg, textTarget);
+    }
+  }
+  const darkScore = Math.min(...backgrounds.map((bg) => contrast(darkOn, bg)));
+  if (darkScore >= textTarget) return darkOn;
+
+  // If dark didn't make it, try light.
+  const lightCandidates = [ink, light, dark];
+  let lightOn = chooseForeground(backgrounds, lightCandidates, textTarget);
+  if (Math.min(...backgrounds.map((bg) => contrast(lightOn, bg))) < textTarget) {
+    lightOn = adjustContrast(lightOn, backgrounds[0], textTarget);
+    for (const bg of backgrounds.slice(1)) {
+      if (contrast(lightOn, bg) < textTarget) lightOn = adjustContrast(lightOn, bg, textTarget);
+    }
+  }
+  const lightScore = Math.min(...backgrounds.map((bg) => contrast(lightOn, bg)));
+
+  return lightScore >= darkScore ? lightOn : darkOn;
 }
 
 function buildReadablePair(background, preferredForegrounds, textTarget) {
@@ -383,11 +415,18 @@ function chooseForeground(backgrounds, candidates, target) {
 
 function validateGeneratedContrast(model, config) {
   const errors = [];
+  const warnings = [];
   const tolerance = 0.005;
-  const check = (label, foreground, background, target) => {
+  const fail = (label, foreground, background, target) => {
     const ratio = contrast(foreground, background);
     if (ratio + tolerance < target) {
       errors.push(`${label} is ${ratio.toFixed(2)}:1; expected at least ${target.toFixed(2)}:1.`);
+    }
+  };
+  const warn = (label, foreground, background, target) => {
+    const ratio = contrast(foreground, background);
+    if (ratio + tolerance < target) {
+      warnings.push(`${label} is ${ratio.toFixed(2)}:1 (target ${target.toFixed(2)}:1) — on-colour contrast is limited by the designer's source.`);
     }
   };
 
@@ -400,41 +439,40 @@ function validateGeneratedContrast(model, config) {
     const textTarget = isLight
       ? config.contrast.text
       : Math.min(config.contrast.maxIdentity, config.contrast.text * (config.contrast.darkRichness ?? 1));
+    const onSolidTextTarget = config.contrast.text;
     const uiTarget = isLight
       ? config.contrast.ui
       : Math.min(config.contrast.maxIdentity, config.contrast.ui * (config.contrast.darkRichness ?? 1));
 
-    check(`${scheme} neutral text / canvas`, text, background, textTarget);
-    check(`${scheme} neutral text / surface`, text, surface, textTarget);
-    check(`${scheme} muted text / canvas`, muted, background, textTarget);
-    check(`${scheme} muted text / surface`, muted, surface, textTarget);
-    check(`${scheme} focus / canvas`, model.focus[scheme], background, config.contrast.ui);
-    check(`${scheme} focus / surface`, model.focus[scheme], surface, config.contrast.ui);
+    fail(`${scheme} neutral text / canvas`, text, background, textTarget);
+    fail(`${scheme} neutral text / surface`, text, surface, textTarget);
+    fail(`${scheme} muted text / canvas`, muted, background, textTarget);
+    fail(`${scheme} muted text / surface`, muted, surface, textTarget);
+    fail(`${scheme} focus / canvas`, model.focus[scheme], background, config.contrast.ui);
+    fail(`${scheme} focus / surface`, model.focus[scheme], surface, config.contrast.ui);
 
     for (const [name, identity] of Object.entries(model.identities)) {
       const family = identity.family[scheme];
-      check(`${scheme} ${name}-text / canvas`, family.text, background, textTarget);
-      check(`${scheme} ${name}-text / neutral surface`, family.text, surface, textTarget);
-      check(`${scheme} ${name}-text / family surface`, family.text, family.surface, textTarget);
-      check(`${scheme} ${name}-text / family surface strong`, family.text, family.surfaceStrong, textTarget);
-      check(`${scheme} ${name}-text-strong / canvas`, family.textStrong, background, textTarget);
-      check(`${scheme} ${name}-text-strong / family surface strong`, family.textStrong, family.surfaceStrong, textTarget);
-      check(`${scheme} ${name}-border / canvas`, family.border, background, uiTarget);
-      check(`${scheme} ${name}-border / family surface`, family.border, family.surface, uiTarget);
-      check(`${scheme} ${name}-solid / canvas`, family.solid, background, uiTarget);
-      check(`${scheme} ${name}-solid / surface`, family.solid, surface, uiTarget);
-      check(`${scheme} ${name}-on-solid / solid`, family.onSolid, family.solid, textTarget);
-      check(`${scheme} ${name}-on-solid / solid-hover`, family.onSolid, family.solidHover, textTarget);
+      fail(`${scheme} ${name}-text / canvas`, family.text, background, textTarget);
+      fail(`${scheme} ${name}-text / neutral surface`, family.text, surface, textTarget);
+      fail(`${scheme} ${name}-text / family surface`, family.text, family.surface, textTarget);
+      fail(`${scheme} ${name}-text / family surface strong`, family.text, family.surfaceStrong, textTarget);
+      fail(`${scheme} ${name}-text-strong / canvas`, family.textStrong, background, textTarget);
+      fail(`${scheme} ${name}-text-strong / family surface strong`, family.textStrong, family.surfaceStrong, textTarget);
+      // Solid and border preserve the designer's source; contrast against canvas is opt-in.
+      // On-colour failures are warnings, not errors — the designer owns the trade-off.
+      warn(`${scheme} ${name}-on-solid / solid`, family.onSolid, family.solid, onSolidTextTarget);
+      warn(`${scheme} ${name}-on-solid / solid-hover`, family.onSolid, family.solidHover, onSolidTextTarget);
     }
 
     for (const [name, decorative] of Object.entries(model.decoratives)) {
       const decorativeColor = decorative[scheme];
       const onColor = parseOklch(model.onColors[name][scheme]).color;
-      check(`${scheme} on-${name} / ${name}`, onColor, decorativeColor, textTarget);
+      warn(`${scheme} on-${name} / ${name}`, onColor, decorativeColor, onSolidTextTarget);
     }
   }
 
-  return errors;
+  return { errors, warnings };
 }
 
 function findAccessibleMixRatio(first, second, backgrounds, target, preferredRatio, direction) {
@@ -655,7 +693,13 @@ function adjustContrast(color, background, target) {
   }
 
   const chromaAdjusted = fitToSrgb({ l: cappedL, c: passChroma, h: color.h });
-  return contrast(chromaAdjusted, background) >= target ? chromaAdjusted : lightnessOnly;
+  if (contrast(chromaAdjusted, background) >= target) return chromaAdjusted;
+
+  // If all attempts failed (e.g. foreground at extreme can't go further),
+  // try the opposite lightness direction.
+  const oppositePass = darken ? 0.99 : 0.02;
+  const opposite = fitToSrgb({ l: oppositePass, c: 0, h: color.h });
+  return contrast(opposite, background) >= contrast(lightnessOnly, background) ? opposite : lightnessOnly;
 }
 
 function reduceContrast(color, background, target, floor) {

@@ -3,6 +3,34 @@ import { parseOklch, tokenKey } from "./parse-palette.mjs";
 
 const PUBLIC_NAME_PATTERN = /^[a-z][a-z0-9-]*$/;
 const CUSTOM_PROPERTY_PATTERN = /^--[a-z0-9-]+$/;
+const CORE_PUBLIC_COLOR_NAMES = [
+  "bg",
+  "surface",
+  "text",
+  "text-muted",
+  "border-subtle",
+  "border-strong",
+  "focus-ring",
+  "control-bg",
+  "control-border",
+  "control-bg-active",
+  "control-border-active",
+  "control-active-text",
+  "control-focus-bg",
+  "control-focus-border",
+  "control-icon-muted",
+];
+const SCALE_SEMANTIC_SUFFIXES = [
+  "surface",
+  "surface-strong",
+  "border",
+  "border-strong",
+  "solid",
+  "solid-hover",
+  "on-solid",
+  "text",
+  "text-strong",
+];
 
 export function validateSmartColorsInput({ config, palette, paletteErrors = [] }) {
   const errors = [];
@@ -60,13 +88,18 @@ function validateConfigShape(config, errors) {
     }
   }
 
-  validatePositiveNumber(config.contrast?.text, "contrast.text", errors);
-  validatePositiveNumber(config.contrast?.ui, "contrast.ui", errors);
-  validatePositiveNumber(config.contrast?.maxIdentity, "contrast.maxIdentity", errors);
+  validateContrastRatio(config.contrast?.text, "contrast.text", errors);
+  validateContrastRatio(config.contrast?.ui, "contrast.ui", errors);
+  validateContrastRatio(config.contrast?.maxIdentity, "contrast.maxIdentity", errors);
   validatePositiveNumber(config.contrast?.darkRichness, "contrast.darkRichness", errors);
 
-  if (Number.isFinite(config.contrast?.maxIdentity) && Number.isFinite(config.contrast?.text) && config.contrast.maxIdentity < config.contrast.text) {
-    errors.push("contrast.maxIdentity must be greater than or equal to contrast.text.");
+  if (
+    Number.isFinite(config.contrast?.maxIdentity)
+    && Number.isFinite(config.contrast?.text)
+    && Number.isFinite(config.contrast?.ui)
+    && config.contrast.maxIdentity < Math.max(config.contrast.text, config.contrast.ui)
+  ) {
+    errors.push("contrast.maxIdentity must be greater than or equal to both contrast.text and contrast.ui.");
   }
 
   validateNumber(config.derivation?.surface?.lightShift, "derivation.surface.lightShift", errors);
@@ -74,11 +107,18 @@ function validateConfigShape(config, errors) {
   validatePositiveNumber(config.derivation?.muted?.chromaFactor, "derivation.muted.chromaFactor", errors, { allowZero: true });
   validatePositiveNumber(config.derivation?.dark?.bgLightnessFactor, "derivation.dark.bgLightnessFactor", errors);
   validatePositiveNumber(config.derivation?.dark?.textLightnessFactor, "derivation.dark.textLightnessFactor", errors);
+
+  if (!new Set(["static", "relative"]).has(config.derivation?.dark?.mode)) {
+    errors.push('derivation.dark.mode must be either "static" or "relative".');
+  }
+
   validateMixRatio(config.derivation?.dark?.bgMixRatio, "derivation.dark.bgMixRatio", errors);
   validateMixRatio(config.derivation?.dark?.surfaceMixRatio, "derivation.dark.surfaceMixRatio", errors);
   validateMixRatio(config.derivation?.dark?.textMixRatio, "derivation.dark.textMixRatio", errors);
 
   validateScales(config.scales, identityNames, errors);
+  validateMotion(config.motion, config.output, errors);
+  validatePublicTokenCollisions(config, errors);
   validateLogoSources(config.logo, errors);
 }
 
@@ -86,8 +126,16 @@ function validateScales(scales, identityNames, errors) {
   if (!scales) return;
 
   if (scales.enabled) {
-    validateNumberArray(scales.steps, "scales.steps", errors, { positive: true, nonEmpty: true });
+    validateNumberArray(scales.steps, "scales.steps", errors, { positive: true, nonEmpty: true, integer: true, unique: true });
     validatePositiveNumber(scales.base, "scales.base", errors);
+
+    if (Number.isFinite(scales.base) && !Number.isInteger(scales.base)) {
+      errors.push("scales.base must be an integer.");
+    }
+
+    if (Array.isArray(scales.steps) && Number.isFinite(scales.base) && !scales.steps.includes(scales.base)) {
+      errors.push("scales.base must be included in scales.steps.");
+    }
   }
 
   for (const name of scales.applyTo ?? []) {
@@ -100,7 +148,15 @@ function validateScales(scales, identityNames, errors) {
   if (!hueVariants) return;
 
   if (hueVariants.enabled) {
-    validateNumberArray(hueVariants.shifts, "scales.hueVariants.shifts", errors, { nonEmpty: true });
+    validateNumberArray(hueVariants.shifts, "scales.hueVariants.shifts", errors, { nonEmpty: true, unique: true });
+
+    if (hueVariants.shifts?.length !== 2) {
+      hueVariants.shifts?.forEach((shift, index) => {
+        if (Number.isFinite(shift) && !Number.isInteger(shift)) {
+          errors.push(`scales.hueVariants.shifts[${index}] must be an integer when more than two technical hue token names are generated.`);
+        }
+      });
+    }
 
     if (!hueVariants.applyTo?.length) {
       errors.push("scales.hueVariants.applyTo must list at least one identity when hue variants are enabled.");
@@ -110,6 +166,86 @@ function validateScales(scales, identityNames, errors) {
   for (const name of hueVariants.applyTo ?? []) {
     if (!identityNames.has(name)) {
       errors.push(`scales.hueVariants.applyTo contains unknown identity "${name}".`);
+    }
+  }
+}
+
+function validateMotion(motion, colorOutput, errors) {
+  if (!motion?.enabled) return;
+
+  if (typeof motion.output !== "string" || motion.output.trim() === "") {
+    errors.push("motion.output must be a non-empty project-relative path when motion is enabled.");
+    return;
+  }
+
+  if (motion.output === colorOutput) {
+    errors.push("motion.output must be different from output.");
+  }
+}
+
+function validatePublicTokenCollisions(config, errors) {
+  const registry = new Map();
+  const register = (name, owner) => {
+    if (!PUBLIC_NAME_PATTERN.test(name)) return;
+
+    const existingOwner = registry.get(name);
+    if (existingOwner) {
+      errors.push(`Public token --color-${name} would be generated by both ${existingOwner} and ${owner}.`);
+      return;
+    }
+
+    registry.set(name, owner);
+  };
+
+  for (const name of CORE_PUBLIC_COLOR_NAMES) {
+    register(name, "the core semantic API");
+  }
+
+  for (const [name, identityDef] of Object.entries(config.roles?.identities ?? {})) {
+    const owner = `roles.identities.${name}`;
+    register(name, owner);
+
+    if (ROLE_PRESETS[identityDef.role]?.generateOnColor) {
+      register(`on-${name}`, owner);
+    }
+
+    const scaleApplies = config.scales?.enabled
+      && (config.scales.applyTo?.length === 0 || config.scales.applyTo?.includes(name));
+
+    if (scaleApplies) {
+      for (const step of config.scales.steps ?? []) {
+        register(`${name}-${step}`, `${owner} scale`);
+      }
+
+      for (const suffix of SCALE_SEMANTIC_SUFFIXES) {
+        if (suffix === "on-solid" && !ROLE_PRESETS[identityDef.role]?.generateOnColor) continue;
+        register(`${name}-${suffix}`, `${owner} semantic scale`);
+      }
+    }
+
+    const hueVariants = config.scales?.hueVariants;
+    if (hueVariants?.enabled && hueVariants.applyTo?.includes(name)) {
+      if (hueVariants.shifts?.length === 2) {
+        register(`${name}-warm`, `${owner} hue variants`);
+        register(`${name}-cool`, `${owner} hue variants`);
+      } else {
+        for (const shift of hueVariants.shifts ?? []) {
+          const direction = shift >= 0 ? "plus" : "minus";
+          register(`${name}-hue-${direction}-${Math.abs(shift)}`, `${owner} hue variants`);
+        }
+      }
+    }
+  }
+
+  for (const name of Object.keys(config.roles?.decoratives ?? {})) {
+    register(name, `roles.decoratives.${name}`);
+  }
+
+  for (const [alias, target] of Object.entries(config.aliases ?? {})) {
+    register(alias, `aliases.${alias}`);
+    const targetIdentity = config.roles?.identities?.[target];
+    if (targetIdentity && ROLE_PRESETS[targetIdentity.role]?.generateOnColor) {
+      register(`on-${alias}`, `aliases.${alias}`);
     }
   }
 }
@@ -198,6 +334,16 @@ function validateNumber(value, path, errors) {
   }
 }
 
+function validateContrastRatio(value, path, errors) {
+  validateNumber(value, path, errors);
+
+  if (!Number.isFinite(value)) return;
+
+  if (value < 1 || value > 21) {
+    errors.push(`${path} must be between 1 and 21.`);
+  }
+}
+
 function validatePositiveNumber(value, path, errors, { allowZero = false } = {}) {
   validateNumber(value, path, errors);
 
@@ -218,7 +364,12 @@ function validateMixRatio(value, path, errors) {
   }
 }
 
-function validateNumberArray(values, path, errors, { positive = false, nonEmpty = false } = {}) {
+function validateNumberArray(values, path, errors, {
+  positive = false,
+  nonEmpty = false,
+  integer = false,
+  unique = false,
+} = {}) {
   if (!Array.isArray(values)) {
     errors.push(`${path} must be an array of numbers.`);
     return;
@@ -235,5 +386,13 @@ function validateNumberArray(values, path, errors, { positive = false, nonEmpty 
     } else {
       validateNumber(value, itemPath, errors);
     }
+
+    if (integer && Number.isFinite(value) && !Number.isInteger(value)) {
+      errors.push(`${itemPath} must be an integer.`);
+    }
   });
+
+  if (unique && new Set(values).size !== values.length) {
+    errors.push(`${path} must not contain duplicate values.`);
+  }
 }

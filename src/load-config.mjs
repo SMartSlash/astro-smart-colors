@@ -69,6 +69,10 @@ function normalizeConfig(config) {
       muted: { ...{ chromaFactor: 0.65 }, ...(config.derivation?.muted ?? {}) },
       dark: { ...{ bgLightnessFactor: 0.17, textLightnessFactor: 3.3, mode: "relative", bgMixRatio: 14, surfaceMixRatio: 18, textMixRatio: 88 }, ...(config.derivation?.dark ?? {}) },
     },
+    motion: {
+      enabled: Boolean(config.motion?.enabled),
+      output: config.motion?.output ?? "src/styles/colors-motion.css",
+    },
     logo: {
       enabled: Boolean(config.logo?.enabled),
       sources: config.logo?.sources ?? {},

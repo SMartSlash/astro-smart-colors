@@ -1,5 +1,13 @@
 export type SmartColorRole = "content" | "action" | "fill" | "decorative";
 
+export interface SmartColorRolePreset {
+  minContrastKey: "text" | "ui" | null;
+  generateOnColor: boolean;
+  adjustColor: boolean;
+}
+
+export declare const ROLE_PRESETS: Record<SmartColorRole, SmartColorRolePreset>;
+
 export interface IdentityInputDef {
   token: string;
   role?: SmartColorRole;
@@ -51,6 +59,11 @@ export interface SmartColorsDerivationConfig {
   };
 }
 
+export interface SmartColorsMotionConfig {
+  enabled: boolean;
+  output: string;
+}
+
 export interface SmartColorsConfig {
   palette: string;
   output: string;
@@ -65,6 +78,7 @@ export interface SmartColorsConfig {
   aliases: Record<string, string>;
   scales: SmartColorScalesConfig;
   derivation: SmartColorsDerivationConfig;
+  motion: SmartColorsMotionConfig;
   logo: {
     enabled: boolean;
     sources: Record<string, string>;
@@ -95,6 +109,7 @@ export interface SmartColorsUserConfig {
     muted?: Partial<SmartColorsDerivationConfig["muted"]>;
     dark?: Partial<SmartColorsDerivationConfig["dark"]>;
   };
+  motion?: Partial<SmartColorsMotionConfig>;
   logo?: {
     enabled?: boolean;
     sources?: Record<string, string>;

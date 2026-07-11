@@ -169,9 +169,8 @@ test("generated output exposes a global surface substrate", async (t) => {
   const root = await createProject(t);
   const report = await generateColorTokens({ root });
 
-  assert.match(report.css, /@property --surface-color \{/);
-  assert.match(report.css, /syntax: "<color>";/);
-  assert.match(report.css, /@property --surface-contrast \{/);
+  assert.doesNotMatch(report.css, /@property/);
+  assert.doesNotMatch(report.css, /transition-property:/);
   assert.match(report.css, /--color-tune-light-warmth: 100%;/);
   assert.match(report.css, /--color-tune-dark-bg-depth: 14%;/);
   assert.match(report.css, /--color-tune-elevation-1-shadow-alpha: 10%;/);

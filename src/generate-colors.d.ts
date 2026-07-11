@@ -8,9 +8,16 @@ export interface GenerateColorTokensOptions {
   check?: boolean;
 }
 
+export interface GeneratedSmartColorsOutput {
+  path: string;
+  changed: boolean;
+}
+
 export interface GenerateColorTokensReport {
   changed: boolean;
   css: string;
+  motionCss: string | null;
+  outputs: GeneratedSmartColorsOutput[];
   config: SmartColorsConfig;
   warnings: string[];
   errors: string[];

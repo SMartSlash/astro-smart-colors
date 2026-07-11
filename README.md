@@ -56,6 +56,10 @@ export default defineSmartColorsConfig({
   aliases: {
     accent: "secondary",
   },
+  motion: {
+    enabled: false,
+    output: "src/styles/colors-motion.css",
+  },
   logo: {
     enabled: false,
     sources: {},
@@ -65,7 +69,9 @@ export default defineSmartColorsConfig({
 
 ## Palette input
 
-The palette file should contain simple OKLCH source tokens. Tokens registered in `roles.identities` are required and fail generation if missing; tokens registered in `roles.decoratives` are optional and are skipped with a warning if missing.
+The palette file should contain opaque OKLCH source tokens. Tokens registered in `roles.identities` are required and fail generation if missing; tokens registered in `roles.decoratives` are optional and are skipped with a warning if missing.
+
+The parser accepts CSS-compatible numeric channels: lightness as a number or percentage, chroma as a number or percentage (`100%` maps to `0.4`), and hue as a unitless degree value or a `deg`, `grad`, `rad`, or `turn` angle. Alpha channels and calculated values are intentionally rejected because the build-time contrast model requires a concrete opaque color.
 
 ```css
 :root {
@@ -318,28 +324,54 @@ The generator emits a small global substrate for local theming before any compon
 
 Future sections, pages or surface primitives can override only `--surface-color`; text, borders and elevation stay tied to that local surface.
 
-## Component ink slot (`--ink`)
+## Native ink helpers (`--ink-<identity>`)
 
-The generator registers `@property --ink` as a **component-level slot** — it is not assigned at `:root`. Individual components set it locally to enable `@container style()` branching and animated surface transitions:
+For every identity, the generator emits a native `contrast-color()` helper:
 
 ```css
-.card {
-  container-type: inline-size;  /* required for @container style() */
-  --ink: contrast-color(var(--surface-color));
-  transition: --ink 0.3s ease;
+--ink-primary: contrast-color(var(--color-primary));
+--ink-secondary: contrast-color(var(--color-secondary));
+```
+
+These tokens are progressive-enhancement hooks for components that want to branch with style queries. Keep the deterministic `--color-on-<identity>` pair as the baseline when readable text or icons are critical:
+
+```css
+.button {
+  color: var(--color-on-primary);
 }
 
-/* Branch into tinted palettes based on the local surface */
-@container style(--ink: white) {
-  .card-body { color: oklch(from var(--surface-color) 0.9 0.06 h); }
-}
-
-@container style(--ink: black) {
-  .card-body { color: oklch(from var(--surface-color) 0.25 0.10 h); }
+@container style(--ink-primary: white) {
+  .button {
+    color: oklch(from var(--color-primary) 0.92 0.06 h);
+  }
 }
 ```
 
-The `@property` registration makes `--ink` **animatable** via CSS transitions. When `--surface-color` changes (e.g. on hover), `--ink` re-evaluates `contrast-color()` and the browser interpolates between the old and new computed colors — zero JavaScript required.
+The package does not register a global `@property --ink` slot. If a component needs its own typed, animatable ink property, register and own that property in the consumer project's motion layer rather than coupling it to the generated color-token file.
+
+## Optional theme motion
+
+Color tokens and motion policy are generated as separate files. Enable the optional motion output when the consumer wants typed color interpolation during theme changes:
+
+```js
+motion: {
+  enabled: true,
+  output: "src/styles/colors-motion.css",
+}
+```
+
+Import the generated file in the consumer's motion layer, not in the token layer:
+
+```css
+@layer reset, tokens, base, components, pages, animations, layout, utilities, fallbacks, preferences, overrides;
+
+@import "./tokens/colors.css" layer(tokens);
+@import "./colors-motion.css" layer(animations);
+```
+
+The motion output dynamically registers every configured identity and its available `on-*` pair. `--color-bg` is registered but intentionally excluded from the transition to avoid browser-chrome sampling glitches. The duration uses `var(--theme-transition-duration, 0.4s)`.
+
+Motion is progressive enhancement. Consumers that enable it must also provide a `prefers-reduced-motion` or equivalent application preference policy; projects that leave `motion.enabled` false receive only static semantic color tokens.
 
 ## Project-level tuning contract
 
@@ -358,6 +390,8 @@ The package emits public tuning knobs intended to be overridden by a project-lev
   --color-tune-elevation-1-glow-alpha: 14%;
 }
 ```
+
+Project-level overrides are applied by the browser after generation and therefore are not revalidated by `smart-colors check`. Keep accessibility-critical palette and contrast decisions in the source palette/config; use tuning tokens for controlled visual refinement.
 
 For one-off dark identity corrections, prefer palette/config first. If a project still needs a CSS-level override, use public tuning tokens instead of internal generated variables:
 
@@ -410,6 +444,46 @@ logo: {
 
 The generator emits `--logo-*` tokens with light/dark variants. This keeps UI colors accessible while preserving brand-specific logo rendering.
 
+## Programmatic API
+
+The supported public entry points are:
+
+```js
+import smartColors from "@smartslash/astro-smart-colors";
+import { defineSmartColorsConfig } from "@smartslash/astro-smart-colors/config";
+import { generateColorTokens } from "@smartslash/astro-smart-colors/generate";
+```
+
+`generateColorTokens()` accepts `root`, `configFile`, `inlineConfig`, an already resolved `config`, and `check`. It returns the color CSS, optional motion CSS, resolved config, per-output state, warnings, errors and whether any output changed:
+
+```js
+const report = await generateColorTokens({
+  root: new URL("./", import.meta.url),
+  check: true,
+});
+
+if (report.changed) {
+  console.error(report.errors.join("\n"));
+}
+
+for (const output of report.outputs) {
+  console.log(output.path, output.changed);
+}
+```
+
+Invalid configuration, palette or I/O rejects with an error. In check mode, stale output is represented by `report.changed === true` and a message in `report.errors`.
+
+## Validation guarantees
+
+Before generation, Smart Colors rejects:
+
+- missing required palette tokens and malformed OKLCH values;
+- invalid public names, roles, contrast ratios and dark derivation modes;
+- aliases or configured colors that would collide with generated public tokens;
+- scale steps that are non-integer, duplicated, or do not contain the configured base.
+
+Output directories are created automatically. Changed files are written through a temporary sibling and atomically renamed, avoiding partially written CSS during development.
+
 ## CLI
 
 ```sh
@@ -435,8 +509,8 @@ Useful package scripts:
 
 ## Astro behavior
 
-- On `astro dev`, the integration generates the CSS and watches both the palette and config files.
-- On `astro build`, it generates before the build starts.
+- On `astro dev`, the integration generates all enabled outputs and watches both palette and config files across `add`, `change`, and `unlink` events. Rapid atomic-save events are debounced into one regeneration.
+- On `astro build`, it generates all enabled outputs before the build starts.
 - If generated output is out of date, `smart-colors check` exits with a non-zero status.
 
 ## Design principle

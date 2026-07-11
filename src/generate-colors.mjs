@@ -1,6 +1,8 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { contrast, clamp, fitToSrgb, oklch } from "./color-math.mjs";
-import { formatColorsCss } from "./format-css.mjs";
+import { formatColorsCss, formatColorsMotionCss } from "./format-css.mjs";
 import { loadSmartColorsConfig, resolveProjectUrl } from "./load-config.mjs";
 import { parsePalette, parsePaletteWithDiagnostics, tokenKey } from "./parse-palette.mjs";
 import { validateSmartColorsInput } from "./validate-config.mjs";
@@ -15,46 +17,130 @@ export async function generateColorTokens(options = {}) {
   });
 
   const paletteUrl = resolveProjectUrl(root, config.palette);
-  const outputUrl = resolveProjectUrl(root, config.output);
   const paletteCss = await readFile(paletteUrl, "utf8");
   const parsedPalette = parsePaletteWithDiagnostics(paletteCss);
   const palette = parsedPalette.tokens;
-  const inputValidation = validateSmartColorsInput({ config, palette, paletteErrors: parsedPalette.errors });
+  const annotatedRoles = parsedPalette.annotatedRoles ?? {};
+  const mergedConfig = mergeAnnotatedRoles(config, annotatedRoles, palette);
+  const inputValidation = validateSmartColorsInput({ config: mergedConfig, palette, paletteErrors: parsedPalette.errors });
 
   if (inputValidation.errors.length) {
     throw new Error(`Smart Colors validation failed:\n${inputValidation.errors.map((error) => `- ${error}`).join("\n")}`);
   }
 
-  const model = buildColorModel(palette, config);
+  const model = buildColorModel(palette, mergedConfig);
   const warnings = [...inputValidation.warnings, ...model.warnings];
   const css = formatColorsCss(model, config);
-  const current = await readFile(outputUrl, "utf8").catch(() => "");
-  const changed = current !== css;
+  const motionCss = config.motion.enabled ? formatColorsMotionCss(model) : null;
+  const outputSpecs = [
+    { path: config.output, css },
+    ...(motionCss == null ? [] : [{ path: config.motion.output, css: motionCss }]),
+  ];
+  const outputStates = await Promise.all(outputSpecs.map(async (output) => {
+    const outputUrl = resolveProjectUrl(root, output.path);
+    const current = await readCurrentOutput(outputUrl);
+    return { ...output, outputUrl, changed: current !== output.css };
+  }));
+  const changed = outputStates.some((output) => output.changed);
+  const errors = options.check
+    ? outputStates
+      .filter((output) => output.changed)
+      .map((output) => `Generated ${output.path} is out of date. Run smart-colors build.`)
+    : [];
 
-  if (options.check) {
-    return {
-      changed,
-      css,
-      config,
-      warnings,
-      errors: changed ? [`Generated ${config.output} is out of date. Run smart-colors build.`] : [],
-    };
-  }
-
-  if (changed) {
-    await writeFile(outputUrl, css, "utf8");
+  if (!options.check) {
+    await Promise.all(outputStates
+      .filter((output) => output.changed)
+      .map((output) => writeOutputAtomically(output.outputUrl, output.css)));
   }
 
   return {
     changed,
     css,
-    config,
+    motionCss,
+    outputs: outputStates.map((output) => ({ path: output.path, changed: output.changed })),
+    config: mergedConfig,
     warnings,
-    errors: [],
+    errors,
   };
 }
 
 
+
+function mergeAnnotatedRoles(config, annotatedRoles, palette) {
+  if (!annotatedRoles || Object.keys(annotatedRoles).length === 0) return config;
+
+  const merged = structuredClone(config);
+
+  // Auto-detect bg and ink from annotated roles (config takes precedence)
+  if (!merged.roles.bg) {
+    for (const [tokenKey, role] of Object.entries(annotatedRoles)) {
+      if (role === "bg") {
+        merged.roles.bg = `--${tokenKey}`;
+        break;
+      }
+    }
+  }
+
+  if (!merged.roles.ink) {
+    for (const [tokenKey, role] of Object.entries(annotatedRoles)) {
+      if (role === "ink") {
+        merged.roles.ink = `--${tokenKey}`;
+        break;
+      }
+    }
+  }
+
+  // Auto-detect focus from annotated roles (first identity, config takes precedence)
+  if (!merged.roles.focus) {
+    for (const [tokenKey, role] of Object.entries(annotatedRoles)) {
+      if (role === "content" || role === "action" || role === "fill") {
+        merged.roles.focus = palettePublicName(tokenKey);
+        break;
+      }
+    }
+  }
+
+  // Build auto-detected identities/decoratives from annotations
+  const detectedIdentities = {};
+  const detectedDecoratives = {};
+
+  for (const [tokenKey, role] of Object.entries(annotatedRoles)) {
+    if (role === "bg" || role === "ink") continue;
+    if (!palette[tokenKey]) continue;
+
+    const publicName = palettePublicName(tokenKey);
+    const customProp = `--${tokenKey}`;
+
+    if (role === "decorative") {
+      detectedDecoratives[publicName] = { token: customProp, role: "decorative" };
+    } else {
+      detectedIdentities[publicName] = { token: customProp, role };
+    }
+  }
+
+  // Merge: config-registered identities/decoratives take precedence over auto-detected.
+  // Only keep config entries whose palette tokens actually exist.
+  const configIdentities = {};
+  for (const [name, def] of Object.entries(merged.roles.identities ?? {})) {
+    const key = tokenKey(def.token);
+    if (palette[key]) configIdentities[name] = def;
+  }
+  const configDecoratives = {};
+  for (const [name, def] of Object.entries(merged.roles.decoratives ?? {})) {
+    const key = tokenKey(def.token);
+    if (palette[key]) configDecoratives[name] = def;
+  }
+
+  merged.roles.identities = { ...detectedIdentities, ...configIdentities };
+  merged.roles.decoratives = { ...detectedDecoratives, ...configDecoratives };
+
+  return merged;
+}
+
+function palettePublicName(tokenKey) {
+  return tokenKey.startsWith("palette-") ? tokenKey.slice("palette-".length) : tokenKey;
+}
 
 function buildColorModel(palette, config) {
   const warnings = [];
@@ -77,30 +163,39 @@ function buildColorModel(palette, config) {
 
   const bgLight = fitToSrgb(palette[tokenKey(config.roles.bg)]);
   const textLight = fitToSrgb(palette[tokenKey(config.roles.ink)]);
-  const bgDark = fitToSrgb({
-    l: clamp(bgLight.l * deriv.dark.bgLightnessFactor, 0.08, 0.22),
-    c: clamp(bgLight.c * 1.7, 0, 0.05),
-    h: bgLight.h,
-  });
-  const textDark = fitToSrgb({
-    l: clamp(textLight.l * deriv.dark.textLightnessFactor, 0.86, 0.96),
-    c: clamp(textLight.c * 0.1, 0, 0.02),
-    h: textLight.h,
-  });
+  const relativeDark = deriv.dark.mode === "relative";
+  const bgDark = relativeDark
+    ? mixOklch(bgLight, { l: 0, c: 0, h: bgLight.h }, deriv.dark.bgMixRatio / 100)
+    : fitToSrgb({
+      l: clamp(bgLight.l * deriv.dark.bgLightnessFactor, 0.08, 0.22),
+      c: clamp(bgLight.c * 1.7, 0, 0.05),
+      h: bgLight.h,
+    });
+  const textDark = relativeDark
+    ? mixOklch(bgLight, { l: 0.99, c: 0, h: bgLight.h }, deriv.dark.textMixRatio / 100)
+    : fitToSrgb({
+      l: clamp(textLight.l * deriv.dark.textLightnessFactor, 0.86, 0.96),
+      c: clamp(textLight.c * 0.1, 0, 0.02),
+      h: textLight.h,
+    });
 
   const surfaceLight = fitToSrgb({
     l: clamp(bgLight.l + deriv.surface.lightShift, 0.9, 0.99),
     c: bgLight.c,
     h: bgLight.h,
   });
-  const surfaceDark = fitToSrgb({
-    l: clamp(bgDark.l * deriv.surface.darkFactor, bgDark.l + 0.055, 0.36),
-    c: clamp(bgDark.c * 1.15, 0, 0.06),
-    h: bgDark.h,
-  });
+  const surfaceDark = relativeDark
+    ? mixOklch(bgLight, { l: 0, c: 0, h: bgLight.h }, deriv.dark.surfaceMixRatio / 100)
+    : fitToSrgb({
+      l: clamp(bgDark.l * deriv.surface.darkFactor, bgDark.l + 0.055, 0.36),
+      c: clamp(bgDark.c * 1.15, 0, 0.06),
+      h: bgDark.h,
+    });
 
   const textMutedLight = deriveMutedText(textLight, bgLight, minTextContrast, deriv.muted.chromaFactor);
-  const textMutedDark = deriveMutedText(textDark, bgDark, minTextContrast, deriv.muted.chromaFactor);
+  const textMutedDark = relativeDark
+    ? mixOklch(textDark, bgDark, 0.72)
+    : deriveMutedText(textDark, bgDark, minTextContrast, deriv.muted.chromaFactor);
 
   const identities = {};
   const onColors = {};
@@ -261,10 +356,15 @@ function findDarkMixRatio(source, bgDark, target) {
 }
 
 function mixWithWhite(color, ratio) {
+  return mixOklch(color, { l: 1, c: 0, h: color.h }, ratio);
+}
+
+function mixOklch(first, second, firstRatio) {
+  const ratio = clamp(firstRatio, 0, 1);
   return fitToSrgb({
-    l: color.l * ratio + 1 * (1 - ratio),
-    c: color.c * ratio,
-    h: color.h,
+    l: first.l * ratio + second.l * (1 - ratio),
+    c: first.c * ratio + second.c * (1 - ratio),
+    h: first.c === 0 && second.c > 0 ? second.h : first.h,
   });
 }
 
@@ -484,4 +584,32 @@ function reduceContrast(color, background, target, floor) {
 
   const reduced = fitToSrgb({ l: pass, c: color.c, h: color.h });
   return contrast(reduced, background) >= floor ? reduced : color;
+}
+
+async function readCurrentOutput(outputUrl) {
+  try {
+    return await readFile(outputUrl, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") return "";
+    throw error;
+  }
+}
+
+async function writeOutputAtomically(outputUrl, css) {
+  const outputPath = fileURLToPath(outputUrl);
+  const outputDirectory = path.dirname(outputPath);
+  const temporaryPath = path.join(
+    outputDirectory,
+    `.${path.basename(outputPath)}.${process.pid}.${Date.now()}.tmp`,
+  );
+
+  await mkdir(outputDirectory, { recursive: true });
+
+  try {
+    await writeFile(temporaryPath, css, "utf8");
+    await rename(temporaryPath, outputPath);
+  } catch (error) {
+    await rm(temporaryPath, { force: true }).catch(() => {});
+    throw error;
+  }
 }

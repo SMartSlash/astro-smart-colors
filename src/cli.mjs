@@ -40,12 +40,12 @@ try {
     console.warn(`[smart-colors] ${warning}`);
   }
 
-  if (report.changed) {
-    console.log(parsed.command === "check"
-      ? `[smart-colors] ${report.config.output} is out of date.`
-      : `[smart-colors] ${report.config.output} generated.`);
-  } else {
-    console.log(`[smart-colors] ${report.config.output} is up to date.`);
+  if (report.changed && parsed.command !== "check") {
+    const generated = report.outputs.filter((output) => output.changed).map((output) => output.path);
+    console.log(`[smart-colors] ${generated.join(", ")} generated.`);
+  } else if (!report.changed) {
+    const outputs = report.outputs.map((output) => output.path);
+    console.log(`[smart-colors] ${outputs.join(", ")} ${outputs.length === 1 ? "is" : "are"} up to date.`);
   }
 
   if (report.errors.length) {

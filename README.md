@@ -426,7 +426,7 @@ motion: {
 Import the generated file in the consumer's motion layer, not in the token layer:
 
 ```css
-@layer reset, tokens, base, components, pages, animations, layout, utilities, fallbacks, preferences, overrides;
+@layer reset, tokens, base, components, pages, animations, layout, utilities, capabilities, preferences, overrides;
 
 @import "./tokens/colors.css" layer(tokens);
 @import "./colors-motion.css" layer(animations);

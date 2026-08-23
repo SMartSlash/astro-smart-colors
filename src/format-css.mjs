@@ -296,7 +296,20 @@ function formatSurfaceContract() {
     0 2px 6px light-dark(color-mix(in oklch, var(--surface-contrast) var(--color-tune-elevation-2-shadow-alpha), transparent), transparent),
     0 18px 48px light-dark(color-mix(in oklch, var(--surface-contrast) var(--color-tune-elevation-2-shadow-alpha), transparent), transparent),
     inset 0 0 0 1px light-dark(transparent, oklch(from var(--surface-color) calc(l + 0.40) c h / var(--color-tune-elevation-2-border-alpha))),
-  	  0 0 26px light-dark(transparent, oklch(from var(--surface-color) calc(l + 0.36) c h / var(--color-tune-elevation-2-glow-alpha)));`;
+    0 0 26px light-dark(transparent, oklch(from var(--surface-color) calc(l + 0.36) c h / var(--color-tune-elevation-2-glow-alpha)));
+
+  /* Filter equivalents for clipped, masked or alpha-shaped surfaces.
+     drop-shadow() uses Gaussian standard deviation, mapped here to half of the
+     corresponding box-shadow blur radius; inset borders remain surface-owned. */
+  --elevation-filter-1:
+    drop-shadow(0 1px 1px light-dark(color-mix(in oklch, var(--surface-contrast) var(--color-tune-elevation-1-shadow-alpha), transparent), transparent))
+    drop-shadow(0 8px 12px light-dark(color-mix(in oklch, var(--surface-contrast) var(--color-tune-elevation-1-shadow-alpha), transparent), transparent))
+    drop-shadow(0 0 9px light-dark(transparent, oklch(from var(--surface-color) calc(l + 0.30) c h / var(--color-tune-elevation-1-glow-alpha))));
+
+  --elevation-filter-2:
+    drop-shadow(0 2px 3px light-dark(color-mix(in oklch, var(--surface-contrast) var(--color-tune-elevation-2-shadow-alpha), transparent), transparent))
+    drop-shadow(0 18px 24px light-dark(color-mix(in oklch, var(--surface-contrast) var(--color-tune-elevation-2-shadow-alpha), transparent), transparent))
+    drop-shadow(0 0 13px light-dark(transparent, oklch(from var(--surface-color) calc(l + 0.36) c h / var(--color-tune-elevation-2-glow-alpha))));`;
   }
 
 function formatScaleSection(scales) {
@@ -449,7 +462,7 @@ function formatQuickReference(model) {
 
   ref += `\n
      Functional API:  --color-*-surface / --solid / --border / --text
-     Elevation:     --elevation-1 / --elevation-2
+     Elevation:     --elevation-1/2 / --elevation-filter-1/2
      Surface:       --surface-color / --surface-contrast / --surface-text
      Controls:      --color-control-*
      Tuning:        --color-tune-* (override in colors-tuning.css)

@@ -191,6 +191,8 @@ Components should consume only the public tokens:
 
 --elevation-1
 --elevation-2
+--elevation-filter-1
+--elevation-filter-2
 
 --color-tune-light-warmth
 --color-tune-surface-lightness-shift
@@ -348,6 +350,7 @@ Do not consume palette sources or generated internals from components, pages or 
 | Muted text | `--color-text-muted` |
 | Page background | `--color-bg` |
 | Neutral card | `--color-surface`, `--surface-*`, `--elevation-1` |
+| Clipped/masked surface | `--surface-*`, `--elevation-filter-1` |
 | Filled button | `--color-primary-solid`, `--color-primary-on-solid` |
 | Soft badge/callout | `--color-primary-surface`, `--color-primary-text`, `--color-primary-border` |
 | Generic border | `--color-border-subtle` |
@@ -380,12 +383,14 @@ The generator emits a small global substrate for local theming before any compon
   --surface-text-muted: var(--color-text-muted);
   --surface-border: var(--color-border-subtle);
 
-  --elevation-1: /* light shadows, dark tinted glow */;
-  --elevation-2: /* stronger light shadows, stronger dark glow */;
+  --elevation-1: /* box-shadow: light shadows, dark tinted glow */;
+  --elevation-2: /* stronger box-shadow elevation */;
+  --elevation-filter-1: /* filter: alpha-aware drop-shadow chain */;
+  --elevation-filter-2: /* stronger alpha-aware filter elevation */;
 }
 ```
 
-Future sections, pages or surface primitives can override only `--surface-color`; text, borders and elevation stay tied to that local surface.
+Future sections, pages or surface primitives can override only `--surface-color`; text, borders and elevation stay tied to that local surface. Use `--elevation-1/2` with `box-shadow`, and `--elevation-filter-1/2` with `filter` when the shadow must follow a clipped, masked or otherwise non-rectangular alpha silhouette.
 
 ## Native ink helpers (`--ink-<identity>`)
 

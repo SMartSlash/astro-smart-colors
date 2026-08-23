@@ -494,6 +494,10 @@ test("generated output exposes a global surface substrate", async (t) => {
   assert.match(report.css, /--surface-border: var\(--color-border-subtle\);/);
   assert.match(report.css, /--elevation-1:/);
   assert.match(report.css, /--elevation-2:/);
+  assert.match(report.css, /--elevation-filter-1:/);
+  assert.match(report.css, /--elevation-filter-2:/);
+  assert.match(report.css, /drop-shadow\(0 8px 12px/);
+  assert.match(report.css, /drop-shadow\(0 18px 24px/);
   assert.match(report.css, /--_color-primary-dark-generated:/);
   assert.match(report.css, /--_color-primary-dark: var\(--color-tune-primary-dark, var\(--_color-primary-dark-generated\)\);/);
   assert.match(report.css, /oklch\(from var\(--surface-color\)/);

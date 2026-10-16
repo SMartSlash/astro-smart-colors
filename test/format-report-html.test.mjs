@@ -368,6 +368,10 @@ test("variant shifts are reported only above threshold, from measured variants a
   assert.match(publicContent(guide), /Varianti che si allontanano dal colore di marca/);
   assert.match(publicContent(guide), /\|ΔL\| o \|ΔC\| ≥ 0,04/);
   assert.doesNotMatch(guide, /tertiary-border-strong<\/code>/);
+  assert.match(publicContent(guide), /Come intervenire su palette\.css/);
+  assert.match(publicContent(guide), /indicazioni da valutare, <strong>non verifiche<\/strong>/);
+  assert.match(publicContent(guide), /valuta <code>role: decorative<\/code>/);
+  assert.equal((publicContent(guide).match(/class="palette-swatch"/g) ?? []).length, 2);
   const closePalette = [{ ...palette[0], resolved: color(0.4144, 0.0847, 89.16) }];
   const onlyText = render(report({ scenarios: scenarios.map((entry) => ({ ...entry, diagnostics: [entry.diagnostics[0]] })), palette: closePalette, roles }));
   assert.match(section(onlyText, "usi"), /Varianti vicine al colore di marca/);

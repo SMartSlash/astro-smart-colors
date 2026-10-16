@@ -71,7 +71,7 @@ test("the correction, suggested colors and exact manual edit precede the audit a
   for (const value of ["Colore che cambia:", "Attuale", "Suggerito", "oklch(0.5 0.1 350)", "oklch(0.4 0.1 350)", input.proposals[0].destination.file, input.proposals[0].destination.snippet]) assert.ok(correction.includes(value), value);
   assert.match(correction, /class="color-choice color-choice--suggested"/);
   assert.match(correction, /aria-label="Snippet della proposta"/);
-  assert.doesNotMatch(primary, /<table>|Controlli della proposta|Coppie complete:|Tabella completa dei controlli|SHA-256/);
+  assert.doesNotMatch(primary, /<table>|Controlli cambiati dalla proposta|Coppie complete:|Tabella completa dei controlli|SHA-256/);
   assert.match(primary, /ΔL -0,1 · ΔC 0 · ΔH 0° · ΔEOK 0,1/);
   assert.match(primary, /1 problema di contrasto · 1 correzione verificata/);
 });
@@ -113,9 +113,10 @@ test("proposal deltas stay visible while repeated cards collapse and the long ta
   const html = render(report({ scenarios, proposals: [proposal({ checks })] }));
   const primary = publicContent(proposalsSection(html));
   assert.match(primary, /ΔL -0,1 · ΔC 0 · ΔH 0° · ΔEOK 0,1/);
-  assert.doesNotMatch(primary, /<table>|Controlli della proposta|Tabella completa dei controlli/);
+  assert.doesNotMatch(primary, /<table>|Controlli cambiati dalla proposta|Tabella completa dei controlli/);
   const details = proposalsSection(html);
-  assert.match(details, /<details><summary>Tabella completa dei controlli — 2 righe<\/summary>/);
+  assert.match(details, /<details><summary>Controlli cambiati dalla proposta — 2 di 2<\/summary>/);
+  assert.match(details, /Altri 0 controlli invariati/);
   assert.equal((details.match(/Prima — snapshot originale/g) ?? []).length, 1);
   assert.equal((details.match(/Dopo — proposta/g) ?? []).length, 1);
   assert.match(details, /2 misure identiche in scenari diversi/);
@@ -295,11 +296,11 @@ test("exploratory overlaps have separate thresholds and examples without becomin
   assert.match(publicContent(guide), /&lt; 3:1/);
   assert.match(guide, /<code>2\.999999999999999:1<\/code>/);
   assert.match(guide, /browser-resolved-overlap/);
-  assert.doesNotMatch(publicContent(guide), /<table>|Sovrapposizioni esplorative nello scenario/);
+  assert.doesNotMatch(publicContent(guide), /<table>|Sovrapposizioni esplorative — tema/);
   assert.match(proposalsSection(html), /Non serve una correzione/);
 });
 
-test("overlap summary uses the worst exact ratio across browser preferences without hiding either measurement", () => {
+test("overlap tables keep the worst measurement per theme and name the scenario that produced it", () => {
   const scenarios = [scenario(), scenario({ browser: "webkit" })];
   const overlaps = [overlapScenario(), overlapScenario({ browser: "webkit" })];
   overlaps[0].diagnostics[0] = diagnostic({ ...overlaps[0].diagnostics[0], ratio: 4.500000000000001, status: "pass" });
@@ -307,11 +308,14 @@ test("overlap summary uses the worst exact ratio across browser preferences with
   const guide = section(html, "usi");
   assert.match(publicContent(guide), /<strong>0<\/strong> abbinamenti utilizzabili per testo normale · <strong>0<\/strong> solo per titoli grandi, bordi o icone · <strong>1<\/strong> da evitare/);
   assert.match(publicContent(guide), /&lt; 3:1/);
-  const both = render(report({ scenarios, overlaps: overlaps.map((entry) => ({ ...entry, diagnostics: [{ ...entry.diagnostics[0], ratio: 4.6, status: "pass" }] })) }));
-  assert.match(publicContent(section(both, "usi")), /<strong>1<\/strong> abbinamenti utilizzabili per testo normale · <strong>0<\/strong> solo per titoli grandi, bordi o icone · <strong>0<\/strong> da evitare/);
-  assert.match(guide, /4\.500000000000001:1/);
-  assert.match(guide, /2\.999999999999999:1/);
-  assert.equal((guide.match(/<caption>Sovrapposizioni esplorative nello scenario<\/caption>/g) ?? []).length, 2);
+  assert.equal((guide.match(/<caption>Sovrapposizioni esplorative — tema chiaro<\/caption>/g) ?? []).length, 1);
+  assert.equal((guide.match(/<caption>Sovrapposizioni esplorative — tema scuro<\/caption>/g) ?? []).length, 0);
+  const table = guide.slice(guide.indexOf("Sovrapposizioni esplorative — tema chiaro"));
+  assert.match(table, /<code>2\.999999999999999:1<\/code>/, "The worst measurement is kept at full precision");
+  assert.match(table, /<td>webkit \/ light \/ no-preference<\/td>/, "The table names the scenario that produced the worst value");
+  assert.match(guide, /<h4>Tema chiaro — 1 abbinamenti<\/h4>/);
+  assert.doesNotMatch(guide, /4\.500000000000001:1/, "Non-worst scenarios are not duplicated, as the section text states");
+  assert.match(guide, /la colonna dello scenario indica quale misura l’ha prodotto/);
 });
 
 test("missing, duplicate, inconsistent or unsafe overlap data cannot confer an exploratory pass", () => {
@@ -781,13 +785,16 @@ test("scenario mismatch or missing provenance stays unverified even with otherwi
   }
 });
 
-test("proposal control rows retain explicit browser and preference for every check, not only covered issues", () => {
+test("changed proposal rows retain explicit browser and preference while unchanged rows are counted, not reprinted", () => {
   const html = proposalsSection(render(issueReport({
-    scenarios: [scenario({ diagnostics: [diagnostic({ ratio: 4 })] }), scenario({ browser: "webkit", preference: "more", diagnostics: [diagnostic({ label: "other" })] })],
+    scenarios: [scenario({ diagnostics: [diagnostic({ ratio: 4 })] }), scenario({ browser: "webkit", preference: "more", diagnostics: [diagnostic({ label: "other", browser: "webkit", preference: "more" })] })],
     proposals: [proposal({ checks: [diagnostic({ browser: "chromium", preference: "no-preference" }), diagnostic({ label: "other", browser: "webkit", preference: "more" })] })],
   })));
   assert.match(html, /<td>chromium \/ light \/ no-preference<\/td>/);
-  assert.match(html, /<td>webkit \/ light \/ more<\/td>/);
+  assert.match(html, /Controlli cambiati dalla proposta — 1 di 2/);
+  assert.match(html, /Altri 1 controlli invariati: rapporto identico al valore già misurato negli scenari/);
+  const table = html.slice(html.indexOf("Controlli cambiati dalla proposta — 1 di 2"));
+  assert.doesNotMatch(table, /<td>webkit \/ light \/ more<\/td>/, "An identical measurement is counted once, not reprinted");
 });
 
 test("rendering is deterministic, has no side effects on inputs and states scope limitations", () => {

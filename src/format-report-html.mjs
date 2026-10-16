@@ -508,9 +508,15 @@ ${compactPair(worst.item, "Esempio da valutare, non un uso consigliato", [3, 4.5
   }).join("")}</div>
 <p><strong>Scelta pratica:</strong> per sovrapporre testo, preferisci le coppie semantiche controllate qui sopra. Cambiare sfondo, opacità o stato richiede una nuova verifica della coppia.</p>
 <details><summary>Tutte le sovrapposizioni esplorative — ${view.groups.length} abbinamenti nei temi controllati</summary>
-<p>Il rapporto tra due colori opachi è uguale invertendo primo piano e sfondo. Ogni coppia di colori base compare una sola volta per scenario. Le simulazioni non modificano l’esito dell’audit né le proposte di correzione.</p>
+<p>Il rapporto tra due colori opachi è uguale invertendo primo piano e sfondo. Ogni coppia di colori base compare una sola volta per tema con il caso peggiore fra gli scenari, e la colonna dello scenario indica quale misura l’ha prodotto; gli altri scenari non vengono duplicati qui.</p>
 ${baseColors.length && themes.length ? `<p class="margin-note">Righe: colore in primo piano. Colonne: sfondo. <span class="matrix-badge matrix-badge--aa">AA</span> usabile per testo normale (almeno 4,5:1); <span class="matrix-badge">3:1</span> solo titoli grandi, bordi e icone (almeno 3:1); <span class="matrix-badge matrix-badge--no">no</span> da evitare.</p>${themes.map(matrix).join("")}` : ""}
-${view.sources.map((scenario, index) => `<h4>${escape(scenario.browser)} · ${escape(scenario.scheme)} · ${escape(scenario.preference)}</h4>${diagnosticTable("Sovrapposizioni esplorative nello scenario", view.entries.filter(({ scenarioIndex }) => scenarioIndex === index))}`).join("")}</details>`;
+${themes.map((scheme) => {
+    const groups = view.groups.filter((group) => group[0].item.scheme === scheme);
+    if (!groups.length) return "";
+    const name = scheme === "light" ? "chiaro" : "scuro";
+    const rows = groups.map((group) => group.reduce((worst, entry) => entry.item.ratio < worst.item.ratio ? entry : worst));
+    return `<h4>Tema ${name} — ${rows.length} abbinamenti</h4>${diagnosticTable(`Sovrapposizioni esplorative — tema ${name}`, rows)}`;
+  }).join("")}</details>`;
 }
 
 // Visual catalog of the generated families: only pairs that were actually measured,
@@ -689,6 +695,10 @@ function proposalHtml(view, index) {
   const textMinimum = minimumFor("text"), uiMinimum = minimumFor("non-text");
   const completeness = checks.length && valid.length === checks.length ? "insieme completo" : "validi disponibili (insieme incompleto)";
   const issues = dedupeChecks(checks.filter(({ item }) => list(proposal.issueLabels).includes(item.label)));
+  // Unchanged rows stay counted, not reprinted: their values are already measured in the scenarios section.
+  const controlRows = checks.map(({ item, before }) => ({ item, scenario: before?.scenario ?? {}, original: before?.item ?? null }));
+  const changedRows = controlRows.filter((row) => !row.original || row.item.ratio !== row.original.ratio || row.item.status !== row.original.status);
+  const unchangedCount = controlRows.length - changedRows.length;
   const context = (scenario) => `${escape(scenario.browser)} / ${escape(scenario.scheme)} / ${escape(scenario.preference)}`;
   const where = ({ item, before }) => before ? context(before.scenario) : `${escape(item.browser ?? "browser non indicato")} / ${escape(item.scheme)} / ${escape(item.preference ?? "preferenza non indicata")}`;
   return `<article class="card${complete ? " recommendation" : ""}" id="${id}"><h3>Correzione ${index + 1} · ${escape(proposal.title)}</h3>
@@ -720,7 +730,9 @@ Rapporto minimo del testo: ${textMinimum === null ? "non disponibile" : ratio(te
 ${before ? `<p>Scenario: ${where(group[0])}${group.length > 1 ? ` — ${group.length} misure identiche in scenari diversi: ${group.map((entry) => where(entry)).join(", ")}` : ""}</p><div class="grid"><div><p><strong>Prima — snapshot originale</strong></p>${pairSample(before.item, "Prima")}</div><div><p><strong>Dopo — proposta</strong></p>${pairSample(item, "Dopo")}</div></div>
 <p>Provenienza prima: ${escape(before.scenario.provenance)}; diagnostica: ${escape(before.item.provenance)}. Provenienza dopo: ${escape(item.provenance)} (se assente, non dedotta).</p>` : "<p>Prima/dopo non verificato: coppia originale assente, ambigua o controllo non valido. Nessun campione precedente inventato.</p>"}</div>`;
     }).join("")}</div>
-${checks.length ? `<details><summary>Tabella completa dei controlli — ${checks.length} righe</summary>${diagnosticTable("Controlli della proposta", checks.map(({ item, before }) => ({ item, scenario: before?.scenario ?? {} })))}</details>` : "<p>Nessun controllo disponibile.</p>"}
+${checks.length ? `<details><summary>Controlli cambiati dalla proposta — ${changedRows.length} di ${controlRows.length}</summary>
+${changedRows.length ? diagnosticTable("Controlli cambiati dalla proposta", changedRows) : "<p>Nessuna coppia ha cambiato rapporto o esito: la proposta non altera i valori misurati.</p>"}
+<p>Altri ${unchangedCount} controlli invariati: rapporto identico al valore già misurato negli scenari (nessuna regressione). Vedi <a href="#scenari">Scenari, misure e issue</a>.</p></details>` : "<p>Nessun controllo disponibile.</p>"}
 <details><summary>Modifiche cromatiche e differenze numeriche</summary>
 ${table("Variazioni proposte", ["Colore", "Prima", "Dopo", "Differenze"], list(proposal.changes).map((value) => {
     const change = record(value) ? value : {};

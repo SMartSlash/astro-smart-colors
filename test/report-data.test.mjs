@@ -3,7 +3,7 @@ import test from "node:test";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { assertReportInputsUnchanged, captureReportInputs, darkFillTuningIdentity, proposalImproves, publishedProposal, replacePaletteSource, replaceTuningDeclaration, reportCandidates, reportOverlapScenario, reportScenario, reportSideEffect, reportSnapshot, worstSideEffect } from "../../../scripts/smart-colors-report.mjs";
+import { assertReportInputsUnchanged, captureReportInputs, darkFillTuningIdentity, mergeSideEffect, proposalImproves, publishedProposal, replacePaletteSource, replaceTuningDeclaration, reportCandidates, reportOverlapScenario, reportScenario, reportSideEffect, reportSnapshot, worstSideEffect } from "../../../scripts/smart-colors-report.mjs";
 
 import { analyzeColorTokens } from "../src/generate-colors.mjs";
 import { nearestLightness, resolvedColor, sourceColorValue } from "../src/contrast-advice.mjs";
@@ -432,6 +432,58 @@ test("dark muted depth search uses resolved text and canvas and skips unverifiab
   assert.equal(overridden.some((item) => item.id === "browser-neutral-muted-dark"), false);
 });
 
+test("dark bg depth search re-models muted constraints with the active muted mix depth", async (t) => {
+  const root = await darkFixture(t);
+  const analysis = await analyzeColorTokens({ root, suggest: false });
+  const canvas = { l: 0.3, c: 0.01, h: 88 };
+  const text = { l: 0.75, c: 0, h: 88 };
+  // Measured muted tokens sit exactly on their active mix of text into the canvas:
+  // the 76% tuning override for the main run, the generated 72% for the fallback.
+  const mutedTuned = { l: 0.642, c: 0.0024, h: 88 };
+  const mutedGenerated = { l: 0.624, c: 0.0028, h: 88 };
+  const rowsFor = (muted) => [
+    darkPair("dark muted text / canvas", "--color-text-muted", "--color-bg", muted, canvas),
+    darkPair("dark neutral text / canvas", "--color-text", "--color-bg", { l: 0.66, c: 0, h: 88 }, canvas),
+  ];
+  const tuned = rowsFor(mutedTuned);
+  const scaled = (value) => ({ l: canvas.l * (value / 30), c: canvas.c * (value / 30), h: canvas.h });
+  // The muted foreground follows the candidate canvas: it is a mix of the resolved
+  // dark text into the new background, never the measured foreground held fixed.
+  const search = (mutedDepth, rows) => knobGrid(30).find((value) => rows.every((pair) => {
+    const background = scaled(value);
+    const foreground = pair.foreground === "--color-text-muted" ? mixOklch(text, background, mutedDepth) : pair.foregroundColor;
+    return contrast(foreground, background) >= margin(pair);
+  }));
+  const constant = knobGrid(30).find((value) => tuned.every((pair) => contrast(pair.foregroundColor, scaled(value)) >= margin(pair)));
+  const tuningCss = ":root { --color-tune-dark-bg-depth: 30%; --color-tune-dark-muted-depth: 76%; }";
+  const expected = search(76 / 100, tuned);
+  assert.ok(Number.isFinite(expected) && expected !== 30, "fixture needs a reachable darker canvas");
+  assert.notEqual(expected, constant, "fixture must distinguish the re-modelled muted text from the constant one");
+  const computed = { tokens: new Map([["--color-text", text], ["--color-bg", canvas]]) };
+  const candidates = await reportCandidates(root, analysis, tuningCss, [{ scheme: "dark", tuned, computed }]);
+  const candidate = candidates.find((item) => item.id === "browser-neutral-bg-dark");
+  assert.ok(candidate, "expected a dark canvas tuning proposal");
+  assert.deepEqual(candidate.destination, {
+    file: "src/styles/tokens/colors-tuning.css", path: "--color-tune-dark-bg-depth",
+    snippet: `--color-tune-dark-bg-depth: ${percent(expected)};`,
+  });
+  assert.deepEqual(candidate.issueLabels, ["dark muted text / canvas", "dark neutral text / canvas"]);
+  assert.deepEqual(candidate.changes, [{ label: "--color-bg (dark)", before: canvas, after: scaled(expected) }]);
+  assert.equal(candidate.tuningCss, replaceTuningDeclaration(tuningCss, "--color-tune-dark-bg-depth", percent(expected)));
+  // Without the active knob the muted depth falls back to the generated contract value.
+  const generated = Number(/--color-tune-dark-muted-depth:\s*([\d.]+)%/.exec(analysis.css)[1]);
+  const fallbackTuning = ":root { --color-tune-dark-bg-depth: 30%; }";
+  const fallbackRows = rowsFor(mutedGenerated);
+  const fallback = await reportCandidates(root, analysis, fallbackTuning, [{ scheme: "dark", tuned: fallbackRows, computed }]);
+  const fallbackCandidate = fallback.find((item) => item.id === "browser-neutral-bg-dark");
+  assert.ok(fallbackCandidate, "expected the generated muted depth to stay measurable");
+  assert.equal(fallbackCandidate.destination.snippet, `--color-tune-dark-bg-depth: ${percent(search(generated / 100, fallbackRows))};`);
+  assert.notEqual(percent(search(generated / 100, fallbackRows)), percent(expected), "fixture must distinguish the active and generated muted depths");
+  // Without the resolved dark text the muted interaction is not measurable: no proposal.
+  const blind = await reportCandidates(root, analysis, tuningCss, [{ scheme: "dark", tuned }]);
+  assert.equal(blind.some((item) => item.id === "browser-neutral-bg-dark"), false);
+});
+
 test("dark fill escape hatch serializes one concrete tune declaration and refuses ambiguous duplicates", async (t) => {
   const root = await darkFixture(t);
   const analysis = await analyzeColorTokens({ root, suggest: false });
@@ -489,6 +541,33 @@ test("dark fill escape hatch optimizes the text on the new fill, not the distanc
   const [row] = tuned;
   assert.ok(contrast(row.foregroundColor, change.after) >= margin(row), "Proposal must keep the text readable on the new fill");
   assert.equal(candidate.destination.snippet, `--color-tune-primary-dark: ${oklch(expected)};`);
+});
+
+const FOCUS_PALETTE = `@property --palette-bg { initial-value: oklch(.962 .015 88); role: canvas; }
+@property --palette-ink { initial-value: oklch(.28 .007 3.68); role: ink; }
+@property --palette-primary { initial-value: oklch(.62 .16 32.41); role: ui; }
+@property --palette-secondary { initial-value: oklch(.54 .16 198); role: ui; }`;
+
+test("dark fill impact names the control consumers only for the focus identity", async (t) => {
+  const root = await darkFixture(t);
+  await writeFile(path.join(root, "src/styles/tokens/palette.css"), FOCUS_PALETTE);
+  const analysis = await analyzeColorTokens({ root, suggest: false });
+  assert.equal(analysis.config.roles.focus, "primary", "fixture must resolve the first ui identity as focus");
+  const tuned = [
+    darkPair("dark on-primary / primary", "--color-on-primary", "--color-primary", { l: 0.97, c: 0, h: 0 }, { l: 0.62, c: 0.16, h: 32.41 }),
+    darkPair("dark on-secondary / secondary", "--color-on-secondary", "--color-secondary", { l: 0.97, c: 0, h: 0 }, { l: 0.54, c: 0.16, h: 198 }),
+  ];
+  const candidates = await reportCandidates(root, analysis, ":root {}", [{ scheme: "dark", tuned }]);
+  const focus = candidates.find((item) => item.id === "browser-dark-fill:primary");
+  const other = candidates.find((item) => item.id === "browser-dark-fill:secondary");
+  assert.ok(focus && other, "expected dark fill proposals for both identities");
+  const baseFor = (identity) => `Fissa il riempimento dark di ${identity} (condiviso dal bordo) senza toccare la palette; riempimento chiaro, solid-hover e companion restano letterali. Escape hatch non validato dal generatore: per scelte stabili usa dark-blend in palette.css. Decommenta o sostituisci la riga di esempio nel pannello 2 di colors-tuning.css.`;
+  assert.equal(other.impact, baseFor("secondary"), "non-focus identities keep the current impact text");
+  assert.ok(focus.impact.startsWith(baseFor("primary")), "focus impact extends the current text");
+  for (const token of ["--_color-primary-dark", "--color-control-bg-active", "--color-control-border-active", "--color-control-focus-bg"]) {
+    assert.ok(focus.impact.includes(token), `focus impact must name ${token}`);
+    assert.ok(!other.impact.includes(token), `non-focus impact must not name ${token}`);
+  }
 });
 
 test("palette-source verification also names the direct on-color companion", async (t) => {
@@ -623,4 +702,48 @@ test("dark fill side effects keep the worst case and never alter published verif
   assert.equal("sideEffects" in publishedProposal(candidate, { valid: true, checks }), false);
   assert.equal("sideEffects" in publishedProposal(candidate, { valid: true, checks, sideEffects: [] }), false);
   assert.equal("sideEffects" in publishedProposal(candidate, { valid: true, checks, sideEffects: "none" }), false);
+});
+
+test("dark fill side effects measure both neutral backgrounds and keep the worst entry per background", () => {
+  const canvas = sideEffectBefore.background;
+  const surface = { l: 0.2401, c: 0.0042, h: 88 };
+  const canvasEntry = reportSideEffect("primary", sideEffectBefore, sideEffectAfter);
+  const surfaceEntry = reportSideEffect("primary",
+    { color: sideEffectBefore.color, background: surface },
+    { color: sideEffectAfter.color, background: surface }, "--color-surface");
+  // The same candidate border on both neutrals: in dark the lighter surface keeps
+  // less separation, so it is the worse background of the two.
+  assert.equal(canvasEntry.label, "dark primary-border / canvas");
+  assert.equal(canvasEntry.backgroundToken, "--color-bg");
+  assert.equal(surfaceEntry.label, "dark primary-border / surface");
+  assert.equal(surfaceEntry.backgroundToken, "--color-surface");
+  assert.equal(surfaceEntry.before.ratio, contrast(sideEffectBefore.color, surface));
+  assert.equal(surfaceEntry.after.ratio, contrast(sideEffectAfter.color, surface));
+  assert.ok(surfaceEntry.after.ratio < canvasEntry.after.ratio, "fixture needs the surface to be the worse neutral");
+  const lighter = reportSideEffect("primary",
+    { color: sideEffectBefore.color, background: surface },
+    { color: { l: 0.62, c: 0, h: 0 }, background: surface }, "--color-surface");
+  const worstSurface = reportSideEffect("primary",
+    { color: sideEffectBefore.color, background: surface },
+    { color: { l: 0.3, c: 0, h: 0 }, background: surface }, "--color-surface");
+  const merged = [canvasEntry, surfaceEntry, lighter, worstSurface].reduce((entries, entry) => mergeSideEffect(entries, entry), []);
+  assert.equal(merged.length, 2, "one entry per measured background");
+  const keptCanvas = merged.find((entry) => entry.backgroundToken === "--color-bg");
+  const keptSurface = merged.find((entry) => entry.backgroundToken === "--color-surface");
+  assert.equal(keptCanvas, canvasEntry);
+  assert.equal(keptSurface, worstSurface, "the worst after state wins per background");
+  assert.ok(worstSurface.after.ratio < lighter.after.ratio && worstSurface.after.ratio < surfaceEntry.after.ratio);
+  assert.ok(keptSurface.after.ratio < keptCanvas.after.ratio, "the worst measured neutral is the surface");
+  assert.equal(keptSurface.label, "dark primary-border / surface");
+  assert.equal(keptCanvas.label, "dark primary-border / canvas");
+  assert.equal(mergeSideEffect([worstSurface], lighter)[0], worstSurface, "merge order does not change the worst case");
+  const worstCanvas = reportSideEffect("primary", sideEffectBefore,
+    { color: { l: 0.3, c: 0, h: 0 }, background: canvas });
+  const updated = mergeSideEffect(merged, worstCanvas);
+  assert.equal(updated.length, 2);
+  assert.equal(updated.find((entry) => entry.backgroundToken === "--color-bg"), worstCanvas, "a worse canvas updates only its own background");
+  assert.equal(updated.find((entry) => entry.backgroundToken === "--color-surface"), worstSurface);
+  assert.equal(merged.find((entry) => entry.backgroundToken === "--color-bg"), canvasEntry, "aggregation must not mutate the previous list");
+  // Only the two measured neutral surfaces have a side-effect background.
+  assert.equal(reportSideEffect("primary", sideEffectBefore, sideEffectAfter, "--color-text"), null);
 });

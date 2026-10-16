@@ -1,0 +1,626 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { assertReportInputsUnchanged, captureReportInputs, darkFillTuningIdentity, proposalImproves, publishedProposal, replacePaletteSource, replaceTuningDeclaration, reportCandidates, reportOverlapScenario, reportScenario, reportSideEffect, reportSnapshot, worstSideEffect } from "../../../scripts/smart-colors-report.mjs";
+
+import { analyzeColorTokens } from "../src/generate-colors.mjs";
+import { nearestLightness, resolvedColor, sourceColorValue } from "../src/contrast-advice.mjs";
+import { contrast, mixOklch, oklch } from "../src/color-math.mjs";
+
+const color = { l: 0.5, c: 0.02, h: 32 };
+const row = (label, status = "pass", ratio = 7.2) => ({
+  label, status, ratio, foreground: "--color-text", background: "--color-bg",
+  foregroundColor: color, backgroundColor: { l: 0.95, c: 0.01, h: 88 }, target: 7, minimum: 4.5, kind: "text",
+});
+
+test("report facts preserve full precision and distinguish boundary usage from text", () => {
+  const ratio = 4.499999999999;
+  const input = { ...row("light text", "below-minimum", ratio), kind: "family-ui", minimum: 3, target: 4.6, status: "below-target" };
+  const scenario = reportScenario("webkit", "light", "dark", [input], [row("light text")]);
+  assert.equal(scenario.diagnostics[0].ratio, ratio);
+  assert.equal(scenario.diagnostics[0].foregroundToken, "--color-text");
+  assert.deepEqual(scenario.diagnostics[0].foreground, color);
+  assert.equal(scenario.diagnostics[0].kind, "non-text");
+  assert.equal(scenario.diagnostics[0].baselineRatio, 7.2);
+  assert.equal(scenario.diagnostics[0].provenance, "browser-after-tuning");
+});
+
+function overlapTokens() {
+  return new Map([
+    ["--color-bg", { l: 1, c: 0, h: 0 }],
+    ["--color-surface", { l: 0, c: 0, h: 0 }],
+    ["--color-secondary", { l: 0.511111111111, c: 0.0800000000001, h: -12.1234567890123 }],
+    ["--color-primary", { l: 0.6321234567891234, c: 0.100049123456, h: 392.000050123456 }],
+    ["--color-spark", { l: 0.90000000001, c: 0.0100000001, h: 88.000000005 }],
+  ]);
+}
+
+test("overlap counts cover two neutral backgrounds and every unordered pair, including zero/one names", () => {
+  for (let count = 0; count <= 5; count += 1) {
+    const names = Array.from({ length: count }, (_, index) => `identity-${index}`);
+    const tokens = overlapTokens();
+    for (const [index, name] of names.entries()) tokens.set(`--color-${name}`, { l: 0.2 + index * 0.1, c: 0, h: index });
+    const scenario = reportOverlapScenario("chromium", "light", "light", tokens, names);
+    assert.equal(scenario.diagnostics.length, count * 2 + count * (count - 1) / 2);
+  }
+});
+
+test("overlaps preserve input order and contain unique pairs without self or reverse duplicates", () => {
+  const scenario = reportOverlapScenario("webkit", "light", "dark", overlapTokens(), ["spark", "secondary", "primary"]);
+  const pairs = scenario.diagnostics.map((item) => [item.foregroundToken, item.backgroundToken]);
+  assert.deepEqual(pairs, [
+    ["--color-spark", "--color-bg"], ["--color-spark", "--color-surface"],
+    ["--color-secondary", "--color-bg"], ["--color-secondary", "--color-surface"],
+    ["--color-primary", "--color-bg"], ["--color-primary", "--color-surface"],
+    ["--color-spark", "--color-secondary"], ["--color-spark", "--color-primary"],
+    ["--color-secondary", "--color-primary"],
+  ]);
+  assert.ok(pairs.every(([foreground, background]) => foreground !== background));
+  assert.equal(new Set(pairs.map((pair) => [...pair].sort().join(" / "))).size, pairs.length);
+  assert.equal(new Set(scenario.diagnostics.map((item) => item.label)).size, pairs.length);
+  for (const item of scenario.diagnostics) {
+    assert.ok(item.label.includes(item.foregroundToken) && item.label.includes(item.backgroundToken));
+  }
+});
+
+test("overlaps deduplicate names, preserve full-precision tokens/ratios and never mutate inputs", () => {
+  const tokens = overlapTokens();
+  for (const color of tokens.values()) Object.freeze(color);
+  const names = Object.freeze(["secondary", "primary", "spark", "primary", "secondary", "spark"]);
+  const beforeTokens = structuredClone(tokens), beforeNames = [...names];
+  const scenario = reportOverlapScenario("firefox", "dark", "light", tokens, names);
+  assert.deepEqual(scenario, reportOverlapScenario("firefox", "dark", "light", tokens, ["secondary", "primary", "spark"]));
+  assert.equal(scenario.diagnostics.length, 9);
+  for (const item of scenario.diagnostics) {
+    assert.deepEqual(item.foreground, tokens.get(item.foregroundToken));
+    assert.deepEqual(item.background, tokens.get(item.backgroundToken));
+    assert.equal(item.ratio, contrast(tokens.get(item.foregroundToken), tokens.get(item.backgroundToken)));
+  }
+  assert.ok(scenario.diagnostics.some((item) => item.ratio !== Number(item.ratio.toFixed(4))));
+  assert.deepEqual(tokens, beforeTokens);
+  assert.deepEqual(names, beforeNames);
+  scenario.diagnostics[0].foreground.l = 0;
+  assert.deepEqual(tokens, beforeTokens, "published colors must not alias input tokens");
+});
+
+test("overlap contrast agrees with independent achromatic WCAG luminance oracles", () => {
+  const tokens = new Map([
+    ["--color-bg", { l: 1, c: 0, h: 0 }], ["--color-surface", { l: 0, c: 0, h: 0 }],
+    ["--color-black", { l: 0, c: 0, h: 0 }], ["--color-gray", { l: 0.5, c: 0, h: 0 }],
+    ["--color-white", { l: 1, c: 0, h: 0 }],
+  ]);
+  const scenario = reportOverlapScenario("chromium", "light", "light", tokens, ["black", "gray", "white"]);
+  // For achromatic OKLCH, linear-sRGB relative luminance is L cubed.
+  for (const item of scenario.diagnostics) {
+    const a = item.foreground.l ** 3, b = item.background.l ** 3;
+    const expected = (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+    assert.ok(Math.abs(item.ratio - expected) < 1e-8, `${item.label}: ${item.ratio} vs ${expected}`);
+    assert.ok(Number.isFinite(item.ratio) && item.ratio >= 1 && item.ratio <= 21);
+    assert.equal(item.status, expected >= 4.5 ? "pass" : "below-minimum");
+  }
+  assert.equal(scenario.diagnostics.find((item) => item.foregroundToken === "--color-black" && item.backgroundToken === "--color-surface").ratio, 1);
+  assert.ok(Math.abs(scenario.diagnostics.find((item) => item.foregroundToken === "--color-black" && item.backgroundToken === "--color-white").ratio - 21) < 1e-8);
+});
+
+test("overlap status uses the unrounded 4.5 text minimum without an audit tolerance", () => {
+  for (const [expected, status] of [[4.5 - 1e-12, "below-minimum"], [4.5 + 1e-12, "pass"]]) {
+    const tokens = overlapTokens();
+    tokens.set("--color-primary", { l: Math.cbrt(0.05 * (expected - 1)), c: 0, h: 0 });
+    const item = reportOverlapScenario("webkit", "light", "light", tokens, ["primary"]).diagnostics[1];
+    assert.equal(Number(item.ratio.toFixed(2)), 4.5);
+    assert.equal(item.status, status);
+    assert.equal(item.ratio, contrast(tokens.get("--color-primary"), tokens.get("--color-surface")));
+  }
+});
+
+test("overlap scenarios and diagnostics preserve browser/theme/preference and explicit resolved-color provenance", () => {
+  for (const browser of ["chromium", "firefox", "webkit"]) {
+    for (const scheme of ["light", "dark"]) {
+      for (const preference of ["light", "dark"]) {
+        const scenario = reportOverlapScenario(browser, scheme, preference, overlapTokens(), ["primary"]);
+        assert.deepEqual(Object.keys(scenario), Object.keys(reportScenario(browser, scheme, preference, [])));
+        assert.equal(scenario.browser, browser);
+        assert.equal(scenario.scheme, scheme);
+        assert.equal(scenario.preference, preference);
+        assert.equal(scenario.provenance, "browser-resolved-overlap");
+        for (const item of scenario.diagnostics) {
+          assert.equal(item.browser, browser);
+          assert.equal(item.scheme, scheme);
+          assert.equal(item.preference, preference);
+          assert.equal(item.provenance, "browser-resolved-overlap");
+          assert.equal(item.kind, "text");
+          assert.equal(item.target, 4.5);
+          assert.equal(item.minimum, 4.5);
+          assert.equal(Object.hasOwn(item, "baselineRatio"), false);
+        }
+      }
+    }
+  }
+});
+
+test("overlaps reject invalid context, token collections and public names with useful errors", () => {
+  const valid = ["chromium", "light", "dark", overlapTokens(), ["primary"]];
+  for (const [index, values, field] of [
+    [0, [undefined, null, "", "safari", {}, "Chromium"], "browser"],
+    [1, [undefined, null, "", "auto", {}, "LIGHT"], "scheme"],
+    [2, [undefined, null, "", "no-preference", {}, "DARK"], "preference"],
+    [3, [undefined, null, {}, [], new Set()], "tokens"],
+    [4, [undefined, null, {}, "primary", new Set(["primary"])], "names"],
+  ]) {
+    for (const value of values) {
+      const args = [...valid];
+      args[index] = value;
+      assert.throws(() => reportOverlapScenario(...args), new RegExp(`Report overlap ${field}`));
+    }
+  }
+  for (const name of [undefined, null, "", " primary", "primary ", "--color-primary", "Primary", "bad;name", "bg", "surface", 1, 1n, {}, []]) {
+    assert.throws(() => reportOverlapScenario("chromium", "light", "dark", overlapTokens(), [name]), /Report overlap name .* invalid/);
+  }
+});
+
+test("overlaps reject each missing or invalid required color rather than filling channels or clamping", () => {
+  const invalidColors = [undefined, null, "oklch(.5 .1 32)", [], {},
+    ...[-Number.EPSILON, 1 + Number.EPSILON, NaN, Infinity, -Infinity, "0.5", null, undefined].map((l) => ({ ...color, l })),
+    ...[-Number.EPSILON, NaN, Infinity, -Infinity, "0.1", null, undefined].map((c) => ({ ...color, c })),
+    ...[NaN, Infinity, -Infinity, "32", null, undefined].map((h) => ({ ...color, h })),
+  ];
+  for (const token of ["--color-bg", "--color-surface", "--color-primary", "--color-spark"]) {
+    const tokens = overlapTokens();
+    const check = () => assert.throws(() => reportOverlapScenario("firefox", "dark", "light", tokens, ["primary", "spark"]), (error) => {
+      assert.match(error.message, /Report overlap firefox\/dark\/light/);
+      assert.ok(error.message.includes(token));
+      assert.match(error.message, /missing or invalid resolved OKLCH color/);
+      return true;
+    });
+    tokens.delete(token);
+    check();
+    for (const invalid of invalidColors) {
+      tokens.set(token, invalid);
+      const before = structuredClone(tokens);
+      check();
+      assert.deepEqual(tokens, before);
+    }
+  }
+});
+
+test("overlaps reject a non-finite calculated ratio even when individual channels are finite", () => {
+  for (const overflow of [{ c: Number.MAX_VALUE }, { h: Number.MAX_VALUE }]) {
+    const tokens = overlapTokens();
+    tokens.set("--color-primary", { ...color, ...overflow });
+    assert.throws(() => reportOverlapScenario("webkit", "dark", "dark", tokens, ["primary"]), /Report overlap webkit\/dark\/dark --color-primary on --color-bg: invalid contrast ratio .*finite ratio in \[1, 21\]/);
+  }
+});
+
+test("proposals must solve every named issue without new target or minimum deficits", () => {
+  const before = [row("light issue", "below-target", 6.8), row("dark fine"), row("old issue", "below-target", 6.9)];
+  const good = [row("light issue"), row("dark fine"), row("old issue", "below-target", 6.9)];
+  assert.equal(proposalImproves(before, good, ["light issue"]), true);
+  assert.equal(proposalImproves(before, good, ["light issue", "missing"]), false);
+  assert.equal(proposalImproves(before, good, ["light issue", "old issue"]), false);
+  assert.equal(proposalImproves(before, [good[0], row("dark fine", "below-target", 6.8), good[2]], ["light issue"]), false);
+  assert.equal(proposalImproves(before, [good[0], good[1], row("old issue", "below-minimum", 4.49)], ["light issue"]), false);
+  assert.equal(proposalImproves(before, good.slice(0, 2), ["light issue"]), false);
+  assert.equal(proposalImproves(before, [row("changed label"), ...good.slice(1)], ["light issue"]), false);
+  assert.equal(proposalImproves(before, [{ ...good[0], ratio: NaN }, ...good.slice(1)], ["light issue"]), false);
+  assert.equal(proposalImproves(before, good, []), false);
+});
+
+test("tuning trials replace one actual declaration and preserve its selector and comments", () => {
+  const css = "/* --color-tune-surface-lightness-shift: 9; */\n:root[data-theme=light] {\n  --color-tune-surface-lightness-shift: -0.028;\n  --other: 1;\n}";
+  assert.equal(replaceTuningDeclaration(css, "--color-tune-surface-lightness-shift", "-0.018"), css.replace(": -0.028;", ": -0.018;"));
+  assert.equal(replaceTuningDeclaration(":root { --x: 1; --x: 2; }", "--x", "3"), null);
+  assert.match(replaceTuningDeclaration("/* --x: 0; */", "--x", "2"), /:root \{ --x: 2; \}/);
+});
+
+test("source trials preserve role descriptors and unrelated sources", () => {
+  const css = "@property --palette-primary { initial-value: oklch(.5 .1 32); role: ui; dark-blend: 80; }\n@property --palette-other { initial-value: oklch(.7 .1 88); role: ui; }";
+  const updated = replacePaletteSource(css, "--palette-primary", "oklch(0.6 0.1 32)");
+  assert.equal(updated, css.replace("oklch(.5 .1 32)", "oklch(0.6 0.1 32)"));
+  assert.equal(replacePaletteSource(css, "--missing", "oklch(0 0 0)"), null);
+  assert.equal(replacePaletteSource(css + css, "--palette-primary", "oklch(0 0 0)"), null);
+  assert.equal(replacePaletteSource(":root { --primary: oklch(.5 .1 32); }", "--primary", "oklch(0.6 0.1 32)"), ":root { --primary: oklch(0.6 0.1 32); }");
+});
+
+test("snapshot hashes track source bytes and resolved configuration without mutating inputs", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "smart-colors-report-data-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(path.join(root, "src/styles/tokens"), { recursive: true });
+  const file = path.join(root, "src/styles/tokens/palette.css");
+  const css = "@property --palette-bg { initial-value: oklch(.95 .01 88); role: canvas; }";
+  await writeFile(file, css);
+  const first = await reportSnapshot(root);
+  const repeat = await reportSnapshot(root);
+  assert.equal(first.inputDigest, repeat.inputDigest);
+  assert.deepEqual(first.overlaps, []);
+  assert.notStrictEqual(first.overlaps, first.scenarios);
+  first.scenarios.push(reportScenario("chromium", "light", "light", [row("light text")]));
+  const auditScenarios = structuredClone(first.scenarios);
+  first.overlaps.push(reportOverlapScenario("chromium", "light", "light", overlapTokens(), ["primary", "spark"]));
+  assert.deepEqual(first.scenarios, auditScenarios);
+  assert.deepEqual(repeat.overlaps, []);
+  assert.deepEqual(repeat.scenarios, []);
+  assert.equal(first.palette[0].role, "canvas");
+  assert.equal(await readFile(file, "utf8"), css);
+  await writeFile(path.join(root, "src/styles/tokens/colors-tuning.css"), ":root { --x: 2; }");
+  assert.notEqual((await reportSnapshot(root)).inputDigest, first.inputDigest);
+  const configured = await reportSnapshot(root, { config: { palette: "src/styles/tokens/palette.css", output: "src/styles/tokens/colors.css" }, errors: [] });
+  assert.notEqual(configured.inputDigest, first.inputDigest);
+});
+
+const PALETTE = `@property --palette-bg { initial-value: oklch(.962 .015 88); role: canvas; }
+@property --palette-ink { initial-value: oklch(.28 .007 3.68); role: ink; }
+@property --palette-primary { initial-value: oklch(.62 .300049 32.00005); role: ui; }`;
+
+async function fixture(t) {
+  const root = await mkdtemp(path.join(tmpdir(), "smart-colors-session-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(path.join(root, "src/styles/tokens"), { recursive: true });
+  await writeFile(path.join(root, "src/styles/tokens/palette.css"), PALETTE);
+  return root;
+}
+
+test("snapshot exposes identity sources and their palette names for variant comparison", async (t) => {
+  const root = await fixture(t);
+  const config = { palette: "src/styles/tokens/palette.css", output: "src/styles/tokens/colors.css", roles: { identities: {
+    primary: { token: "--palette-primary", role: "ui" },
+    legacy: { token: "--brand" },
+  } } };
+  const snapshot = await reportSnapshot(root, { config, errors: [] });
+  assert.deepEqual(snapshot.roles.identities, [
+    { name: "primary", role: "ui", token: "--palette-primary", paletteName: "--palette-primary" },
+    { name: "legacy", role: null, token: "--brand", paletteName: "--brand" },
+  ]);
+  assert.deepEqual((await reportSnapshot(root)).roles.identities, []);
+});
+
+test("analysis and report use captured palette bytes; mid-session input changes invalidate publication", async (t) => {
+  const root = await fixture(t);
+  const captured = await captureReportInputs(root);
+  const pathPalette = path.join(root, "src/styles/tokens/palette.css");
+  await writeFile(pathPalette, PALETTE.replace(".62 .300049", ".7 .300049"));
+  const analysis = await analyzeColorTokens({ root, suggest: false }, captured.inputs.find(([name]) => name === "palette")[2]);
+  assert.equal(analysis.inputs.paletteCss, PALETTE);
+  const snapshot = await reportSnapshot(root, analysis, captured);
+  assert.equal(snapshot.palette.find((item) => item.name === "--palette-primary").authored.l, 0.62);
+  await assert.rejects(assertReportInputsUnchanged(root, captured), { code: "SMART_COLORS_INPUTS_CHANGED" });
+  await writeFile(pathPalette, PALETTE);
+  await assertReportInputsUnchanged(root, captured);
+  await writeFile(path.join(root, "smart-colors.config.mjs"), "");
+  await assert.rejects(assertReportInputsUnchanged(root, captured), { code: "SMART_COLORS_INPUTS_CHANGED" });
+  const tuning = path.join(root, "src/styles/tokens/colors-tuning.css");
+  await writeFile(tuning, Buffer.from([0xff]));
+  const invalidUtf8 = await captureReportInputs(root);
+  await writeFile(tuning, Buffer.from([0xfe]));
+  const changedBytes = await captureReportInputs(root);
+  assert.equal(invalidUtf8.inputs.find(([name]) => name === "tuning")[2], changedBytes.inputs.find(([name]) => name === "tuning")[2]);
+  await assert.rejects(assertReportInputsUnchanged(root, invalidUtf8), { code: "SMART_COLORS_INPUTS_CHANGED" });
+});
+
+test("source candidate trial uses the exact full-precision OKLCH published in the snippet", async (t) => {
+  const root = await fixture(t);
+  const analysis = await analyzeColorTokens({ root, suggest: false });
+  const after = { l: 0.6321, c: 0.300049, h: 32.00005 };
+  const proposal = {
+    id: "exact-source", identity: "primary", scheme: "light", kind: "palette-source",
+    destination: { file: "src/styles/tokens/palette.css", path: "@property --palette-primary / initial-value", snippet: `initial-value: ${sourceColorValue(after)};` },
+    changes: [{ label: "--palette-primary", before: analysis.authoredTokens["palette-primary"], after }],
+  };
+  const original = analysis.diagnostics.find((item) => item.label === "light primary-on-solid / solid");
+  const simulated = {
+    label: original.label, foreground: original.foregroundToken, background: original.backgroundToken,
+    foregroundColor: original.foreground, backgroundColor: original.background,
+    target: original.target, minimum: original.minimum, ratio: 4, status: "below-minimum", kind: "on-color",
+  };
+  const candidates = await reportCandidates(root, { ...analysis, proposals: [proposal] }, ":root {}", [{ scheme: "light", tuned: [simulated] }]);
+  const candidate = candidates.find((item) => item.id === "exact-source");
+  assert.ok(candidate);
+  const exactSource = replacePaletteSource(PALETTE, "--palette-primary", sourceColorValue(after));
+  const expected = await analyzeColorTokens({ root, config: analysis.config, suggest: false }, exactSource);
+  const declarations = (css) => css.replace(/\/\*[\s\S]*?\*\//g, "");
+  assert.equal(declarations(candidate.css), declarations(expected.css));
+  assert.equal(candidate.destination.snippet, proposal.destination.snippet);
+});
+
+// Dark tuning fixtures: the report consumes browser-resolved colors, so these
+// tests provide explicit measured rows instead of launching a browser.
+const DARK_PALETTE = `@property --palette-bg { initial-value: oklch(.962 .015 88); role: canvas; }
+@property --palette-ink { initial-value: oklch(.28 .007 3.68); role: ink; }
+@property --palette-primary { initial-value: oklch(.62 .16 32.41); role: ui; }`;
+
+async function darkFixture(t) {
+  const root = await mkdtemp(path.join(tmpdir(), "smart-colors-dark-tuning-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(path.join(root, "src/styles/tokens"), { recursive: true });
+  await writeFile(path.join(root, "src/styles/tokens/palette.css"), DARK_PALETTE);
+  return root;
+}
+
+function darkPair(label, foreground, background, foregroundColor, backgroundColor, status = "below-minimum", target = 4.6, minimum = 4.5) {
+  return { label, foreground, background, foregroundColor, backgroundColor, ratio: 4, status, target, minimum, kind: "text" };
+}
+
+// Two-decimal percentage grid, nearest to the active value first: the oracle
+// the dark knob searches must reproduce without sharing their implementation.
+function knobGrid(current) {
+  return Array.from({ length: 10001 }, (_, index) => index / 100)
+    .sort((a, b) => Math.abs(a - current) - Math.abs(b - current) || a - b);
+}
+
+const margin = (pair) => Math.min(21, Math.max(pair.minimum, pair.target) + 0.02);
+const percent = (value) => `${Number(value.toFixed(2))}%`;
+
+test("dark bg depth search proposes the nearest percentage that clears the measured margin", async (t) => {
+  const root = await darkFixture(t);
+  const analysis = await analyzeColorTokens({ root, suggest: false });
+  const canvas = { l: 0.3, c: 0.01, h: 88 };
+  const tuned = [
+    darkPair("dark neutral text / canvas", "--color-text", "--color-bg", { l: 0.66, c: 0, h: 88 }, canvas),
+    darkPair("dark control active border / canvas", "--color-control-border-active", "--color-bg", { l: 0.5, c: 0.02, h: 88 }, canvas, "below-minimum", 3, 3),
+  ];
+  const tuningCss = ":root {\n  --color-tune-dark-bg-depth: 30%;\n}";
+  const scaled = (value) => ({ l: canvas.l * (value / 30), c: canvas.c * (value / 30), h: canvas.h });
+  const expected = knobGrid(30).find((value) => tuned.every((pair) => contrast(pair.foregroundColor, scaled(value)) >= margin(pair)));
+  assert.ok(Number.isFinite(expected) && expected !== 30, "fixture needs a reachable darker canvas");
+  const candidates = await reportCandidates(root, analysis, tuningCss, [{ scheme: "dark", tuned }]);
+  const candidate = candidates.find((item) => item.id === "browser-neutral-bg-dark");
+  assert.ok(candidate, "expected a dark canvas tuning proposal");
+  assert.equal(candidate.kind, "tuning");
+  assert.deepEqual(candidate.destination, {
+    file: "src/styles/tokens/colors-tuning.css", path: "--color-tune-dark-bg-depth",
+    snippet: `--color-tune-dark-bg-depth: ${percent(expected)};`,
+  });
+  assert.deepEqual(candidate.issueLabels, ["dark neutral text / canvas", "dark control active border / canvas"]);
+  assert.deepEqual(candidate.changes, [{ label: "--color-bg (dark)", before: canvas, after: scaled(expected) }]);
+  assert.equal(candidate.css, analysis.css);
+  assert.equal(candidate.tuningCss, replaceTuningDeclaration(tuningCss, "--color-tune-dark-bg-depth", percent(expected)));
+  assert.equal(candidates.some((item) => ["browser-neutral-surface-dark", "browser-neutral-muted-dark"].includes(item.id)), false);
+});
+
+test("dark surface depth is searched on the surface rows and skipped without a relative dark derivation", async (t) => {
+  const root = await darkFixture(t);
+  const analysis = await analyzeColorTokens({ root, suggest: false });
+  const surface = { l: 0.36, c: 0.012, h: 88 };
+  const tuned = [darkPair("dark muted text / surface", "--color-text-muted", "--color-surface", { l: 0.6, c: 0, h: 88 }, surface)];
+  const tuningCss = ":root { --color-tune-dark-surface-depth: 36%; }";
+  const scaled = (value) => ({ l: surface.l * (value / 36), c: surface.c * (value / 36), h: surface.h });
+  const expected = knobGrid(36).find((value) => contrast(tuned[0].foregroundColor, scaled(value)) >= margin(tuned[0]));
+  assert.ok(Number.isFinite(expected), "fixture needs a reachable darker surface");
+  const candidates = await reportCandidates(root, analysis, tuningCss, [{ scheme: "dark", tuned }]);
+  const candidate = candidates.find((item) => item.id === "browser-neutral-surface-dark");
+  assert.ok(candidate, "expected a dark surface tuning proposal");
+  assert.equal(candidate.destination.path, "--color-tune-dark-surface-depth");
+  assert.deepEqual(candidate.changes, [{ label: "--color-surface (dark)", before: surface, after: scaled(expected) }]);
+  assert.equal(candidate.tuningCss, replaceTuningDeclaration(tuningCss, "--color-tune-dark-surface-depth", percent(expected)));
+  // Static dark derivations do not consume the knobs: no proposal is invented.
+  const staticDark = await analyzeColorTokens({ root, suggest: false, inlineConfig: { derivation: { dark: { mode: "static" } } } });
+  assert.deepEqual(staticDark.errors, []);
+  assert.deepEqual(await reportCandidates(root, staticDark, tuningCss, [{ scheme: "dark", tuned }]), []);
+});
+
+test("dark muted depth search uses resolved text and canvas and skips unverifiable sources", async (t) => {
+  const root = await darkFixture(t);
+  const analysis = await analyzeColorTokens({ root, suggest: false });
+  const text = { l: 0.75, c: 0, h: 88 };
+  const canvas = { l: 0.34, c: 0, h: 88 };
+  const surface = { l: 0.2, c: 0, h: 88 };
+  const muted = { l: 0.6352, c: 0, h: 88 };
+  const tuned = [
+    darkPair("dark muted text / canvas", "--color-text-muted", "--color-bg", muted, canvas),
+    darkPair("dark muted text / surface", "--color-text-muted", "--color-surface", muted, surface, "pass"),
+  ];
+  const tuningCss = ":root { --color-tune-dark-muted-depth: 72%; }";
+  const expected = knobGrid(72).find((value) => tuned.every((pair) => contrast(mixOklch(text, canvas, value / 100), pair.backgroundColor) >= margin(pair)));
+  assert.ok(Number.isFinite(expected) && expected > 72, "fixture needs a lighter muted mix");
+  const computed = { tokens: new Map([["--color-text", text], ["--color-bg", canvas]]) };
+  const candidates = await reportCandidates(root, analysis, tuningCss, [{ scheme: "dark", tuned, computed }]);
+  const candidate = candidates.find((item) => item.id === "browser-neutral-muted-dark");
+  assert.ok(candidate, "expected a dark muted tuning proposal");
+  assert.deepEqual(candidate.destination, {
+    file: "src/styles/tokens/colors-tuning.css", path: "--color-tune-dark-muted-depth",
+    snippet: `--color-tune-dark-muted-depth: ${percent(expected)};`,
+  });
+  assert.deepEqual(candidate.changes, [{ label: "--color-text-muted (dark)", before: muted, after: mixOklch(text, canvas, expected / 100) }]);
+  assert.equal(candidate.tuningCss, replaceTuningDeclaration(tuningCss, "--color-tune-dark-muted-depth", percent(expected)));
+  assert.deepEqual(candidate.issueLabels, ["dark muted text / canvas"]);
+  // Without browser-resolved internal colors the mix is not measurable: stay silent.
+  const blind = await reportCandidates(root, analysis, tuningCss, [{ scheme: "dark", tuned }]);
+  assert.equal(blind.some((item) => item.id === "browser-neutral-muted-dark"), false);
+  // An active --color-text override reshapes the muted mix source: stay silent.
+  const overridden = await reportCandidates(root, analysis, `${tuningCss}\n:root { --color-text: oklch(0.9 0 0); }`, [{ scheme: "dark", tuned, computed }]);
+  assert.equal(overridden.some((item) => item.id === "browser-neutral-muted-dark"), false);
+});
+
+test("dark fill escape hatch serializes one concrete tune declaration and refuses ambiguous duplicates", async (t) => {
+  const root = await darkFixture(t);
+  const analysis = await analyzeColorTokens({ root, suggest: false });
+  const fill = { l: 0.62, c: 0.16, h: 32.41 };
+  const tuned = [
+    darkPair("dark on-primary / primary", "--color-on-primary", "--color-primary", { l: 0.97, c: 0, h: 0 }, fill),
+    darkPair("dark primary-on-solid / solid", "--color-primary-on-solid", "--color-primary-solid", { l: 0.9, c: 0, h: 0 }, fill),
+  ];
+  const tuningCss = ":root {\n  /* --color-tune-primary-dark: color-mix(in oklch, var(--_color-primary-source) 80%, oklch(1 0 none)); */\n}";
+  const requirement = (pair, candidate) => contrast(pair.foregroundColor, resolvedColor(candidate)) >= margin(pair);
+  const balanced = nearestLightness(fill, (color) => tuned.every((pair) => requirement(pair, color)));
+  assert.ok(balanced && balanced.l < fill.l, "fixture needs a darker fill");
+  const candidates = await reportCandidates(root, analysis, tuningCss, [{ scheme: "dark", tuned }]);
+  const candidate = candidates.find((item) => item.id === "browser-dark-fill:primary");
+  assert.ok(candidate, "expected a dark fill escape hatch proposal");
+  assert.equal(candidate.kind, "tuning");
+  assert.deepEqual(candidate.destination, {
+    file: "src/styles/tokens/colors-tuning.css", path: "--color-tune-primary-dark",
+    snippet: `--color-tune-primary-dark: ${oklch(balanced)};`,
+  });
+  assert.deepEqual(candidate.changes, [{ label: "--color-primary (dark)", before: fill, after: resolvedColor(balanced) }]);
+  assert.equal(candidate.tuningCss, replaceTuningDeclaration(tuningCss, "--color-tune-primary-dark", oklch(balanced)));
+  assert.deepEqual(candidate.issueLabels, ["dark on-primary / primary", "dark primary-on-solid / solid"]);
+  // Two active declarations are ambiguous under the same rule that blocks a write.
+  const duplicated = `${tuningCss}\n:root { --color-tune-primary-dark: oklch(0.5 0.1 32); }\n:root { --color-tune-primary-dark: oklch(0.6 0.1 32); }`;
+  const ambiguous = await reportCandidates(root, analysis, duplicated, [{ scheme: "dark", tuned }]);
+  assert.equal(ambiguous.some((item) => item.id === "browser-dark-fill:primary"), false);
+  // A light failure on the same fill is not fixed by a dark-only hatch.
+  const light = tuned.map((pair) => ({ ...pair, label: `light ${pair.label.slice("dark ".length)}` }));
+  const lights = await reportCandidates(root, analysis, tuningCss, [{ scheme: "light", tuned: light }]);
+  assert.equal(lights.some((item) => item.id === "browser-dark-fill:primary"), false);
+});
+
+test("dark fill escape hatch optimizes the text on the new fill, not the distance from the old one", async (t) => {
+  const root = await darkFixture(t);
+  const analysis = await analyzeColorTokens({ root, suggest: false });
+  // Dark text on a mid-tone fill: the shortfall is fixed by lightening the fill.
+  // Optimizing the candidate against the previous fill instead would pick a darker
+  // color that satisfies that wrong measurement and then fails with this text.
+  const fill = { l: 0.35, c: 0.12, h: 32.41 };
+  const text = { l: 0.05, c: 0, h: 0 };
+  const tuned = [darkPair("dark on-primary / primary", "--color-on-primary", "--color-primary", text, fill)];
+  const tuningCss = ":root {\n  /* --color-tune-primary-dark: oklch(0.6 0.12 32.41); */\n}";
+  const requirement = (candidate) => contrast(text, resolvedColor(candidate)) >= margin(tuned[0]);
+  const expected = nearestLightness(fill, requirement);
+  assert.ok(expected && expected.l > fill.l, "fixture needs a lighter fill for dark text");
+  const candidates = await reportCandidates(root, analysis, tuningCss, [{ scheme: "dark", tuned }]);
+  const candidate = candidates.find((item) => item.id === "browser-dark-fill:primary");
+  assert.ok(candidate, "expected a dark fill escape hatch proposal");
+  const [change] = candidate.changes;
+  assert.equal(change.label, "--color-primary (dark)");
+  assert.deepEqual(change.after, resolvedColor(expected));
+  assert.ok(change.after.l > fill.l, "The proposed fill must lighten for dark text");
+  assert.ok(requirement(expected), "The proposal must satisfy the measured text requirement");
+  const [row] = tuned;
+  assert.ok(contrast(row.foregroundColor, change.after) >= margin(row), "Proposal must keep the text readable on the new fill");
+  assert.equal(candidate.destination.snippet, `--color-tune-primary-dark: ${oklch(expected)};`);
+});
+
+test("palette-source verification also names the direct on-color companion", async (t) => {
+  const root = await fixture(t);
+  const analysis = await analyzeColorTokens({ root, suggest: false });
+  const after = { l: 0.6321, c: 0.300049, h: 32.00005 };
+  const proposal = {
+    id: "direct-companion-source", identity: "primary", scheme: "light", kind: "palette-source",
+    destination: { file: "src/styles/tokens/palette.css", path: "@property --palette-primary / initial-value", snippet: `initial-value: ${sourceColorValue(after)};` },
+    changes: [{ label: "--palette-primary", before: analysis.authoredTokens["palette-primary"], after }],
+  };
+  const original = analysis.diagnostics.find((item) => item.label === "light primary-on-solid / solid");
+  const solid = {
+    label: original.label, foreground: original.foregroundToken, background: original.backgroundToken,
+    foregroundColor: original.foreground, backgroundColor: original.background,
+    target: original.target, minimum: original.minimum, ratio: 4, status: "below-minimum", kind: "on-color",
+  };
+  const direct = {
+    label: "light on-primary / primary", foreground: "--color-on-primary", background: "--color-primary",
+    foregroundColor: { l: 0.97, c: 0, h: 0 }, backgroundColor: { l: 0.62, c: 0.16, h: 32.41 },
+    target: 4.6, minimum: 4.5, ratio: 3.1, status: "below-minimum", kind: "on-color",
+  };
+  const candidates = await reportCandidates(root, { ...analysis, proposals: [proposal] }, ":root {}", [{ scheme: "light", tuned: [solid, direct] }]);
+  const candidate = candidates.find((item) => item.id === "direct-companion-source");
+  assert.ok(candidate, "expected the source trial to cover both failing companions");
+  assert.deepEqual(candidate.issueLabels, ["light primary-on-solid / solid", "light on-primary / primary"]);
+  assert.equal(candidate.destination.snippet, proposal.destination.snippet);
+  const expected = await analyzeColorTokens({ root, config: analysis.config, suggest: false }, replacePaletteSource(PALETTE, "--palette-primary", sourceColorValue(after)));
+  const declarations = (css) => css.replace(/\/\*[\s\S]*?\*\//g, "");
+  assert.equal(declarations(candidate.css), declarations(expected.css));
+  // The direct companion alone keeps the same source trial and its own label.
+  const onlyDirect = await reportCandidates(root, { ...analysis, proposals: [proposal] }, ":root {}", [{ scheme: "light", tuned: [direct] }]);
+  const alternative = onlyDirect.find((item) => item.id === "direct-companion-source");
+  assert.ok(alternative, "expected the source trial to cover a direct-only failure");
+  assert.deepEqual(alternative.issueLabels, ["light on-primary / primary"]);
+});
+
+// `--color-tune-<id>-dark` also moves the family border alias on the canvas, a
+// pair the audit deliberately leaves unmeasured. The comparison is information
+// only: it never feeds verified, checks, issue labels, counts or filters.
+const sideEffectBefore = {
+  color: Object.freeze({ l: 0.6333333333333, c: 0.1625123456789012, h: 392.000050123456 }),
+  background: Object.freeze({ l: 0.1928571428571, c: 0.00345678901234, h: 88.000000005 }),
+};
+const sideEffectAfter = {
+  color: Object.freeze({ l: 0.5333333333333, c: 0.1225123456789, h: 32.410000001234 }),
+  background: sideEffectBefore.background,
+};
+
+test("dark fill side effects are gated to --color-tune-<id>-dark destinations", () => {
+  assert.equal(darkFillTuningIdentity({ file: "src/styles/tokens/colors-tuning.css", path: "--color-tune-primary-dark" }), "primary");
+  assert.equal(darkFillTuningIdentity({ path: "--color-tune-surface-strong-dark" }), "surface-strong");
+  for (const destination of [
+    undefined, null, {}, { path: undefined }, { path: 42 },
+    { path: "--color-tune-dark-bg-depth" }, { path: "--color-tune-surface-lightness-shift" },
+    { path: "--color-tune-primary-light" }, { path: "--color-tune-primary-dark-extra" },
+    { path: "--color-primary-border" }, { path: "onSolid.primary.dark" },
+  ]) {
+    assert.equal(darkFillTuningIdentity(destination), null, `unexpected identity for ${JSON.stringify(destination)}`);
+  }
+});
+
+test("dark fill side effect entries validate measurements, preserve full precision and never mutate inputs", () => {
+  const entry = reportSideEffect("primary", sideEffectBefore, sideEffectAfter);
+  assert.deepEqual(entry, {
+    label: "dark primary-border / canvas", scheme: "dark",
+    foregroundToken: "--color-primary-border", backgroundToken: "--color-bg",
+    before: { color: sideEffectBefore.color, ratio: contrast(sideEffectBefore.color, sideEffectBefore.background) },
+    after: { color: sideEffectAfter.color, ratio: contrast(sideEffectAfter.color, sideEffectAfter.background) },
+    provenance: "browser-proposal-side-effect",
+  });
+  assert.deepEqual(Object.keys(entry), ["label", "scheme", "foregroundToken", "backgroundToken", "before", "after", "provenance"]);
+  // Full precision: the published ratio is never rounded to a display precision,
+  // and the entry copies the measured colors instead of aliasing fresh fixtures.
+  assert.equal(entry.before.ratio, contrast(sideEffectBefore.color, sideEffectBefore.background));
+  assert.notEqual(entry.before.ratio, Number(entry.before.ratio.toFixed(2)));
+  assert.notEqual(entry.before.color, sideEffectBefore.color);
+  assert.notEqual(entry.after.color, sideEffectAfter.color);
+  // Independent achromatic oracle: linear-sRGB luminance is L cubed.
+  const oracle = reportSideEffect("primary",
+    { color: { l: 1, c: 0, h: 0 }, background: { l: 0, c: 0, h: 0 } },
+    { color: { l: 0, c: 0, h: 0 }, background: { l: 0, c: 0, h: 0 } });
+  assert.ok(Math.abs(oracle.before.ratio - 21) < 1e-8);
+  assert.equal(oracle.after.ratio, 1);
+  // Invalid measurements return null instead of throwing: inside the browser
+  // verification loop an exception would mark the proposal invalid.
+  const invalidColors = [undefined, null, 3, "oklch(0.5 0 0)", [], { l: NaN, c: 0, h: 0 },
+    { l: 1.000001, c: 0, h: 0 }, { l: 0.5, c: -0.0001, h: 0 }, { l: 0.5, c: 0, h: Infinity }, { l: 0.5, c: 0 }];
+  for (const color of invalidColors) {
+    assert.equal(reportSideEffect("primary", { color, background: sideEffectBefore.background }, sideEffectAfter), null, `invalid before color ${JSON.stringify(color)}`);
+    assert.equal(reportSideEffect("primary", sideEffectBefore, { color: sideEffectAfter.color, background: color }), null, `invalid after background ${JSON.stringify(color)}`);
+  }
+  assert.equal(reportSideEffect("primary", undefined, sideEffectAfter), null);
+  assert.equal(reportSideEffect("primary", sideEffectBefore, undefined), null);
+  assert.equal(reportSideEffect("primary", { color: sideEffectBefore.color }, sideEffectAfter), null);
+});
+
+test("dark fill side effects keep the worst case and never alter published verified/checks", () => {
+  const darkCanvas = sideEffectBefore.background;
+  const far = reportSideEffect("primary", sideEffectBefore, { color: { l: 0.9, c: 0, h: 0 }, background: darkCanvas });
+  const near = reportSideEffect("primary", sideEffectBefore, { color: { l: 0.4, c: 0, h: 0 }, background: darkCanvas });
+  assert.ok(near.after.ratio < far.after.ratio, "fixture needs a distinguishable worst case");
+  assert.equal(worstSideEffect(far, near), near);
+  assert.equal(worstSideEffect(near, far), near);
+  assert.equal([far, near, far].reduce((previous, current) => worstSideEffect(previous, current), null), near);
+  assert.equal(worstSideEffect(null, near), near);
+  assert.equal(worstSideEffect(far, null), far);
+  assert.equal(worstSideEffect(null, null), null);
+  assert.equal(worstSideEffect(far, far), far);
+  const checks = Object.freeze([{ label: "dark primary-border-strong / canvas", ratio: 4.61, provenance: "browser-proposal" }]);
+  const result = Object.freeze({ valid: true, browsers: 2, checks, sideEffects: Object.freeze([near]) });
+  const candidate = Object.freeze({
+    id: "browser-dark-fill:primary", title: "Escape hatch", kind: "tuning", impact: "impact", search: "search",
+    destination: Object.freeze({ file: "src/styles/tokens/colors-tuning.css", path: "--color-tune-primary-dark", snippet: "--color-tune-primary-dark: oklch(0.5 0.1 32.41);" }),
+    changes: Object.freeze([]), issueLabels: Object.freeze([]), css: ":root {}", tuningCss: ":root {}",
+  });
+  const published = publishedProposal(candidate, result);
+  assert.equal(published.verified, true);
+  assert.equal(published.checks, checks);
+  assert.equal(published.sideEffects, result.sideEffects);
+  assert.deepEqual(published.issueLabels, candidate.issueLabels);
+  assert.deepEqual(published.destination, candidate.destination);
+  assert.equal(published.id, candidate.id);
+  assert.equal("css" in published, false);
+  assert.equal("tuningCss" in published, false);
+  // Absent for other kinds/paths even when side-effect data is present.
+  const foreground = { ...candidate, kind: "foreground", destination: { ...candidate.destination, path: "onSolid.primary.dark" } };
+  assert.equal("sideEffects" in publishedProposal(foreground, result), false);
+  const depth = { ...candidate, id: "browser-neutral-bg-dark", destination: { ...candidate.destination, path: "--color-tune-dark-bg-depth" } };
+  assert.equal("sideEffects" in publishedProposal(depth, result), false);
+  // Absent when measurements are unavailable, empty or malformed.
+  assert.equal("sideEffects" in publishedProposal(candidate, { valid: true, checks }), false);
+  assert.equal("sideEffects" in publishedProposal(candidate, { valid: true, checks, sideEffects: [] }), false);
+  assert.equal("sideEffects" in publishedProposal(candidate, { valid: true, checks, sideEffects: "none" }), false);
+});

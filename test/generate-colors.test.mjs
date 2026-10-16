@@ -3,7 +3,7 @@ import test from "node:test";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { contrast, fitToSrgb } from "../src/color-math.mjs";
+import { contrast, fitToSrgb, mixOklch as nativeMixOklch } from "../src/color-math.mjs";
 import { generateColorTokens } from "../src/generate-colors.mjs";
 import { parseOklch } from "../src/parse-palette.mjs";
 
@@ -132,9 +132,28 @@ function resolveColorExpression(declarations, expression, scheme, stack) {
     return resolveColorExpression(declarations, fallback, scheme, stack);
   }
 
+  const mixBody = unwrapFunction(value, "color-mix");
+  if (mixBody != null) {
+    const [space, weighted, second] = splitTopLevel(mixBody);
+    assert.equal(space, "in oklch");
+    const match = /^(.*)\s+(\d+(?:\.\d+)?)%$/.exec(weighted);
+    assert.ok(match, `Expected a weighted mix in ${value}.`);
+    const firstColor = resolveColorExpression(declarations, match[1], scheme, stack);
+    const secondColor = resolveColorExpression(declarations, second, scheme, stack);
+    const ratio = Number(match[2]) / 100;
+    let delta = secondColor.h - firstColor.h;
+    if (delta > 180) delta -= 360;
+    if (delta < -180) delta += 360;
+    return {
+      l: firstColor.l * ratio + secondColor.l * (1 - ratio),
+      c: firstColor.c * ratio + secondColor.c * (1 - ratio),
+      h: (firstColor.h + delta * (1 - ratio) + 360) % 360,
+    };
+  }
+
   const parsed = parseOklch(value);
   assert.deepEqual(parsed.errors, [], `Expected a resolvable OKLCH color, received ${value}.`);
-  return parsed.color;
+  return parsed.source;
 }
 
 function getLightnessSteps(css, name) {
@@ -152,7 +171,7 @@ function getDarkScaleColor(css, name, step) {
   const choices = splitTopLevel(lightDarkBody);
   const parsed = parseOklch(choices[1]);
   assert.deepEqual(parsed.errors, []);
-  return parsed.color;
+  return parsed.source;
 }
 
 
@@ -180,8 +199,8 @@ function getPercentageDeclaration(css, tokenName) {
 function assertMinContrast(foreground, background, target, label) {
   const ratio = contrast(foreground, background);
   assert.ok(
-    ratio >= target - 0.005,
-    `${label} contrast ${ratio.toFixed(3)} should be at least ${target.toFixed(1)} (tolerance 0.005).`,
+    ratio >= target,
+    `${label} contrast ${ratio} should be at least ${target}.`,
   );
 }
 
@@ -240,7 +259,7 @@ test("numeric scales are optional and never source semantic role families", asyn
   }
 });
 
-test("semantic role families meet essential light and dark contrast contracts", async (t) => {
+test("semantic families validate adapted text and report source-preserving on-solid shortfalls", async (t) => {
   const root = await createProject(t);
   const report = await generateColorTokens({
     root,
@@ -272,17 +291,33 @@ test("semantic role families meet essential light and dark contrast contracts", 
         }
       }
 
-      for (const foregroundToken of ["border", "border-strong", "solid", "solid-hover"]) {
-        const foreground = resolveThemeColor(declarations, `--color-${name}-${foregroundToken}`, scheme);
-        for (const [backgroundName, background] of neutralBackgrounds) {
-          assertMinContrast(foreground, background, 3, `${scheme} ${name}-${foregroundToken} vs ${backgroundName}`);
-        }
+      const identity = resolveThemeColor(declarations, `--color-${name}`, scheme);
+      for (const suffix of ["border", "solid"]) {
+        const color = resolveThemeColor(declarations, `--color-${name}-${suffix}`, scheme);
+        assertColorClose(color, identity, `${scheme} ${name}-${suffix} preserves the identity`);
+      }
+
+      const borderStrong = resolveThemeColor(declarations, `--color-${name}-border-strong`, scheme);
+      for (const [backgroundName, background] of neutralBackgrounds) {
+        assertMinContrast(borderStrong, background, 3, `${scheme} ${name}-border-strong vs ${backgroundName}`);
       }
 
       const onSolid = resolveThemeColor(declarations, `--color-${name}-on-solid`, scheme);
       for (const solidToken of ["solid", "solid-hover"]) {
         const solid = resolveThemeColor(declarations, `--color-${name}-${solidToken}`, scheme);
-        assertMinContrast(onSolid, solid, 4.6, `${scheme} ${name}-on-solid vs ${solidToken}`);
+        const label = `${scheme} ${name}-on-solid / ${solidToken}`;
+        const ratio = contrast(onSolid, solid);
+        const warning = report.warnings.find((message) => message.startsWith(`${label} is `));
+        // Only this known fixture pair misses the target; other pairs must not regress into warnings.
+        if (scheme === "light" && name === "primary" && solidToken === "solid-hover") {
+          assert.ok(ratio < report.config.contrast.onColor);
+          assert.ok(warning, `Expected a warning for ${label}, not a source-color correction.`);
+          assert.ok(warning.includes(`${ratio.toFixed(2)}:1`));
+          assert.ok(warning.includes("the selected foreground does not meet the target on this background."));
+        } else {
+          assert.equal(warning, undefined, `Unexpected warning for ${label}.`);
+          assertMinContrast(onSolid, solid, report.config.contrast.onColor, label);
+        }
       }
     }
 
@@ -290,6 +325,72 @@ test("semantic role families meet essential light and dark contrast contracts", 
     const onDecorative = resolveThemeColor(declarations, "--color-on-tertiary", scheme);
     assertMinContrast(onDecorative, decorative, 4.6, `${scheme} on-tertiary vs tertiary`);
   }
+});
+
+test("an unattainable common on-solid target warns without rewriting the source or hover", async (t) => {
+  const root = await createProject(t);
+  const report = await generateColorTokens({
+    root,
+    inlineConfig: { derivation: { dark: { mode: "static" } } },
+  });
+  const declarations = getDeclarations(report.css);
+  const solid = resolveThemeColor(declarations, "--color-primary-solid", "light");
+  const hover = resolveThemeColor(declarations, "--color-primary-solid-hover", "light");
+  const onSolid = resolveThemeColor(declarations, "--color-primary-on-solid", "light");
+
+  assertColorClose(solid, { l: 0.62, c: 0.16, h: 32 }, "authored primary solid");
+  assertColorClose(hover, fitToSrgb({ ...solid, l: 0.58 }), "source-derived hover");
+  // Even black on hover and white on solid miss the target: no common foreground can pass both.
+  assert.ok(contrast({ l: 0, c: 0, h: 0 }, hover) < report.config.contrast.onColor);
+  assert.ok(contrast({ l: 1, c: 0, h: 0 }, solid) < report.config.contrast.onColor);
+  assert.ok(contrast(onSolid, hover) < report.config.contrast.onColor - 0.005);
+  assertMinContrast(onSolid, solid, 4.5, "fixture on-solid vs solid WCAG AA");
+  assertMinContrast(onSolid, hover, 4.5, "fixture on-solid vs hover WCAG AA");
+  assert.ok(report.warnings.some((warning) => warning.startsWith("light primary-on-solid / solid-hover is ")));
+  assert.deepEqual(report.errors, []);
+});
+
+test("custom UI and feedback colors survive low canvas contrast while text variants remain accessible", async (t) => {
+  const palette = DEFAULT_PALETTE
+    .replace("oklch(0.62 0.16 32)", "oklch(0.8254 0.161821 89.164188)")
+    .replace("oklch(0.54 0.108 198)", "oklch(0.56 0.12 260)")
+    .replaceAll("role: ui;", "role: ui;\n  dark-blend: 0;")
+    .replaceAll("role: feedback;", "role: feedback;\n  dark-blend: 0;");
+  const root = await createProject(t, palette);
+  const report = await generateColorTokens({
+    root,
+    inlineConfig: {
+      contrast: { text: 7, darkRichness: 1 },
+      derivation: { dark: { mode: "static" } },
+    },
+  });
+  const declarations = getDeclarations(report.css);
+  const authored = {
+    primary: fitToSrgb({ l: 0.8254, c: 0.161821, h: 89.164188 }),
+    secondary: fitToSrgb({ l: 0.56, c: 0.12, h: 260 }),
+  };
+
+  for (const scheme of ["light", "dark"]) {
+    for (const [name, source] of Object.entries(authored)) {
+      for (const suffix of ["", "-border", "-solid"]) {
+        assertColorClose(resolveThemeColor(declarations, `--color-${name}${suffix}`, scheme), source, `${scheme} ${name}${suffix}`);
+      }
+      const backgrounds = ["--color-bg", "--color-surface", `--color-${name}-surface`, `--color-${name}-surface-strong`];
+      for (const suffix of ["text", "text-strong"]) {
+        const text = resolveThemeColor(declarations, `--color-${name}-${suffix}`, scheme);
+        for (const token of backgrounds) {
+          assertMinContrast(text, resolveThemeColor(declarations, token, scheme), 7, `${scheme} ${name}-${suffix} vs ${token}`);
+        }
+      }
+    }
+  }
+
+  const primary = resolveThemeColor(declarations, "--color-primary-solid", "light");
+  const canvas = resolveThemeColor(declarations, "--color-bg", "light");
+  assert.ok(contrast(primary, canvas) < report.config.contrast.ui);
+  assertMinContrast(resolveThemeColor(declarations, "--color-secondary-on-solid", "light"), resolveThemeColor(declarations, "--color-secondary-solid", "light"), report.config.contrast.onColor, "improved secondary foreground vs unchanged solid");
+    assert.ok(!report.warnings.some((warning) => warning.startsWith("light secondary-on-solid / solid is ")));
+  assert.deepEqual(report.errors, []);
 });
 
 test("text tokens can enforce WCAG AAA without raising on-color contrast", async (t) => {
@@ -343,6 +444,95 @@ test("text tokens can enforce WCAG AAA without raising on-color contrast", async
   assert.ok(onColorWarnings.every((warning) => warning.includes("target 4.60:1")));
 });
 
+test("capped dark text targets retain serialization headroom at 7.5:1", async (t) => {
+  const root = await createProject(t);
+  const report = await generateColorTokens({
+    root,
+    inlineConfig: {
+      contrast: { text: 7, maxIdentity: 7.5, darkRichness: 1.25 },
+      derivation: { dark: { mode: "static" } },
+    },
+  });
+  const declarations = getDeclarations(report.css);
+  const neutralBackgrounds = ["--color-bg", "--color-surface"];
+  for (const token of ["--color-text", "--color-text-muted"]) {
+    for (const background of neutralBackgrounds) {
+      assertMinContrast(resolveThemeColor(declarations, token, "dark"), resolveThemeColor(declarations, background, "dark"), 7.5, `${token} vs ${background}`);
+    }
+  }
+  for (const name of ["primary", "secondary"]) {
+    for (const suffix of ["text", "text-strong"]) {
+      for (const background of [...neutralBackgrounds, `--color-${name}-surface`, `--color-${name}-surface-strong`]) {
+        assertMinContrast(resolveThemeColor(declarations, `--color-${name}-${suffix}`, "dark"), resolveThemeColor(declarations, background, "dark"), 7.5, `${name}-${suffix} vs ${background}`);
+      }
+    }
+  }
+  assert.deepEqual(report.errors, []);
+});
+
+test("direct companion improvements preserve the existing decorative dark-richness policy", async (t) => {
+  const root = await createProject(t, DEFAULT_PALETTE.replace("oklch(0.88 0.12 85)", "oklch(0.72 0.18 280)"));
+  const report = await generateColorTokens({ root, suggest: false, inlineConfig: { contrast: { text: 7, onColor: 4.6, darkRichness: 1.25 } } });
+  const declarations = getDeclarations(report.css);
+  const foreground = resolveThemeColor(declarations, "--color-on-tertiary", "dark");
+  const background = resolveThemeColor(declarations, "--color-tertiary", "dark");
+  assertMinContrast(foreground, background, Math.min(report.config.contrast.maxIdentity, report.config.contrast.onColor * report.config.contrast.darkRichness), "decorative generation retains its existing richness target");
+});
+
+test("a permissive project target does not hide a below-minimum text result", async (t) => {
+  const root = await createProject(t);
+  const report = await generateColorTokens({
+    root,
+    suggest: false,
+    inlineConfig: { contrast: { text: 3, onColor: 3, darkRichness: 1 }, derivation: { dark: { mode: "static" } } },
+  });
+  const declarations = getDeclarations(report.css);
+  const ratio = contrast(resolveThemeColor(declarations, "--color-text-muted", "light"), resolveThemeColor(declarations, "--color-bg", "light"));
+  assert.ok(ratio >= 3 && ratio < 4.5);
+  const warning = report.warnings.find((entry) => entry.startsWith("light muted text / canvas is "));
+  assert.ok(warning?.includes("Status: below-minimum;"));
+  assert.ok(warning.includes("below the stated minimum"));
+  assert.deepEqual(report.errors, [], "Warning-only minimum classification must not introduce a stricter exit policy.");
+});
+
+test("direct companions and opaque control pairs are checked on their emitted values", async (t) => {
+  const root = await createProject(t);
+  const report = await generateColorTokens({
+    root,
+    suggest: false,
+    inlineConfig: { contrast: { onColor: 7 }, derivation: { dark: { mode: "static" } } },
+  });
+  const declarations = getDeclarations(report.css);
+  const verifyWarning = (label, foreground, background, target, minimum) => {
+    const ratio = contrast(foreground, background);
+    const warning = report.warnings.find((entry) => entry.startsWith(`${label} is `));
+    assert.equal(Boolean(warning), ratio < target || ratio < minimum, `${label}: exact emitted classification`);
+    if (warning) {
+      assert.ok(warning.includes(`Status: ${ratio < minimum ? "below-minimum" : "below-target"}`));
+    }
+  };
+  for (const scheme of ["light", "dark"]) {
+    for (const name of ["primary", "secondary"]) {
+      verifyWarning(`${scheme} on-${name} / ${name}`, resolveThemeColor(declarations, `--color-on-${name}`, scheme), resolveThemeColor(declarations, `--color-${name}`, scheme), 7, 4.5);
+      for (const token of ["bg", "surface", `${name}-surface`, `${name}-surface-strong`]) {
+        const background = resolveThemeColor(declarations, `--color-${token}`, scheme);
+        assertMinContrast(resolveThemeColor(declarations, `--color-${name}-text-strong`, scheme), background, scheme === "light" ? 4.6 : 4.6 * 1.15, `${scheme} text-strong / ${token}`);
+        assertMinContrast(resolveThemeColor(declarations, `--color-${name}-border-strong`, scheme), background, scheme === "light" ? 3 : 3 * 1.15, `${scheme} border-strong / ${token}`);
+      }
+    }
+    const text = resolveThemeColor(declarations, "--color-text", scheme);
+    const target = scheme === "light" ? report.config.contrast.text : report.config.contrast.text * report.config.contrast.darkRichness;
+    for (const [label, token] of [["control active text / active background", "--color-control-bg-active"], ["control text / focus background", "--color-control-focus-bg"]]) {
+      verifyWarning(`${scheme} ${label}`, text, resolveThemeColor(declarations, token, scheme), target, 4.5);
+    }
+    const border = resolveThemeColor(declarations, "--color-control-border-active", scheme);
+    for (const [label, token] of [["canvas", "--color-bg"], ["active background", "--color-control-bg-active"]]) {
+      verifyWarning(`${scheme} control active border / ${label}`, border, resolveThemeColor(declarations, token, scheme), 3, 3);
+    }
+  }
+  assert.ok(report.warnings.some((entry) => entry.startsWith("light on-primary / primary is ")), "Fixture must exercise direct pair shortfalls separately from functional warnings.");
+});
+
 test("relative dark tuning defaults preserve the validated muted-text contract", async (t) => {
   const palette = DEFAULT_PALETTE.replace("oklch(0.962 0.015 88)", "oklch(0.7 0 88)");
   const root = await createProject(t, palette);
@@ -360,6 +550,50 @@ test("relative dark tuning defaults preserve the validated muted-text contract",
   assertMinContrast(mutedDark, surfaceDark, target, "relative dark muted text vs surface");
 });
 
+test("relative muted text survives rounding the searched text percentage at the safety boundary", async (t) => {
+  const palette = DEFAULT_PALETTE.replace("oklch(0.962 0.015 88)", "oklch(0.5 0 88)");
+  const root = await createProject(t, palette);
+  const report = await generateColorTokens({ root, suggest: false });
+  const canvas = { l: 0.5, c: 0, h: 88 };
+  const bg = nativeMixOklch(canvas, { l: 0, c: 0, h: null }, 0.14);
+  const surface = nativeMixOklch(canvas, { l: 0, c: 0, h: null }, 0.18);
+  const textRatio = getPercentageDeclaration(report.css, "--color-tune-dark-text-depth");
+  const mutedRatio = getPercentageDeclaration(report.css, "--color-tune-dark-muted-depth");
+  assert.equal(textRatio, 0.7895, "The emitted 78.96% missed the safety endpoint needed by muted text.");
+  const text = nativeMixOklch(canvas, { l: 0.99, c: 0, h: null }, textRatio);
+  const muted = nativeMixOklch(text, bg, mutedRatio);
+  for (const background of [bg, surface]) {
+    assertMinContrast(text, background, 4.6 * 1.15 + 0.02, "emitted dark text");
+    assertMinContrast(muted, background, 4.6 * 1.15, "emitted dark muted text");
+  }
+  assert.deepEqual(report.errors, []);
+});
+
+test("body and family text can use exact endpoints beyond the legacy .02/.99 search", async (t) => {
+  const palette = DEFAULT_PALETTE
+    .replace("oklch(0.962 0.015 88)", "oklch(0.56 0 88)")
+    .replace("oklch(0.62 0.16 32)", "oklch(0.2 0 0)")
+    .replace("oklch(0.54 0.108 198)", "oklch(0.3 0 0)");
+  const root = await createProject(t, palette);
+  const report = await generateColorTokens({ root, suggest: false, inlineConfig: { derivation: { dark: { mode: "static" } } } });
+  const declarations = getDeclarations(report.css);
+  const canvas = resolveThemeColor(declarations, "--color-bg", "light");
+  assert.ok(contrast({ l: 0.99, c: 0, h: 0 }, canvas) < 4.6);
+  for (const token of ["--color-text", "--color-text-muted"]) {
+    for (const background of ["--color-bg", "--color-surface"]) {
+      assertMinContrast(resolveThemeColor(declarations, token, "light"), resolveThemeColor(declarations, background, "light"), 4.6, token);
+    }
+  }
+  for (const name of ["primary", "secondary"]) {
+    for (const suffix of ["text", "text-strong"]) {
+      for (const background of ["--color-bg", "--color-surface", `--color-${name}-surface`, `--color-${name}-surface-strong`]) {
+        assertMinContrast(resolveThemeColor(declarations, `--color-${name}-${suffix}`, "light"), resolveThemeColor(declarations, background, "light"), 4.6, `${name}-${suffix}`);
+      }
+    }
+  }
+  assert.deepEqual(report.errors, []);
+});
+
 test("adaptive dark fallback feeds the numeric scale base", async (t) => {
   const root = await createProject(t);
   const report = await generateColorTokens({
@@ -373,7 +607,7 @@ test("adaptive dark fallback feeds the numeric scale base", async (t) => {
   });
 
   assert.match(report.css, /--_color-primary-source: oklch\(0\.62 0\.16 32\);/);
-  assert.match(report.css, /--_color-primary-dark-generated: color-mix\(in oklch, var\(--_color-primary-source\) 81%, oklch\(1 0 0\)\);/);
+  assert.match(report.css, /--_color-primary-dark-generated: color-mix\(in oklch, var\(--_color-primary-source\) 81%, oklch\(1 0 none\)\);/);
 
   const expectedDark = mixOklch(
     { l: 0.62, c: 0.16, h: 32 },
@@ -409,7 +643,7 @@ test("dark-blend maps 0–100 to a bounded 0–28% white wash", async (t) => {
 
     assert.match(
       report.css,
-      new RegExp(`--_color-primary-dark-generated: color-mix\\(in oklch, var\\(--_color-primary-source\\) ${sourcePercentage}%, oklch\\(1 0 0\\)\\);`),
+      new RegExp(`--_color-primary-dark-generated: color-mix\\(in oklch, var\\(--_color-primary-source\\) ${sourcePercentage}%, oklch\\(1 0 none\\)\\);`),
     );
 
     const expectedDark = mixOklch(

@@ -3,11 +3,11 @@ import test from "node:test";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { assertReportInputsUnchanged, captureReportInputs, darkFillTuningIdentity, mergeSideEffect, proposalImproves, publishedProposal, replacePaletteSource, replaceTuningDeclaration, reportCandidates, reportOverlapScenario, reportScenario, reportSideEffect, reportSnapshot, worstSideEffect } from "../../../scripts/smart-colors-report.mjs";
+import { assertReportInputsUnchanged, captureReportInputs, darkFillTuningIdentity, mergeSideEffect, proposalImproves, publishedProposal, readPaletteDarkBlend, replacePaletteDarkBlend, replacePaletteSource, replaceTuningDeclaration, reportCandidates, reportOverlapScenario, reportScenario, reportSideEffect, reportSnapshot, worstSideEffect } from "../../../scripts/smart-colors-report.mjs";
 
 import { analyzeColorTokens } from "../src/generate-colors.mjs";
 import { nearestLightness, resolvedColor, sourceColorValue } from "../src/contrast-advice.mjs";
-import { contrast, mixOklch, oklch } from "../src/color-math.mjs";
+import { contrast, fitToSrgb, mixOklch, oklch, serializedColor } from "../src/color-math.mjs";
 
 const color = { l: 0.5, c: 0.02, h: 32 };
 const row = (label, status = "pass", ratio = 7.2) => ({
@@ -746,4 +746,244 @@ test("dark fill side effects measure both neutral backgrounds and keep the worst
   assert.equal(merged.find((entry) => entry.backgroundToken === "--color-bg"), canvasEntry, "aggregation must not mutate the previous list");
   // Only the two measured neutral surfaces have a side-effect background.
   assert.equal(reportSideEffect("primary", sideEffectBefore, sideEffectAfter, "--color-text"), null);
+});
+
+// ─── Palette source levers: canvas lightness and dark-blend ───────────────
+// Both candidates rewrite src/styles/tokens/palette.css and are verified
+// against the edited bytes, regenerated in a temporary root. The oracles below
+// replicate the grids and the documented mix contract independently of the
+// report implementation.
+
+const CANVAS_PALETTE = `@property --palette-bg {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(.962 .015 88);
+  role: canvas;
+}
+
+@property --palette-ink {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(.28 .007 3.68);
+  role: ink;
+}
+
+@property --palette-primary {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(.62 .16 32.41);
+  role: ui;
+}`;
+
+const DECLARED_BLEND_PALETTE = CANVAS_PALETTE.replace("  role: ui;", "  role: ui;\n  dark-blend: 30;");
+const DEEP_PALETTE = CANVAS_PALETTE.replace("oklch(.62 .16 32.41)", "oklch(.45 .16 32.41)");
+const DECORATIVE_PALETTE = `${CANVAS_PALETTE}
+
+@property --palette-spark {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(.72 .18 280);
+  role: decorative;
+}`;
+
+async function paletteFixture(t, palette) {
+  const root = await mkdtemp(path.join(tmpdir(), "smart-colors-palette-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(path.join(root, "src/styles/tokens"), { recursive: true });
+  await writeFile(path.join(root, "src/styles/tokens/palette.css"), palette);
+  return root;
+}
+
+const stripComments = (css) => css.replace(/\/\*[\s\S]*?\*\//g, "");
+
+// Integer 0..100 grid, nearest to the active blend first, with the same
+// tie-break as the report's grids. The fill formula mirrors the documented
+// contract: dark-blend 0..100 mixes 0..28% white into the authored source.
+const blendGrid = (current) => Array.from({ length: 101 }, (_, index) => index)
+  .sort((a, b) => Math.abs(a - current) - Math.abs(b - current) || a - b);
+const blendFill = (light, blend) => mixOklch(light, { l: 1, c: 0, h: null }, Number((100 - blend * 0.28).toFixed(4)) / 100);
+
+function measuredRow(label, foreground, background, foregroundColor, backgroundColor, target = 4.6, minimum = 4.5) {
+  const ratio = contrast(foregroundColor, backgroundColor);
+  const status = ratio < minimum ? "below-minimum" : ratio < target ? "below-target" : "pass";
+  return { label, foreground, background, foregroundColor, backgroundColor, ratio, target, minimum, kind: "text", status };
+}
+
+test("palette dark-blend replaces or inserts one descriptor and refuses ambiguous or malformed blocks", () => {
+  assert.deepEqual(readPaletteDarkBlend(CANVAS_PALETTE, "--palette-primary"), { value: null });
+  assert.equal(replacePaletteDarkBlend(CANVAS_PALETTE, "--palette-primary", 81), CANVAS_PALETTE.replace("  role: ui;", "  role: ui;\n  dark-blend: 81;"));
+  assert.deepEqual(readPaletteDarkBlend(DECLARED_BLEND_PALETTE, "--palette-primary"), { value: 30 });
+  assert.equal(replacePaletteDarkBlend(DECLARED_BLEND_PALETTE, "--palette-primary", 86), DECLARED_BLEND_PALETTE.replace("dark-blend: 30;", "dark-blend: 86;"));
+  // A single-line block has no own-line role: the insertion stays inline.
+  const single = "@property --palette-primary { initial-value: oklch(.62 .16 32.41); role: ui; }";
+  assert.equal(replacePaletteDarkBlend(single, "--palette-primary", 50), single.replace("role: ui;", "role: ui; dark-blend: 50;"));
+  // Disabled examples are inert: the descriptor counts as missing and the rewrite adds a real line.
+  const commented = DECLARED_BLEND_PALETTE.replace("  dark-blend: 30;", "  /* dark-blend: 30; */");
+  assert.deepEqual(readPaletteDarkBlend(commented, "--palette-primary"), { value: null });
+  assert.equal(replacePaletteDarkBlend(commented, "--palette-primary", 50), commented.replace("  role: ui;", "  role: ui;\n  dark-blend: 50;"));
+  // Ambiguous or malformed blocks stay a human decision: no speculative write.
+  for (const css of [
+    `${CANVAS_PALETTE}\n${CANVAS_PALETTE}`,
+    DECLARED_BLEND_PALETTE.replace("  dark-blend: 30;", "  dark-blend: 30;\n  dark-blend: 31;"),
+    DECLARED_BLEND_PALETTE.replace("dark-blend: 30;", "dark-blend: red;"),
+    DECLARED_BLEND_PALETTE.replace("dark-blend: 30;", "dark-blend: 120;"),
+    DECLARED_BLEND_PALETTE.replace("dark-blend: 30;", "dark-blend: ;"),
+  ]) {
+    assert.equal(readPaletteDarkBlend(css, "--palette-primary"), null, `read must refuse ${JSON.stringify(css.slice(0, 48))}`);
+    assert.equal(replacePaletteDarkBlend(css, "--palette-primary", 50), null, `write must refuse ${JSON.stringify(css.slice(0, 48))}`);
+  }
+  // Insertion needs a readable role anchor; other syntaxes or tokens stay silent.
+  const hiddenRole = CANVAS_PALETTE.replace("  role: ui;", "  /* role: ui; */");
+  assert.deepEqual(readPaletteDarkBlend(hiddenRole, "--palette-primary"), { value: null });
+  assert.equal(replacePaletteDarkBlend(hiddenRole, "--palette-primary", 50), null);
+  assert.equal(replacePaletteDarkBlend(":root { --palette-primary: oklch(.62 .16 32.41); }", "--palette-primary", 50), null);
+  assert.equal(replacePaletteDarkBlend(CANVAS_PALETTE, "--palette-other", 50), null);
+});
+
+test("palette-bg-lightness proposes the nearest canvas lightness that clears the measured neutral margin", async (t) => {
+  const root = await paletteFixture(t, CANVAS_PALETTE);
+  const analysis = await analyzeColorTokens({ root, suggest: false });
+  const canvas = { l: 0.962, c: 0.015, h: 88 };
+  const surface = { l: 0.944, c: 0.015, h: 88 };
+  const muted = { l: 0.54, c: 0.0046, h: 3.68 };
+  const tuned = [
+    measuredRow("light neutral text / canvas", "--color-text", "--color-bg", { l: 0.28, c: 0.007, h: 3.68 }, canvas),
+    measuredRow("light muted text / canvas", "--color-text-muted", "--color-bg", muted, canvas),
+    measuredRow("light muted text / surface", "--color-text-muted", "--color-surface", muted, surface),
+  ];
+  assert.deepEqual(tuned.map((row) => row.status), ["pass", "below-target", "below-minimum"]);
+  const states = [{ scheme: "light", preference: "light", tuned, computed: { tokens: new Map([["--color-bg", canvas], ["--color-surface", surface]]) } }];
+  const candidates = await reportCandidates(root, analysis, ":root {}", states);
+  const candidate = candidates.find((item) => item.id === "palette-bg-lightness");
+  assert.ok(candidate, "expected a canvas source proposal");
+  // Independent oracle: own 4-decimal grid, surface modelled with the measured shift.
+  const shift = surface.l - canvas.l;
+  const lightnessGrid = Array.from({ length: 10001 }, (_, index) => index / 10000)
+    .sort((a, b) => Math.abs(a - 0.962) - Math.abs(b - 0.962) || a - b);
+  const expected = lightnessGrid.find((l) => tuned.every((pair) => contrast(pair.foregroundColor,
+    pair.background === "--color-bg" ? { l, c: canvas.c, h: canvas.h } : { l: l + shift, c: surface.c, h: surface.h }) >= margin(pair)));
+  assert.ok(Number.isFinite(expected) && expected > 0.962, "fixture needs a reachable lighter canvas");
+  assert.equal(candidate.kind, "palette-source");
+  assert.deepEqual(candidate.destination, {
+    file: "src/styles/tokens/palette.css", path: "--palette-bg",
+    snippet: `initial-value: ${oklch({ l: expected, c: 0.015, h: 88 })};`,
+  });
+  assert.deepEqual(candidate.changes, [{ label: "--palette-bg", before: { l: 0.962, c: 0.015, h: 88 }, after: { l: expected, c: 0.015, h: 88 } }]);
+  assert.deepEqual(candidate.issueLabels, ["light muted text / canvas", "light muted text / surface"]);
+  assert.equal(candidate.tuningCss, ":root {}");
+  const rewritten = replacePaletteSource(CANVAS_PALETTE, "--palette-bg", oklch({ l: expected, c: 0.015, h: 88 }));
+  const trial = await analyzeColorTokens({ root, config: analysis.config, suggest: false }, rewritten);
+  assert.equal(stripComments(candidate.css), stripComments(trial.css), "the trial must regenerate from the rewritten palette");
+  // Palette source first: the tuning candidate stays an alternative.
+  const tuning = candidates.findIndex((item) => item.id === "browser-neutral-surface");
+  assert.ok(tuning !== -1, "the tuning alternative must be offered for the same surface failure");
+  assert.ok(candidates.indexOf(candidate) < tuning, "the palette source must precede the tuning candidate");
+});
+
+test("palette-bg-lightness stays silent when the canvas cannot be rewritten or no lightness resolves", async (t) => {
+  const root = await paletteFixture(t, CANVAS_PALETTE);
+  const analysis = await analyzeColorTokens({ root, suggest: false });
+  const canvas = { l: 0.962, c: 0.015, h: 88 };
+  const surface = { l: 0.944, c: 0.015, h: 88 };
+  const muted = { l: 0.54, c: 0.0046, h: 3.68 };
+  const tuned = [
+    measuredRow("light muted text / canvas", "--color-text-muted", "--color-bg", muted, canvas),
+    measuredRow("light muted text / surface", "--color-text-muted", "--color-surface", muted, surface),
+  ];
+  const states = [{ scheme: "light", preference: "light", tuned, computed: { tokens: new Map([["--color-bg", canvas], ["--color-surface", surface]]) } }];
+  // Ambiguous source: the rewrite must not guess which @property to edit.
+  const ambiguous = { ...analysis, inputs: { ...analysis.inputs, paletteCss: `${CANVAS_PALETTE}\n${CANVAS_PALETTE}` } };
+  const ambiguousCandidates = await reportCandidates(root, ambiguous, ":root {}", states);
+  assert.equal(ambiguousCandidates.some((item) => item.id === "palette-bg-lightness"), false);
+  // No lightness on the grid clears a 21:1 requirement from a mid-tone foreground.
+  const impossible = [measuredRow("light neutral text / canvas", "--color-text", "--color-bg", { l: 0.5, c: 0, h: 0 }, canvas, 21, 21)];
+  assert.equal(impossible[0].status, "below-minimum");
+  const impossibleCandidates = await reportCandidates(root, analysis, ":root {}", [{ scheme: "light", preference: "light", tuned: impossible, computed: { tokens: new Map([["--color-bg", canvas], ["--color-surface", surface]]) } }]);
+  assert.equal(impossibleCandidates.some((item) => item.id === "palette-bg-lightness"), false);
+  // Without the browser-resolved neutrals the canvas move is not measurable.
+  const blind = [{ scheme: "light", preference: "light", tuned: [tuned[0]] }];
+  assert.equal((await reportCandidates(root, analysis, ":root {}", blind)).some((item) => item.id === "palette-bg-lightness"), false);
+});
+
+test("palette-dark-blend replaces the declared descriptor and is offered before the tuning escape hatch", async (t) => {
+  const root = await paletteFixture(t, DECLARED_BLEND_PALETTE);
+  const analysis = await analyzeColorTokens({ root, suggest: false });
+  assert.equal(analysis.model.identities.primary.darkBlend, 30, "fixture must declare the descriptor");
+  const light = serializedColor(fitToSrgb(analysis.authoredTokens["palette-primary"]));
+  const fill = blendFill(light, 30);
+  const tuned = [measuredRow("dark on-primary / primary", "--color-on-primary", "--color-primary", { l: 0.3, c: 0, h: 0 }, fill)];
+  assert.equal(tuned[0].status, "below-minimum", "fixture needs a dark fill shortfall");
+  const candidates = await reportCandidates(root, analysis, ":root {}", [{ scheme: "dark", preference: "dark", tuned }]);
+  const candidate = candidates.find((item) => item.id === "palette-dark-blend:primary");
+  assert.ok(candidate, "expected a dark-blend palette proposal");
+  const expected = blendGrid(30).find((blend) => contrast(tuned[0].foregroundColor, blendFill(light, blend)) >= margin(tuned[0]));
+  assert.ok(Number.isInteger(expected) && expected > 30, "fixture needs a reachable lighter dark fill");
+  assert.equal(candidate.kind, "palette-source");
+  assert.deepEqual(candidate.destination, { file: "src/styles/tokens/palette.css", path: "dark-blend", snippet: `dark-blend: ${expected};` });
+  assert.deepEqual(candidate.changes, [{ label: "--color-primary (dark)", before: fill, after: blendFill(light, expected) }]);
+  assert.deepEqual(candidate.issueLabels, ["dark on-primary / primary"]);
+  assert.equal(candidate.tuningCss, ":root {}");
+  const rewritten = replacePaletteDarkBlend(DECLARED_BLEND_PALETTE, "--palette-primary", expected);
+  assert.equal(rewritten, DECLARED_BLEND_PALETTE.replace("dark-blend: 30;", `dark-blend: ${expected};`));
+  const trial = await analyzeColorTokens({ root, config: analysis.config, suggest: false }, rewritten);
+  assert.equal(stripComments(candidate.css), stripComments(trial.css), "the trial must regenerate from the rewritten palette");
+  const escape = candidates.findIndex((item) => item.id === "browser-dark-fill:primary");
+  assert.ok(escape !== -1 && candidates.indexOf(candidate) < escape, "the palette source must precede the tuning escape hatch");
+});
+
+test("palette-dark-blend inserts the missing descriptor next to role and regenerates the model", async (t) => {
+  const root = await paletteFixture(t, DEEP_PALETTE);
+  const analysis = await analyzeColorTokens({ root, suggest: false });
+  const light = serializedColor(fitToSrgb(analysis.authoredTokens["palette-primary"]));
+  // Without the descriptor the effective blend is the adaptive fallback (0.5 + L/2).
+  const reference = ((1 - Number(((0.5 + light.l * 0.5) * 100).toFixed(4)) / 100) / 0.28) * 100;
+  const fill = blendFill(light, reference);
+  const tuned = [measuredRow("dark on-primary / primary", "--color-on-primary", "--color-primary", { l: 0.85, c: 0, h: 0 }, fill)];
+  assert.equal(tuned[0].status, "below-minimum", "fixture needs a dark fill shortfall");
+  const candidates = await reportCandidates(root, analysis, ":root {}", [{ scheme: "dark", preference: "dark", tuned }]);
+  const candidate = candidates.find((item) => item.id === "palette-dark-blend:primary");
+  assert.ok(candidate, "expected a dark-blend proposal from the adaptive reference");
+  const expected = blendGrid(reference).find((blend) => contrast(tuned[0].foregroundColor, blendFill(light, blend)) >= margin(tuned[0]));
+  assert.ok(Number.isInteger(expected) && expected < reference, "fixture needs a reachable darker dark fill");
+  assert.deepEqual(candidate.destination, { file: "src/styles/tokens/palette.css", path: "dark-blend", snippet: `dark-blend: ${expected};` });
+  assert.deepEqual(candidate.changes[0].after, blendFill(light, expected));
+  assert.deepEqual(candidate.issueLabels, ["dark on-primary / primary"]);
+  // The missing descriptor is inserted next to role: the rewrite path is the insertion.
+  const rewritten = replacePaletteDarkBlend(DEEP_PALETTE, "--palette-primary", expected);
+  assert.equal(rewritten, DEEP_PALETTE.replace("  role: ui;", `  role: ui;\n  dark-blend: ${expected};`));
+  assert.deepEqual(readPaletteDarkBlend(rewritten, "--palette-primary"), { value: expected });
+  const trial = await analyzeColorTokens({ root, config: analysis.config, suggest: false }, rewritten);
+  assert.equal(stripComments(candidate.css), stripComments(trial.css));
+  const escape = candidates.findIndex((item) => item.id === "browser-dark-fill:primary");
+  assert.ok(escape !== -1 && candidates.indexOf(candidate) < escape);
+});
+
+test("palette-dark-blend stays silent for decorative roles, unreachable searches and unwritable palettes", async (t) => {
+  const root = await paletteFixture(t, DECORATIVE_PALETTE);
+  const analysis = await analyzeColorTokens({ root, suggest: false });
+  const decorative = [measuredRow("dark on-spark / spark", "--color-on-spark", "--color-spark", { l: 0.5, c: 0, h: 0 }, { l: 0.55, c: 0.12, h: 280 })];
+  assert.equal(decorative[0].status, "below-minimum");
+  const decorativeCandidates = await reportCandidates(root, analysis, ":root {}", [{ scheme: "dark", preference: "dark", tuned: decorative }]);
+  assert.equal(decorativeCandidates.some((item) => item.id.startsWith("palette-dark-blend:")), false, "dark-blend exists only for ui/feedback roles");
+  const declaredRoot = await paletteFixture(t, DECLARED_BLEND_PALETTE);
+  const declaredAnalysis = await analyzeColorTokens({ root: declaredRoot, suggest: false });
+  const light = serializedColor(fitToSrgb(declaredAnalysis.authoredTokens["palette-primary"]));
+  const fill = blendFill(light, 30);
+  // No integer blend reaches a light companion on this mid-tone source.
+  const unreachable = [measuredRow("dark on-primary / primary", "--color-on-primary", "--color-primary", { l: 0.97, c: 0, h: 0 }, fill)];
+  assert.equal(unreachable[0].status, "below-minimum");
+  const searched = await reportCandidates(declaredRoot, declaredAnalysis, ":root {}", [{ scheme: "dark", preference: "dark", tuned: unreachable }]);
+  assert.equal(searched.some((item) => item.id === "palette-dark-blend:primary"), false);
+  // Writable search, but no safe rewrite target: no speculative write.
+  const reachable = [measuredRow("dark on-primary / primary", "--color-on-primary", "--color-primary", { l: 0.3, c: 0, h: 0 }, fill)];
+  assert.equal(reachable[0].status, "below-minimum");
+  for (const paletteCss of [
+    `${DECLARED_BLEND_PALETTE}\n${DECLARED_BLEND_PALETTE}`,
+    DECLARED_BLEND_PALETTE.replace("dark-blend: 30;", "dark-blend: red;"),
+    CANVAS_PALETTE.replace("  role: ui;", "  /* role: ui; */"),
+  ]) {
+    const unwritable = { ...declaredAnalysis, inputs: { ...declaredAnalysis.inputs, paletteCss } };
+    const silent = await reportCandidates(declaredRoot, unwritable, ":root {}", [{ scheme: "dark", preference: "dark", tuned: reachable }]);
+    assert.equal(silent.some((item) => item.id === "palette-dark-blend:primary"), false, `expected silence for ${JSON.stringify(paletteCss.slice(0, 48))}`);
+  }
 });

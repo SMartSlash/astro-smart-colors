@@ -6,6 +6,7 @@ export interface GenerateColorTokensOptions {
   inlineConfig?: SmartColorsUserConfig;
   config?: SmartColorsConfig;
   check?: boolean;
+  suggest?: boolean;
 }
 
 export interface GeneratedSmartColorsOutput {
@@ -20,6 +21,7 @@ export interface GenerateColorTokensReport {
   outputs: GeneratedSmartColorsOutput[];
   config: SmartColorsConfig;
   warnings: string[];
+  suggestions: string[];
   errors: string[];
 }
 

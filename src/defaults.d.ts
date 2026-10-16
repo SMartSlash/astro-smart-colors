@@ -32,6 +32,8 @@ export interface ResolvedDecorativeDef {
 export type IdentityConfig = IdentityInputDef | string;
 export type DecorativeConfig = DecorativeInputDef | string;
 
+export type SmartOnSolidConfig = Record<string, { light?: string; dark?: string }>;
+
 export interface SmartColorsContrastConfig {
   text: number;
   onColor: number;
@@ -89,6 +91,7 @@ export interface SmartColorsConfig {
     focus: string | null;
   };
   aliases: Record<string, string>;
+  onSolid: SmartOnSolidConfig;
   scales: SmartColorScalesConfig;
   derivation: SmartColorsDerivationConfig;
   motion: SmartColorsMotionConfig;
@@ -116,6 +119,7 @@ export interface SmartColorsUserConfig {
     focus?: string | null;
   };
   aliases?: Record<string, string>;
+  onSolid?: SmartOnSolidConfig;
   scales?: SmartColorScalesUserConfig;
   derivation?: {
     surface?: Partial<SmartColorsDerivationConfig["surface"]>;

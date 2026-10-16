@@ -4,10 +4,11 @@ import { defaultSmartColorsConfig } from "./defaults.mjs";
 
 export const DEFAULT_CONFIG_FILE = "smart-colors.config.mjs";
 
-export async function loadSmartColorsConfig({ root, configFile = DEFAULT_CONFIG_FILE, inlineConfig = {} } = {}) {
+export async function loadSmartColorsConfig({ root, configFile, inlineConfig = {} } = {}) {
   const rootUrl = toUrl(root ?? process.cwd());
-  const configUrl = new URL(configFile, rootUrl);
-  const fileConfig = await importConfigIfPresent(configUrl);
+  const optional = configFile === undefined;
+  const configUrl = new URL(optional ? DEFAULT_CONFIG_FILE : configFile, rootUrl);
+  const fileConfig = await importConfigIfPresent(configUrl, optional);
   return normalizeConfig(mergeConfig(defaultSmartColorsConfig, fileConfig, inlineConfig));
 }
 
@@ -15,11 +16,12 @@ export function resolveProjectUrl(root, path) {
   return new URL(path, toUrl(root));
 }
 
-async function importConfigIfPresent(configUrl) {
+async function importConfigIfPresent(configUrl, optional) {
   try {
     await access(configUrl);
-  } catch {
-    return {};
+  } catch (error) {
+    if (optional && error.code === "ENOENT") return {};
+    throw error;
   }
 
   const imported = await import(`${configUrl.href}?smart-colors=${Date.now()}`);

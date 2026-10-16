@@ -39,6 +39,9 @@ try {
   for (const warning of report.warnings) {
     console.warn(`[smart-colors] ${warning}`);
   }
+  for (const suggestion of report.suggestions) {
+    console.warn(`[smart-colors] Suggestion: ${suggestion}`);
+  }
 
   if (report.changed && parsed.command !== "check") {
     const generated = report.outputs.filter((output) => output.changed).map((output) => output.path);

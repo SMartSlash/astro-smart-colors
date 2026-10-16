@@ -2,15 +2,25 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { contrast, clamp, fitToSrgb, oklch } from "./color-math.mjs";
+import { contrast, clamp, fitToSrgb, mixOklch, oklch, serializedColor } from "./color-math.mjs";
 import { formatColorsCss, formatColorsMotionCss } from "./format-css.mjs";
-import { loadSmartColorsConfig, resolveProjectUrl } from "./load-config.mjs";
+import { DEFAULT_CONFIG_FILE, loadSmartColorsConfig, resolveProjectUrl } from "./load-config.mjs";
+import { contrastSummary, meetsSolidTarget, nearestLightness, resolvedColor, solidContrasts, sourceColorValue } from "./contrast-advice.mjs";
 import { parseOklch, parsePalette, parsePaletteWithDiagnostics, tokenKey } from "./parse-palette.mjs";
 import { validateSmartColorsInput } from "./validate-config.mjs";
+import { validateOutputPaths } from "./output-paths.mjs";
+import { bestOnSolid, chooseForeground } from "./foreground-solver.mjs";
+import { contrastDiagnostic, diagnosticsRegress } from "./contrast-diagnostics.mjs";
 
 const MAX_DARK_BLEND_WHITE_RATIO = 0.28;
 
-export async function generateColorTokens(options = {}) {
+// Internal inspection entry point, deliberately not a separate package export.
+// Input/I/O errors throw; contrast errors remain inspectable and never write CSS.
+export async function analyzeColorTokens(options = {}, paletteSnapshot) {
+  return inspectColorTokens(options, false, paletteSnapshot);
+}
+
+async function inspectColorTokens(options, strict, paletteSnapshot) {
   const root = options.root ?? process.cwd();
   const config = options.config ?? await loadSmartColorsConfig({
     root,
@@ -18,8 +28,11 @@ export async function generateColorTokens(options = {}) {
     inlineConfig: options.inlineConfig,
   });
 
+  await validateOutputPaths({ root, config, configFile: options.configFile });
+
   const paletteUrl = resolveProjectUrl(root, config.palette);
-  const paletteCss = await readFile(paletteUrl, "utf8");
+  if (paletteSnapshot !== undefined && typeof paletteSnapshot !== "string") throw new TypeError("Palette snapshot must be a CSS string.");
+  const paletteCss = paletteSnapshot ?? await readFile(paletteUrl, "utf8");
   const parsedPalette = parsePaletteWithDiagnostics(paletteCss);
   const palette = parsedPalette.tokens;
   const annotatedRoles = parsedPalette.annotatedRoles ?? {};
@@ -32,9 +45,32 @@ export async function generateColorTokens(options = {}) {
   }
 
   const model = buildColorModel(palette, mergedConfig, annotatedDarkBlends);
+  if (strict && model.errors.length) {
+    throw new Error(`Smart Colors generated an invalid contrast contract:\n${model.errors.map((error) => `- ${error}`).join("\n")}`);
+  }
   const warnings = [...inputValidation.warnings, ...model.warnings];
-  const css = formatColorsCss(model, mergedConfig);
-  const motionCss = mergedConfig.motion.enabled ? formatColorsMotionCss(model) : null;
+  const advice = options.suggest === false || model.errors.length
+    ? { suggestions: [], proposals: [] }
+    : buildContrastSuggestions(model, palette, parsedPalette.authoredTokens, mergedConfig, annotatedDarkBlends, options.configFile ?? DEFAULT_CONFIG_FILE, paletteCss);
+  return {
+    inputs: { paletteCss },
+    model,
+    config: mergedConfig,
+    palette,
+    authoredTokens: parsedPalette.authoredTokens,
+    css: formatColorsCss(model, mergedConfig),
+    motionCss: mergedConfig.motion.enabled ? formatColorsMotionCss(model) : null,
+    diagnostics: model.diagnostics,
+    proposals: advice.proposals,
+    suggestions: advice.suggestions,
+    errors: model.errors,
+    warnings,
+  };
+}
+
+export async function generateColorTokens(options = {}) {
+  const root = options.root ?? process.cwd();
+  const { config, css, motionCss, warnings, suggestions } = await inspectColorTokens(options, true);
   const outputSpecs = [
     { path: config.output, css },
     ...(motionCss == null ? [] : [{ path: config.motion.output, css: motionCss }]),
@@ -62,8 +98,9 @@ export async function generateColorTokens(options = {}) {
     css,
     motionCss,
     outputs: outputStates.map((output) => ({ path: output.path, changed: output.changed })),
-    config: mergedConfig,
+    config,
     warnings,
+    suggestions,
     errors,
   };
 }
@@ -111,7 +148,7 @@ function mergeAnnotatedRoles(config, annotatedRoles, palette) {
 
   for (const [tokenKey, role] of Object.entries(annotatedRoles)) {
     if (role === "canvas" || role === "ink") continue;
-    if (!palette[tokenKey]) continue;
+    if (!Object.hasOwn(palette, tokenKey)) continue;
 
     const publicName = palettePublicName(tokenKey);
     const customProp = `--${tokenKey}`;
@@ -152,32 +189,33 @@ function buildColorModel(palette, config, annotatedDarkBlends = {}) {
   const darkOnColorContrast = Math.min(maxIdentityContrast, minOnColorContrast * darkRichness);
   const { derivation: deriv } = config;
 
-  const bgLight = fitToSrgb(palette[tokenKey(config.roles.canvas)]);
+  const bgLight = serializedColor(fitToSrgb(palette[tokenKey(config.roles.canvas)]));
   const inkSource = fitToSrgb(palette[tokenKey(config.roles.ink)]);
   const relativeDark = deriv.dark.mode === "relative";
   const bgDark = relativeDark
-    ? mixOklch(bgLight, { l: 0, c: 0, h: bgLight.h }, deriv.dark.bgMixRatio / 100)
-    : fitToSrgb({
+    ? mixOklch(bgLight, { l: 0, c: 0, h: null }, deriv.dark.bgMixRatio / 100)
+    : serializedColor(fitToSrgb({
       l: clamp(bgLight.l * deriv.dark.bgLightnessFactor, 0.08, 0.22),
       c: clamp(bgLight.c * 1.7, 0, 0.05),
       h: bgLight.h,
-    });
+    }));
 
-  const surfaceLight = fitToSrgb({
-    l: clamp(bgLight.l + deriv.surface.lightShift, 0, 1),
+  const surfaceLightSource = {
+    l: clamp(bgLight.l + Number(deriv.surface.lightShift.toFixed(4)), 0, 1),
     c: bgLight.c,
     h: bgLight.h,
-  });
+  };
+  const surfaceLight = relativeDark ? surfaceLightSource : serializedColor(fitToSrgb(surfaceLightSource));
   const surfaceDark = relativeDark
-    ? mixOklch(bgLight, { l: 0, c: 0, h: bgLight.h }, deriv.dark.surfaceMixRatio / 100)
-    : fitToSrgb({
+    ? mixOklch(bgLight, { l: 0, c: 0, h: null }, deriv.dark.surfaceMixRatio / 100)
+    : serializedColor(fitToSrgb({
       l: clamp(bgDark.l * deriv.surface.darkFactor, bgDark.l + 0.055, 0.36),
       c: clamp(bgDark.c * 1.15, 0, 0.06),
       h: bgDark.h,
-    });
+    }));
 
-  const textLight = ensureContrast(inkSource, [bgLight, surfaceLight], minTextContrast + 0.02);
-  const white = { l: 0.99, c: 0, h: bgLight.h };
+  const textLight = serializedColor(ensureContrast(inkSource, [bgLight, surfaceLight], minTextContrast + 0.02, minTextContrast));
+  const white = { l: 0.99, c: 0, h: null };
   const textDarkMixRatio = relativeDark
     ? findAccessibleMixRatio(bgLight, white, [bgDark, surfaceDark], darkContrast.text + 0.02, deriv.dark.textMixRatio / 100, "toward-second")
     : null;
@@ -188,22 +226,24 @@ function buildColorModel(palette, config, annotatedDarkBlends = {}) {
       c: clamp(inkSource.c * 0.1, 0, 0.02),
       h: inkSource.h,
     });
-  const textDark = ensureContrast(textDarkSource, [bgDark, surfaceDark], darkContrast.text + 0.02);
-  const textMutedLight = ensureContrast(
+  const textDark = relativeDark ? textDarkSource : serializedColor(ensureContrast(textDarkSource, [bgDark, surfaceDark], darkContrast.text + 0.02, darkContrast.text));
+  const textMutedLight = serializedColor(ensureContrast(
     deriveMutedText(textLight, bgLight, minTextContrast + 0.02, deriv.muted.chromaFactor),
     [bgLight, surfaceLight],
     minTextContrast + 0.02,
-  );
+    minTextContrast,
+  ));
   const textMutedDarkMixRatio = relativeDark
-    ? findAccessibleMixRatio(textDark, bgDark, [bgDark, surfaceDark], darkContrast.text + 0.02, 0.72, "toward-first")
+    ? findAccessibleMixRatio(textDark, bgDark, [bgDark, surfaceDark], darkContrast.text + 0.02, 0.72, "toward-first", darkContrast.text)
     : null;
   const textMutedDark = relativeDark
     ? mixOklch(textDark, bgDark, textMutedDarkMixRatio)
-    : ensureContrast(
+    : serializedColor(ensureContrast(
       deriveMutedText(textDark, bgDark, darkContrast.text + 0.02, deriv.muted.chromaFactor),
       [bgDark, surfaceDark],
       darkContrast.text + 0.02,
-    );
+      darkContrast.text,
+    ));
 
   const identities = {};
   const decoratives = {};
@@ -215,14 +255,25 @@ function buildColorModel(palette, config, annotatedDarkBlends = {}) {
     const source = palette[paletteKey];
     if (!source) continue;
 
-    const light = fitToSrgb(source);
-    const darkBlend = annotatedDarkBlends[paletteKey];
-    const darkMixRatio = resolveDarkMixRatio(light, darkBlend);
-    const dark = mixOklch(light, { l: 1, c: 0, h: light.h }, darkMixRatio);
+    const darkBlend = Object.hasOwn(annotatedDarkBlends, paletteKey) ? annotatedDarkBlends[paletteKey] : undefined;
+    const { light, dark, mixRatio } = identityColors(source, darkBlend, relativeDark);
     const family = {
       light: buildFunctionalFamily(light, bgLight, surfaceLight, textLight, lightContrast, "light"),
       dark: buildFunctionalFamily(dark, bgDark, surfaceDark, textDark, darkContrast, "dark"),
     };
+
+    if (relativeDark) {
+      // These tokens reference the native mix, not a separately gamut-mapped literal.
+      family.dark.solid = dark;
+      family.dark.border = dark;
+    }
+
+    for (const scheme of ["light", "dark"]) {
+      const authoredForeground = config.onSolid?.[name]?.[scheme];
+      if (authoredForeground !== undefined) {
+        family[scheme].onSolid = serializedColor(parseOklch(authoredForeground).color);
+      }
+    }
 
     identities[name] = {
       source: light,
@@ -231,13 +282,13 @@ function buildColorModel(palette, config, annotatedDarkBlends = {}) {
       darkBlend: darkBlend ?? null,
       role: identityDef.role,
       family,
-      mixRatio: roundPercentage(darkMixRatio * 100),
+      mixRatio,
     };
 
     // On-colour is computed directly against the identity (source), not the solid.
     onColors[name] = {
-      light: oklch(chooseForeground([light], [{ l: 0.99, c: 0, h: 0 }, { l: 0.02, c: 0, h: 0 }, textLight], minOnColorContrast)),
-      dark: oklch(chooseForeground([dark], [{ l: 0.99, c: 0, h: 0 }, { l: 0.02, c: 0, h: 0 }, textDark], darkOnColorContrast)),
+      light: oklch(bestOnSolid([light], textLight, minOnColorContrast + 0.02)),
+      dark: oklch(bestOnSolid([dark], textDark, minOnColorContrast + 0.02)),
     };
 
     if (config.scales.enabled && (config.scales.applyTo.includes(name) || config.scales.applyTo.length === 0)) {
@@ -246,8 +297,9 @@ function buildColorModel(palette, config, annotatedDarkBlends = {}) {
   }
 
   for (const [name, decorativeDef] of Object.entries(config.roles.decoratives ?? {})) {
-    const source = palette[tokenKey(decorativeDef.token)];
-    if (!source) continue;
+    const key = tokenKey(decorativeDef.token);
+    if (!Object.hasOwn(palette, key)) continue;
+    const source = palette[key];
 
     const lightPair = buildReadablePair(fitToSrgb(source), [bgLight, textLight], minOnColorContrast);
     const darkSource = fitToSrgb({
@@ -259,8 +311,8 @@ function buildColorModel(palette, config, annotatedDarkBlends = {}) {
 
     decoratives[name] = {
       source,
-      light: lightPair.background,
-      dark: darkPair.background,
+      light: serializedColor(lightPair.background),
+      dark: serializedColor(darkPair.background),
       role: "decorative",
     };
     onColors[name] = {
@@ -283,12 +335,12 @@ function buildColorModel(palette, config, annotatedDarkBlends = {}) {
   }
 
   const focusRole = config.roles.focus;
-  if (!identities[focusRole]) {
+  if (!Object.hasOwn(identities, focusRole)) {
     throw new Error(`Configured focus role "${focusRole}" does not exist in roles.identities.`);
   }
 
-  const focusLight = ensureContrast(identities[focusRole].family.light.borderStrong, [bgLight, surfaceLight], minUiContrast + 0.02);
-  const focusDark = ensureContrast(identities[focusRole].family.dark.borderStrong, [bgDark, surfaceDark], minUiContrast + 0.02);
+  const focusLight = ensureContrast(identities[focusRole].family.light.borderStrong, [bgLight, surfaceLight], minUiContrast + 0.02, minUiContrast);
+  const focusDark = ensureContrast(identities[focusRole].family.dark.borderStrong, [bgDark, surfaceDark], minUiContrast + 0.02, minUiContrast);
   const model = {
     warnings,
     neutrals: {
@@ -308,16 +360,118 @@ function buildColorModel(palette, config, annotatedDarkBlends = {}) {
     logoTokens,
     onColors,
     scales,
-    focus: { light: focusLight, dark: focusDark },
+    focus: { light: serializedColor(focusLight), dark: serializedColor(focusDark) },
   };
 
   const contrastResult = validateGeneratedContrast(model, config);
-  if (contrastResult.errors.length) {
-    throw new Error(`Smart Colors generated an invalid contrast contract:\n${contrastResult.errors.map((error) => `- ${error}`).join("\n")}`);
-  }
+  model.errors = contrastResult.errors;
+  model.diagnostics = contrastResult.diagnostics;
   model.warnings.push(...contrastResult.warnings);
 
   return model;
+}
+
+function buildContrastSuggestions(model, palette, authoredTokens, config, darkBlends, configFile, paletteCss) {
+  const suggestions = [];
+  const proposals = [];
+  const target = config.contrast.onColor;
+  const safeTarget = Math.min(21, target + 0.02);
+  // Match the parser's active syntax selection; disabled examples must not turn
+  // a legacy declaration edit into an @property descriptor edit.
+  const activeCss = paletteCss.replace(/\/\*[\s\S]*?\*\//g, (comment) => comment.replace(/[^\r\n]/g, " "));
+  const propertySources = /@property\s+--/i.test(activeCss);
+
+  for (const [name, identity] of Object.entries(model.identities)) {
+    for (const scheme of ["light", "dark"]) {
+      const family = identity.family[scheme];
+      const ratios = solidContrasts(family.onSolid, family);
+      if (Math.min(ratios.solid, ratios.hover) >= target) continue;
+
+      const token = config.roles.identities[name].token;
+      const paletteKey = tokenKey(token);
+      const source = authoredTokens[paletteKey];
+      const sourceLocation = propertySources ? `@property ${token}` : `:root, ${token}`;
+      const foreground = nearestLightness(family.onSolid, (candidate) => meetsSolidTarget(resolvedColor(candidate), family, safeTarget));
+      if (foreground) {
+        const value = oklch(foreground);
+        const trialConfig = {
+          ...config,
+          onSolid: { ...config.onSolid, [name]: { ...config.onSolid?.[name], [scheme]: value } },
+        };
+        const trial = buildColorModel(palette, trialConfig, darkBlends);
+        const snippet = `onSolid: { ${JSON.stringify(name)}: { ${scheme}: ${JSON.stringify(value)} } }`;
+        const impact = `Changes only --color-${name}-on-solid (${scheme}), shared by solid/hover; not --color-on-${name} or either fill.`;
+        const search = "nearest L on a 4-decimal grid with C/H fixed, checked after gamut mapping and serialization; not a global perceptual nearest-color claim";
+        proposals.push({
+          id: `on-solid:${name}:${scheme}:foreground`, identity: name, scheme, kind: "foreground",
+          destination: { file: configFile, path: `onSolid.${name}.${scheme}`, snippet },
+          impact, search,
+          changes: [{ label: `--color-${name}-on-solid (${scheme})`, before: { ...family.onSolid }, after: { ...trial.identities[name].family[scheme].onSolid } }],
+          checks: trial.diagnostics,
+        });
+        suggestions.push(`${name} (${scheme}): preserve the palette. In ${configFile}, set onSolid.${name}.${scheme}:\n  ${snippet}\n  Verified ${contrastSummary(solidContrasts(trial.identities[name].family[scheme].onSolid, family))}. Fill source: ${config.palette}, ${sourceLocation}, authored ${sourceColorValue(source)}; resolved ${oklch(identity.source)}. ${impact} Search: ${search}. Merge into existing onSolid settings; no changes applied.`);
+        continue;
+      }
+
+      let verifiedModel;
+      const changesFoundation = [config.roles.canvas, config.roles.ink].some((foundation) => tokenKey(foundation) === paletteKey);
+      const candidateSource = nearestLightness(source, (candidate) => {
+        const materialized = fitToSrgb(candidate);
+        if (!changesFoundation) {
+          const colors = identityColors(materialized, darkBlends[paletteKey], config.derivation.dark.mode === "relative");
+          const background = scheme === "light" ? model.neutrals.bgLight : model.neutrals.bgDark;
+          const ink = scheme === "light" ? model.neutrals.textLight : model.neutrals.textDark;
+          // Re-select the foreground exactly as regeneration does. The old
+          // foreground is a constraint only when it was explicitly authored.
+          const pair = buildSolidPair(colors[scheme], background, ink, Math.min(config.contrast.maxIdentity, target + 0.02));
+          const authored = config.onSolid?.[name]?.[scheme];
+          if (authored !== undefined) pair.onSolid = serializedColor(parseOklch(authored).color);
+          if (!meetsSolidTarget(pair.onSolid, pair, safeTarget)) return false;
+        }
+        const trial = buildColorModel({ ...palette, [paletteKey]: materialized }, config, darkBlends);
+        if (trial.errors.length) return false;
+        const trialFamily = trial.identities[name].family[scheme];
+        if (!meetsSolidTarget(trialFamily.onSolid, trialFamily, safeTarget)) return false;
+        if (diagnosticsRegress(model.diagnostics, trial.diagnostics)) return false;
+        verifiedModel = trial;
+        return true;
+      });
+      if (candidateSource && verifiedModel) {
+        const trial = verifiedModel.identities[name];
+        const impact = "Source edits affect the identity, both themes and derived families/scales; logo sources remain separate.";
+        const search = "nearest authored L on a 4-decimal grid, C/H fixed, full regeneration verified";
+        const destination = {
+          file: config.palette,
+          path: propertySources ? `@property ${token} / initial-value` : `:root / ${token}`,
+          snippet: `${propertySources ? "initial-value" : token}: ${sourceColorValue(candidateSource)};`,
+        };
+        const sourceEdit = propertySources ? `${sourceLocation}, initial-value` : sourceLocation;
+        const declarationAdvice = propertySources ? "" : `\n  ${destination.snippet}`;
+        proposals.push({
+          id: `on-solid:${name}:${scheme}:palette-source`, identity: name, scheme, kind: "palette-source",
+          destination,
+          impact, search,
+          changes: [{ label: token, before: { ...source }, after: { ...candidateSource } }],
+          checks: verifiedModel.diagnostics,
+        });
+        suggestions.push(`${name} (${scheme}): no text-only suggestion was found on the 4-decimal lightness grid. Optional source adjustment in ${config.palette}, ${sourceEdit}:\n  ${sourceColorValue(source)} -> ${sourceColorValue(candidateSource)}${declarationAdvice}\n  Authored chroma and hue unchanged. Verified light ${contrastSummary(solidContrasts(trial.family.light.onSolid, trial.family.light))}; dark ${contrastSummary(solidContrasts(trial.family.dark.onSolid, trial.family.dark))}. Generation rechecked in both themes with no new contrast warnings. ${impact} Search: ${search}. No changes applied.`);
+      } else {
+        suggestions.push(`${name} (${scheme}): no verified foreground or source suggestion was found on the 4-decimal lightness grid with chroma and hue fixed. Review the solid/hover pair or onSolid.${name}.${scheme} in ${configFile}; do not edit generated ${config.output}. No changes applied.`);
+      }
+    }
+  }
+  return { suggestions, proposals };
+}
+
+function identityColors(source, darkBlend, relativeDark) {
+  const light = serializedColor(fitToSrgb(source));
+  const darkMixRatio = roundPercentage(resolveDarkMixRatio(light, darkBlend) * 100) / 100;
+  const mixed = mixOklch(light, { l: 1, c: 0, h: null }, darkMixRatio);
+  return {
+    light,
+    dark: relativeDark ? mixed : serializedColor(fitToSrgb(mixed)),
+    mixRatio: roundPercentage(darkMixRatio * 100),
+  };
 }
 
 function resolveDarkMixRatio(source, darkBlend) {
@@ -333,30 +487,37 @@ function roundPercentage(value) {
   return Number(value.toFixed(4));
 }
 
+// The neutral tuning contract emits percentages to two decimal places.
+function emittedMixRatio(ratio) {
+  return Number((ratio * 100).toFixed(2)) / 100;
+}
+
 function buildFunctionalFamily(source, background, neutralSurface, ink, contrastConfig, scheme) {
-  const textTarget = Math.min(contrastConfig.maxIdentity, contrastConfig.text + 0.02);
+  // Keep the serialization margin even when the configured target is capped.
+  const textTarget = Math.min(contrastConfig.maxIdentity, contrastConfig.text) + 0.02;
   const uiTarget = Math.min(contrastConfig.maxIdentity, contrastConfig.ui + 0.02);
   // On-solid readability uses the base (un-amplified) text target;
   // darkRichness applies to body text only, not to text-on-colour.
   const onSolidTextTarget = Math.min(contrastConfig.maxIdentity, (contrastConfig.baseText ?? contrastConfig.text) + 0.02);
-  const surface = mixOklch(source, background, scheme === "light" ? 0.1 : 0.18);
-  const surfaceStrong = mixOklch(source, background, scheme === "light" ? 0.18 : 0.28);
+  const surface = serializedColor(fitToSrgb(mixOklch(source, background, scheme === "light" ? 0.1 : 0.18)));
+  const surfaceStrong = serializedColor(fitToSrgb(mixOklch(source, background, scheme === "light" ? 0.18 : 0.28)));
 
   const text = ensureContrast(
     fitContrastBand(source, background, { min: textTarget, max: contrastConfig.maxIdentity }),
     [background, neutralSurface, surface, surfaceStrong],
     textTarget,
+    contrastConfig.text,
   );
-  const textStrongTarget = Math.min(contrastConfig.maxIdentity, textTarget + 1);
-  const textStrong = ensureContrast(text, [background, neutralSurface, surface, surfaceStrong], textStrongTarget);
+  const textStrongTarget = Math.min(contrastConfig.maxIdentity, textTarget + 1) + 0.02;
+  const textStrong = ensureContrast(text, [background, neutralSurface, surface, surfaceStrong], textStrongTarget, contrastConfig.text);
   // Border and solid preserve the designer's source colour.
   // Contrast against the canvas is the designer's responsibility.
   const border = fitToSrgb(source);
   const borderStrongTarget = Math.min(contrastConfig.maxIdentity, uiTarget + 1);
-  const borderStrong = ensureContrast(border, [background, neutralSurface, surfaceStrong], borderStrongTarget);
-  const solidPair = buildSolidPair(source, background, neutralSurface, ink, uiTarget, onSolidTextTarget);
+  const borderStrong = ensureContrast(border, [background, neutralSurface, surface, surfaceStrong], borderStrongTarget, contrastConfig.ui);
+  const solidPair = buildSolidPair(source, background, ink, onSolidTextTarget);
 
-  return {
+  return Object.fromEntries(Object.entries({
     surface,
     surfaceStrong,
     border,
@@ -366,52 +527,31 @@ function buildFunctionalFamily(source, background, neutralSurface, ink, contrast
     onSolid: solidPair.onSolid,
     text,
     textStrong,
-  };
+  }).map(([name, color]) => [name, serializedColor(color)]));
 }
 
-function buildSolidPair(source, background, neutralSurface, ink, uiTarget, textTarget) {
-  // Preserve the designer's source colour as the solid.
-  // Contrast adaptation against the background is the designer's responsibility.
+function deriveSolidStates(source, background) {
   const solid = fitToSrgb(source);
   const direction = background.l > solid.l ? -1 : 1;
-  let solidHover = fitToSrgb({
+  const solidHover = fitToSrgb({
     l: clamp(solid.l + direction * 0.04, 0.02, 0.98),
     c: solid.c,
     h: solid.h,
   });
 
-  // Try dark then light foreground; adjust whichever gets closest to target.
-  let onSolid = bestOnSolid([solid, solidHover], ink, textTarget);
+  return { solid, solidHover };
+}
+
+function buildSolidPair(source, background, ink, textTarget) {
+  // Rank against the same literals/native mix that the formatter will emit.
+  const states = deriveSolidStates(source, background);
+  const solid = source;
+  const solidHover = serializedColor(states.solidHover);
+  const onSolid = bestOnSolid([solid, solidHover], ink, textTarget);
 
   return { solid, solidHover, onSolid };
 }
 
-function bestOnSolid(backgrounds, ink, textTarget) {
-  const dark = { l: 0.02, c: 0, h: 0 };
-  const light = { l: 0.99, c: 0, h: 0 };
-  let darkOn = chooseForeground(backgrounds, [ink, dark, light], textTarget);
-  if (Math.min(...backgrounds.map((bg) => contrast(darkOn, bg))) < textTarget) {
-    darkOn = adjustContrast(darkOn, backgrounds[0], textTarget);
-    for (const bg of backgrounds.slice(1)) {
-      if (contrast(darkOn, bg) < textTarget) darkOn = adjustContrast(darkOn, bg, textTarget);
-    }
-  }
-  const darkScore = Math.min(...backgrounds.map((bg) => contrast(darkOn, bg)));
-  if (darkScore >= textTarget) return darkOn;
-
-  // If dark didn't make it, try light.
-  const lightCandidates = [ink, light, dark];
-  let lightOn = chooseForeground(backgrounds, lightCandidates, textTarget);
-  if (Math.min(...backgrounds.map((bg) => contrast(lightOn, bg))) < textTarget) {
-    lightOn = adjustContrast(lightOn, backgrounds[0], textTarget);
-    for (const bg of backgrounds.slice(1)) {
-      if (contrast(lightOn, bg) < textTarget) lightOn = adjustContrast(lightOn, bg, textTarget);
-    }
-  }
-  const lightScore = Math.min(...backgrounds.map((bg) => contrast(lightOn, bg)));
-
-  return lightScore >= darkScore ? lightOn : darkOn;
-}
 
 function buildReadablePair(background, preferredForegrounds, textTarget) {
   const candidates = [...preferredForegrounds, { l: 0.99, c: 0, h: 0 }, { l: 0.02, c: 0, h: 0 }];
@@ -426,35 +566,45 @@ function buildReadablePair(background, preferredForegrounds, textTarget) {
   return { background: adjustedBackground, foreground };
 }
 
-function chooseForeground(backgrounds, candidates, target) {
-  const ranked = candidates
-    .map((candidate) => ({
-      candidate: fitToSrgb(candidate),
-      score: Math.min(...backgrounds.map((background) => contrast(candidate, background))),
-    }))
-    .sort((a, b) => b.score - a.score);
 
-  return (ranked.find(({ score }) => score >= target) ?? ranked[0]).candidate;
+function formatContrastShortfall(ratio, target) {
+  // Reveal small shortfalls instead of displaying identical rounded values.
+  for (const precision of [2, 6]) {
+    const measured = ratio.toFixed(precision);
+    const required = target.toFixed(precision);
+    if (Number(measured) < Number(required)) return [measured, required];
+  }
+  return [String(ratio), String(target)];
 }
 
 function validateGeneratedContrast(model, config) {
   const errors = [];
   const warnings = [];
-  const tolerance = 0.005;
-  const fail = (label, foreground, background, target) => {
+  const diagnostics = [];
+  const record = (scheme, label, foregroundToken, foreground, backgroundToken, background, target, policy, minimum = 4.5, usage = "WCAG AA normal-text reference") => {
     const ratio = contrast(foreground, background);
-    if (ratio + tolerance < target) {
-      errors.push(`${label} is ${ratio.toFixed(2)}:1; expected at least ${target.toFixed(2)}:1.`);
-    }
-  };
-  const warn = (label, foreground, background, target) => {
-    const ratio = contrast(foreground, background);
-    if (ratio + tolerance < target) {
-      warnings.push(`${label} is ${ratio.toFixed(2)}:1 (target ${target.toFixed(2)}:1) — on-colour contrast is limited by the designer's source.`);
+    const status = ratio < minimum ? "below-minimum" : ratio < target ? "below-target" : "pass";
+    // Passing facts retain the check's policy; a minimum-only shortfall is a
+    // warning even on strict pairs. Consumers must inspect status, not severity alone.
+    const severity = ratio >= target && ratio < minimum ? "warning" : policy;
+    const diagnostic = {
+      label, scheme, foregroundToken, backgroundToken,
+      foreground: { ...foreground }, background: { ...background },
+      ratio, target, minimum, kind: minimum === 3 ? "non-text" : "text",
+      status, severity, provenance: "generated",
+    };
+    diagnostics.push(diagnostic);
+    if (policy === "error" && ratio < target) {
+      const [measured, required] = formatContrastShortfall(ratio, target);
+      errors.push(`${label} is ${measured}:1; expected at least ${required}:1. Status: ${status}; ${usage} minimum ${minimum.toFixed(2)}:1. Ratios use generated defaults, before CSS overrides.`);
+    } else if (status !== "pass") {
+      warnings.push(contrastDiagnostic(label, ratio, target, minimum, usage));
     }
   };
 
   for (const scheme of ["light", "dark"]) {
+    const fail = (label, foregroundToken, foreground, backgroundToken, background, target, minimum, usage) => record(scheme, label, foregroundToken, foreground, backgroundToken, background, target, "error", minimum, usage);
+    const warn = (label, foregroundToken, foreground, backgroundToken, background, target, minimum, usage) => record(scheme, label, foregroundToken, foreground, backgroundToken, background, target, "warning", minimum, usage);
     const isLight = scheme === "light";
     const background = isLight ? model.neutrals.bgLight : model.neutrals.bgDark;
     const surface = isLight ? model.neutrals.surfaceLight : model.neutrals.surfaceDark;
@@ -468,71 +618,95 @@ function validateGeneratedContrast(model, config) {
       ? config.contrast.ui
       : Math.min(config.contrast.maxIdentity, config.contrast.ui * (config.contrast.darkRichness ?? 1));
 
-    fail(`${scheme} neutral text / canvas`, text, background, textTarget);
-    fail(`${scheme} neutral text / surface`, text, surface, textTarget);
-    fail(`${scheme} muted text / canvas`, muted, background, textTarget);
-    fail(`${scheme} muted text / surface`, muted, surface, textTarget);
-    fail(`${scheme} focus / canvas`, model.focus[scheme], background, config.contrast.ui);
-    fail(`${scheme} focus / surface`, model.focus[scheme], surface, config.contrast.ui);
+    fail(`${scheme} neutral text / canvas`, "--color-text", text, "--color-bg", background, textTarget);
+    fail(`${scheme} neutral text / surface`, "--color-text", text, "--color-surface", surface, textTarget);
+    fail(`${scheme} muted text / canvas`, "--color-text-muted", muted, "--color-bg", background, textTarget);
+    fail(`${scheme} muted text / surface`, "--color-text-muted", muted, "--color-surface", surface, textTarget);
+    fail(`${scheme} focus / canvas`, "--color-focus-ring", model.focus[scheme], "--color-bg", background, config.contrast.ui, 3, "WCAG non-text reference for a necessary indicator");
+    fail(`${scheme} focus / surface`, "--color-focus-ring", model.focus[scheme], "--color-surface", surface, config.contrast.ui, 3, "WCAG non-text reference for a necessary indicator");
 
     for (const [name, identity] of Object.entries(model.identities)) {
       const family = identity.family[scheme];
-      fail(`${scheme} ${name}-text / canvas`, family.text, background, textTarget);
-      fail(`${scheme} ${name}-text / neutral surface`, family.text, surface, textTarget);
-      fail(`${scheme} ${name}-text / family surface`, family.text, family.surface, textTarget);
-      fail(`${scheme} ${name}-text / family surface strong`, family.text, family.surfaceStrong, textTarget);
-      fail(`${scheme} ${name}-text-strong / canvas`, family.textStrong, background, textTarget);
-      fail(`${scheme} ${name}-text-strong / family surface strong`, family.textStrong, family.surfaceStrong, textTarget);
+      const familyBackgrounds = [
+        ["canvas", "--color-bg", background],
+        ["neutral surface", "--color-surface", surface],
+        ["family surface", `--color-${name}-surface`, family.surface],
+        ["family surface strong", `--color-${name}-surface-strong`, family.surfaceStrong],
+      ];
+      for (const [suffix, foreground] of [["text", family.text], ["text-strong", family.textStrong]]) {
+        for (const [label, token, color] of familyBackgrounds) {
+          fail(`${scheme} ${name}-${suffix} / ${label}`, `--color-${name}-${suffix}`, foreground, token, color, textTarget);
+        }
+      }
+      for (const [label, token, color] of familyBackgrounds) {
+        fail(`${scheme} ${name}-border-strong / ${label}`, `--color-${name}-border-strong`, family.borderStrong, token, color, uiTarget, 3, "WCAG non-text reference for a necessary boundary");
+      }
+      const direct = isLight ? identity.light : identity.dark;
+      warn(`${scheme} on-${name} / ${name}`, `--color-on-${name}`, parseOklch(model.onColors[name][scheme]).source, `--color-${name}`, direct, onSolidTextTarget);
       // Solid and border preserve the designer's source; contrast against canvas is opt-in.
       // On-colour failures are warnings, not errors — the designer owns the trade-off.
-      warn(`${scheme} ${name}-on-solid / solid`, family.onSolid, family.solid, onSolidTextTarget);
-      warn(`${scheme} ${name}-on-solid / solid-hover`, family.onSolid, family.solidHover, onSolidTextTarget);
+      warn(`${scheme} ${name}-on-solid / solid`, `--color-${name}-on-solid`, family.onSolid, `--color-${name}-solid`, family.solid, onSolidTextTarget);
+      warn(`${scheme} ${name}-on-solid / solid-hover`, `--color-${name}-on-solid`, family.onSolid, `--color-${name}-solid-hover`, family.solidHover, onSolidTextTarget);
+    }
+
+    // Controls are source-derived states, not independently corrected fills.
+    // Report their explicit opaque pairs without changing their existing policy.
+    const focusIdentity = model.identities[config.roles.focus];
+    const focusColor = isLight ? focusIdentity.light : focusIdentity.dark;
+    const controlActive = mixOklch(surface, focusColor, isLight ? 0.86 : 0.76);
+    const controlFocus = mixOklch(focusColor, background, isLight ? 0.12 : 0.18);
+    const controlActiveBorder = mixOklch(focusColor, text, 0.46);
+    warn(`${scheme} control active text / active background`, "--color-control-active-text", text, "--color-control-bg-active", controlActive, textTarget);
+    warn(`${scheme} control text / focus background`, "--color-text", text, "--color-control-focus-bg", controlFocus, textTarget);
+    for (const [label, token, color] of [["canvas", "--color-bg", background], ["active background", "--color-control-bg-active", controlActive]]) {
+      warn(`${scheme} control active border / ${label}`, "--color-control-border-active", controlActiveBorder, token, color, config.contrast.ui, 3, "WCAG non-text reference for a necessary boundary");
     }
 
     for (const [name, decorative] of Object.entries(model.decoratives)) {
       const decorativeColor = decorative[scheme];
-      const onColor = parseOklch(model.onColors[name][scheme]).color;
-      warn(`${scheme} on-${name} / ${name}`, onColor, decorativeColor, onSolidTextTarget);
+      const onColor = parseOklch(model.onColors[name][scheme]).source;
+      warn(`${scheme} on-${name} / ${name}`, `--color-on-${name}`, onColor, `--color-${name}`, decorativeColor, onSolidTextTarget);
     }
   }
 
-  return { errors, warnings };
+  return { errors, warnings, diagnostics };
 }
 
-function findAccessibleMixRatio(first, second, backgrounds, target, preferredRatio, direction) {
-  const preferred = clamp(preferredRatio, 0, 1);
-  const meetsTarget = (ratio) => {
+function findAccessibleMixRatio(first, second, backgrounds, target, preferredRatio, direction, minimum = target) {
+  const preferred = emittedMixRatio(clamp(preferredRatio, 0, 1));
+  const meetsTarget = (ratio, required = target) => {
     const candidate = mixOklch(first, second, ratio);
-    return backgrounds.every((background) => contrast(candidate, background) >= target);
+    return backgrounds.every((background) => contrast(candidate, background) >= required);
   };
 
   if (meetsTarget(preferred)) return preferred;
 
   let pass = direction === "toward-second" ? 0 : 1;
   let fail = preferred;
-  if (!meetsTarget(pass)) return preferred;
+  if (!meetsTarget(pass)) return meetsTarget(pass, minimum) ? pass : preferred;
 
   for (let index = 0; index < 44; index += 1) {
     const middle = (pass + fail) / 2;
-    if (meetsTarget(middle)) {
-      pass = middle;
-    } else {
-      fail = middle;
-    }
+    if (meetsTarget(middle)) pass = middle;
+    else fail = middle;
   }
 
-  return pass;
-}
+  const emitted = emittedMixRatio(pass);
+  // Keep existing emitted defaults when they meet the final contract. A margin
+  // is a search aid, not a reason to change an already valid muted-text token.
+  if (meetsTarget(emitted, minimum)) return emitted;
 
-function mixOklch(first, second, firstRatio) {
-  const ratio = clamp(firstRatio, 0, 1);
-  return fitToSrgb({
-    l: first.l * ratio + second.l * (1 - ratio),
-    c: first.c * ratio + second.c * (1 - ratio),
-    h: first.c === 0 && second.c > 0 ? second.h : first.h,
-  });
+  // Search the actual two-decimal percentage grid, rounding toward the passing
+  // endpoint rather than returning a continuous solution that CSS cannot emit.
+  let passingIndex = direction === "toward-second" ? 0 : 10000;
+  let failingIndex = Math.round(emitted * 10000);
+  while (Math.abs(passingIndex - failingIndex) > 1) {
+    const middle = Math.floor((passingIndex + failingIndex) / 2);
+    if (meetsTarget(middle / 10000, minimum)) passingIndex = middle;
+    else failingIndex = middle;
+  }
+  return passingIndex / 10000;
 }
-
 
 
 function buildScale(lightColor, darkColor, scaleConfig) {
@@ -618,22 +792,6 @@ function lerp(from, to, progress) {
   return from + (to - from) * progress;
 }
 
-function maybeWarnShift(warnings, token, name, mode, source, generated, background, contrastTarget) {
-  if (!contrastTarget) return;
-
-  const deltaL = Math.abs(generated.l - source.l);
-  const sourceContrast = contrast(source, background);
-  const generatedContrast = contrast(generated, background);
-
-  if (deltaL >= 0.04 || sourceContrast < contrastTarget) {
-    warnings.push(
-      `${token} (${name}) ${mode} adjusted: contrast ${sourceContrast.toFixed(2)} → ${generatedContrast.toFixed(2)}, ΔL ${deltaL.toFixed(3)}.`,
-    );
-  }
-}
-
-
-
 function deriveMutedText(text, background, minTextContrast, chromaFactor) {
   if (contrast(text, background) < minTextContrast) {
     return adjustContrast(text, background, minTextContrast);
@@ -673,10 +831,18 @@ function fitContrastBand(color, background, { min, max }) {
   return fitToSrgb(candidate);
 }
 
-function ensureContrast(color, backgrounds, target) {
-  return backgrounds.reduce((candidate, background) => {
-    return contrast(candidate, background) >= target ? candidate : adjustContrast(candidate, background, target);
+function ensureContrast(color, backgrounds, target, minimum = target) {
+  const candidate = backgrounds.reduce((current, background) => {
+    return contrast(current, background) >= target ? current : adjustContrast(current, background, target);
   }, color);
+  const emitted = serializedColor(candidate);
+  if (backgrounds.every((background) => contrast(emitted, background) >= minimum)) return candidate;
+
+  // Preserve the established result when it works. Otherwise solve all unchanged
+  // backgrounds together, including exact black/white and serialized candidates.
+  const fallback = bestOnSolid(backgrounds, color, target);
+  const score = (foreground) => Math.min(...backgrounds.map((background) => contrast(foreground, background)));
+  return score(fallback) > score(emitted) ? fallback : candidate;
 }
 
 function adjustContrast(color, background, target) {

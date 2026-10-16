@@ -36,6 +36,29 @@ export function oklch(color) {
   return `oklch(${formatNumber(color.l)} ${formatNumber(color.c)} ${formatNumber(color.h)})`;
 }
 
+export function serializedColor(color) {
+  return Object.fromEntries(["l", "c", "h"].map((channel) => [channel, Number(formatNumber(color[channel]))]));
+}
+
+// Opaque CSS interpolation in OKLCH with the default shorter-hue path.
+// Missing hue is explicit (null); an authored achromatic hue still participates.
+// Gamut mapping belongs to materialized colors, not intermediate CSS mixes.
+export function mixOklch(first, second, firstRatio) {
+  const ratio = clamp(firstRatio, 0, 1);
+  let firstHue = first.h ?? second.h ?? 0;
+  let secondHue = second.h ?? first.h ?? 0;
+  firstHue = normalizeHue(firstHue);
+  secondHue = normalizeHue(secondHue);
+  if (secondHue - firstHue > 180) firstHue += 360;
+  else if (secondHue - firstHue < -180) secondHue += 360;
+
+  return {
+    l: first.l * ratio + second.l * (1 - ratio),
+    c: first.c * ratio + second.c * (1 - ratio),
+    h: normalizeHue(firstHue * ratio + secondHue * (1 - ratio)),
+  };
+}
+
 export function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
@@ -74,8 +97,13 @@ function oklchToLinearSrgbRaw({ l, c, h }) {
   ];
 }
 
+// Adding 360 to an already positive hue moves the value into a higher binary
+// exponent and loses low mantissa bits (86.83 became 86.82999999999998).
+// Keep the identity exact for in-range hues; only negative remainders shift.
 function normalizeHue(hue) {
-  return ((hue % 360) + 360) % 360;
+  const remainder = hue % 360;
+  if (remainder < 0) return remainder + 360;
+  return remainder === 0 ? 0 : remainder;
 }
 
 function formatNumber(value) {

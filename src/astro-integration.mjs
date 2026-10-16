@@ -4,7 +4,7 @@ import { generateColorTokens } from "./generate-colors.mjs";
 import { DEFAULT_CONFIG_FILE, loadSmartColorsConfig, resolveProjectUrl } from "./load-config.mjs";
 
 export default function smartColors(options = {}) {
-  const configFile = options.configFile ?? DEFAULT_CONFIG_FILE;
+  const configFile = options.configFile;
   const inlineConfig = { ...options };
   delete inlineConfig.configFile;
 
@@ -17,7 +17,7 @@ export default function smartColors(options = {}) {
         await runGenerator({ root, configFile, inlineConfig, command, logger });
 
         addWatchFile(resolveProjectUrl(root, smartConfig.palette));
-        addWatchFile(resolveProjectUrl(root, configFile));
+        addWatchFile(resolveProjectUrl(root, configFile ?? DEFAULT_CONFIG_FILE));
 
         updateConfig({
           vite: {
@@ -30,7 +30,8 @@ export default function smartColors(options = {}) {
 }
 
 async function runGenerator({ root, configFile, inlineConfig, command, logger }) {
-  const report = await generateColorTokens({ root, configFile, inlineConfig });
+  // Keep the exhaustive advisory search out of the dev watcher; the CLI provides it.
+  const report = await generateColorTokens({ root, configFile, inlineConfig, suggest: false });
 
   for (const warning of report.warnings) {
     logger.warn(warning);
@@ -52,27 +53,38 @@ async function runGenerator({ root, configFile, inlineConfig, command, logger })
 function smartColorsVitePlugin({ root, configFile, inlineConfig, logger }) {
   let pending = Promise.resolve();
   let regenerationTimer;
+  let disposed = false;
+  let removeWatchListeners;
 
   return {
     name: "smart-colors:vite-watch",
     async configureServer(server) {
+      if (disposed) return;
       let smartConfig = await loadSmartColorsConfig({ root, configFile, inlineConfig });
+      if (disposed) return;
       let watchFiles = getWatchFiles(root, configFile, smartConfig);
       server.watcher.add([...watchFiles]);
 
       const scheduleRegeneration = (changedPath) => {
+        if (disposed) return;
         const absolutePath = path.resolve(changedPath);
         if (!watchFiles.has(absolutePath)) return;
 
         clearTimeout(regenerationTimer);
         regenerationTimer = setTimeout(() => {
+          regenerationTimer = undefined;
+          if (disposed) return;
           pending = pending
             .then(async () => {
-              smartConfig = await loadSmartColorsConfig({ root, configFile, inlineConfig });
+              if (disposed) return;
+              const nextConfig = await loadSmartColorsConfig({ root, configFile, inlineConfig });
+              if (disposed) return;
+              smartConfig = nextConfig;
               watchFiles = getWatchFiles(root, configFile, smartConfig);
               server.watcher.add([...watchFiles]);
 
-              const report = await generateColorTokens({ root, configFile, inlineConfig, config: smartConfig });
+              const report = await generateColorTokens({ root, configFile, inlineConfig, config: smartConfig, suggest: false });
+              if (disposed) return;
 
               for (const warning of report.warnings) {
                 logger.warn(warning);
@@ -84,16 +96,27 @@ function smartColorsVitePlugin({ root, configFile, inlineConfig, logger }) {
               }
             })
             .catch((error) => {
-              logger.error(error instanceof Error ? error.message : String(error));
+              if (!disposed) logger.error(error instanceof Error ? error.message : String(error));
             });
         }, 50);
       };
 
-      for (const event of ["add", "change", "unlink"]) {
+      const watchEvents = ["add", "change", "unlink"];
+      for (const event of watchEvents) {
         server.watcher.on(event, scheduleRegeneration);
       }
-
-      return () => clearTimeout(regenerationTimer);
+      removeWatchListeners = () => {
+        for (const event of watchEvents) server.watcher.off(event, scheduleRegeneration);
+      };
+    },
+    async closeBundle() {
+      disposed = true;
+      clearTimeout(regenerationTimer);
+      regenerationTimer = undefined;
+      removeWatchListeners?.();
+      removeWatchListeners = undefined;
+      // Vite awaits this hook; already-started writes must settle before close completes.
+      await pending;
     },
   };
 }
@@ -101,6 +124,6 @@ function smartColorsVitePlugin({ root, configFile, inlineConfig, logger }) {
 function getWatchFiles(root, configFile, smartConfig) {
   return new Set([
     fileURLToPath(resolveProjectUrl(root, smartConfig.palette)),
-    fileURLToPath(resolveProjectUrl(root, configFile)),
+    fileURLToPath(resolveProjectUrl(root, configFile ?? DEFAULT_CONFIG_FILE)),
   ].map((filePath) => path.resolve(filePath)));
 }

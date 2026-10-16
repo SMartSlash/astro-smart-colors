@@ -4,7 +4,7 @@ export function formatColorsCss(model, config) {
   const { neutrals, identities, decoratives, logoTokens, onColors, focus, scales } = model;
   const identityNames = Object.keys(identities);
   const decorativeNames = Object.keys(decoratives ?? {});
-  const generatedLogoCss = formatLogoSection(logoTokens);
+
 
   return `:root {
   color-scheme: light dark;
@@ -15,51 +15,31 @@ export function formatColorsCss(model, config) {
      Editable source: ${config.palette}.
      Generated output: ${config.output}.
 
-     Contract:
-     - components consume public \`--color-*\` tokens only;
-     - \`--_*\` tokens are generated implementation details;
-     - aliases such as \`--color-accent\` map to configured identity roles;
-     - \`--color-on-*\` pairs target WCAG AA for text/icons on identity
-       backgrounds;
-     - every UI/feedback color receives a validated surface, border, solid,
-       on-solid and text family in both light and dark mode;
-     - \`--ink-*\` tokens are native contrast helpers for progressive
-       enhancement; keep \`--color-on-*\` as the baseline;
-     - \`--surface-*\` and \`--elevation-*\` provide a global substrate for
-       local surface theming before component-specific CSS;
-     - \`--color-tune-*\` tokens are the public tuning contract for project-level
-       personalization; avoid overriding generated \`--_*\` internals;
-     - decorative colors retain visual freedom but still receive a validated
-       \`--color-on-*\` companion for optional overlaid content;
-     - optional logo/brand tokens are project-specific.
+     Use public tokens below; edit the palette, not this generated file.
+     Each identity stays beside its variants, in palette order within its role.
+     Pair bg/surface + text, family surface + text, solid/hover + on-solid,
+     or a direct fill + its own on-* companion (not interchangeable).
+     Contrast checks cover declared pairs; shortfalls remain warnings.
+     Alpha, arbitrary backgrounds and overrides need local checks.
+     Advanced options follow the daily API; --_* internals are last.
      ======================================================================== */
-${formatQuickReference(model)}
 
-${formatTuningContract(config, neutrals)}
-
-  /* ─── Internal light/dark pairs ───────────────────────────────────────── */
-${formatNeutrals(neutrals, config)}
-${identityNames.map((name) => formatIdentityInternals(name, identities[name], onColors[name], config)).join("\n\n")}
-${decorativeNames.map((name) => formatDecorativeInternals(name, decoratives[name], onColors[name])).join("\n")}
-
-  --_color-focus-ring-light: ${oklch(focus.light)};
-  --_color-focus-ring-dark: ${oklch(focus.dark)};
-
-  /* ─── Public semantic API ─────────────────────────────────────────────── */
+  /* ─── Foundation ────────────────────────────────────────────────────────
+     Neutral canvas/surface + text/text-muted. Translucent borders are
+     ornamental; focus is checked against the neutral backgrounds. */
   --color-bg: light-dark(var(--_color-bg-light), var(--_color-bg-dark));
   --color-surface: light-dark(var(--_color-surface-light), var(--_color-surface-dark));
   --color-text: light-dark(var(--_color-text-light), var(--_color-text-dark));
   --color-text-muted: light-dark(var(--_color-text-muted-light), var(--_color-text-muted-dark));
 
-${identityNames.map((name) => formatIdentityPublic(name, onColors[name])).join("\n")}
-${formatFunctionalFamilies(identities)}
-${formatDecorativeSection(decoratives, onColors)}
-${formatAliases(config.aliases, onColors, identities)}
   --color-border-subtle: oklch(from var(--color-text) l c h / 14%);
   --color-border-strong: oklch(from var(--color-text) l c h / 28%);
   --color-focus-ring: light-dark(var(--_color-focus-ring-light), var(--_color-focus-ring-dark));
-${formatSurfaceContract()}${generatedLogoCss}${formatScaleSection(scales, onColors)}${formatHueVariants(config, identities)}
-  /* ─── Controls ────────────────────────────────────────────────────────── */
+${formatFunctionalFamilies(identities, onColors, "ui", "Identity / brand (ui)")}${formatFunctionalFamilies(identities, onColors, "feedback", "Feedback")}${formatDecorativeSection(decoratives, onColors)}${formatAliases(config.aliases, onColors, identities)}
+  /* ─── Controls ──────────────────────────────────────────────────────────
+     Active background/border + active-text; focus background + text.
+     Opaque state pairs are reported, not silently corrected. Alpha
+     boundaries and icons need checks on their actual local background. */
   --color-control-bg: var(--color-surface);
   --color-control-border: var(--color-border-subtle);
 
@@ -86,7 +66,29 @@ ${formatSurfaceContract()}${generatedLogoCss}${formatScaleSection(scales, onColo
     oklch(from var(--_color-text-light) l c h / 48%),
     oklch(from var(--_color-text-dark) l c h / 72%)
   );
-}
+
+  /* ─── Advanced ──────────────────────────────────────────────────────────
+     Optional composition and refinement; not needed to use color families. */
+${formatSurfaceContract()}${formatLogoSection(logoTokens)}${formatScaleSection(scales)}${formatHueVariants(config, identities)}
+  /* ─── Native contrast helpers ───────────────────────────────────────────
+     Progressive enhancement only; keep on-* companions as the baseline. */
+${identityNames.map((name) => `  --ink-${name}: contrast-color(var(--color-${name}));`).join("\n")}
+
+${formatTuningContract(config, neutrals)}
+
+${formatQuickReference(model)}
+
+  /* ─── Internal implementation ───────────────────────────────────────────
+     Generated light/dark pairs. Do not consume or override --_* tokens. */
+${formatNeutrals(neutrals, config)}
+
+${identityNames.map((name) => formatIdentityInternals(name, identities[name], onColors[name], config)).join("\n\n")}
+
+${decorativeNames.map((name) => formatDecorativeInternals(name, decoratives[name], onColors[name])).join("\n")}
+
+  --_color-focus-ring-light: ${oklch(focus.light)};
+  --_color-focus-ring-dark: ${oklch(focus.dark)};
+${formatLogoInternals(logoTokens)}}
 `;
 }
 
@@ -148,7 +150,7 @@ function formatDecorativeSection(decoratives, onColors) {
   const names = Object.keys(decoratives ?? {});
   if (!names.length) return "";
 
-  return `\n  /* ─── Decorative ────────────────────────────────────────────────────\n     Theme-adapted ornamental colors. Their canvas contrast is reported, not\n     forced; each color still receives a deterministic readable companion.\n     Do not use decorative color alone to communicate meaning or state. */\n${names.map((name) => `  --color-${name}: light-dark(var(--_color-${name}-light), var(--_color-${name}-dark));\n  --color-on-${name}: light-dark(${onColors[name].light}, ${onColors[name].dark});`).join("\n")}\n`;
+  return `\n  /* ─── Decorative ────────────────────────────────────────────────────\n     Theme-adapted ornamental colors. Canvas contrast is not guaranteed;\n     each color receives a checked, best-effort companion for its own fill.\n     Do not use decorative color alone to communicate meaning or state. */\n${names.map((name) => `  --color-${name}: light-dark(var(--_color-${name}-light), var(--_color-${name}-dark));\n  --color-on-${name}: light-dark(${onColors[name].light}, ${onColors[name].dark});`).join("\n")}\n`;
 }
 
 function formatTuningContract(config, neutrals) {
@@ -177,16 +179,16 @@ function formatNeutrals(neutrals, config) {
 
   if (mode === "relative") {
     return `  --_color-bg-source: ${oklch(neutrals.bgLight)};
-  --_color-bg-neutral: ${oklch({ ...neutrals.bgLight, c: 0, h: 0 })};
+  --_color-bg-neutral: oklch(${neutrals.bgLight.l} 0 none);
   --_color-bg-light: color-mix(in oklch, var(--_color-bg-source) var(--color-tune-light-warmth), var(--_color-bg-neutral));
   --_color-bg-warm: color-mix(in oklch, var(--_color-bg-source) var(--color-tune-dark-warmth), var(--_color-bg-neutral));
-  --_color-bg-dark: color-mix(in oklch, var(--_color-bg-warm) var(--color-tune-dark-bg-depth), oklch(0 0 0));
+  --_color-bg-dark: color-mix(in oklch, var(--_color-bg-warm) var(--color-tune-dark-bg-depth), oklch(0 0 none));
 
   --_color-surface-light: oklch(from var(--_color-bg-light) clamp(0, calc(l + var(--color-tune-surface-lightness-shift)), 1) c h);
-  --_color-surface-dark: color-mix(in oklch, var(--_color-bg-warm) var(--color-tune-dark-surface-depth), oklch(0 0 0));
+  --_color-surface-dark: color-mix(in oklch, var(--_color-bg-warm) var(--color-tune-dark-surface-depth), oklch(0 0 none));
 
   --_color-text-light: ${oklch(neutrals.textLight)};
-  --_color-text-dark: color-mix(in oklch, var(--_color-bg-source) var(--color-tune-dark-text-depth), oklch(0.99 0 0));
+  --_color-text-dark: color-mix(in oklch, var(--_color-bg-source) var(--color-tune-dark-text-depth), oklch(0.99 0 none));
 
   --_color-text-muted-light: ${oklch(neutrals.textMutedLight)};
   --_color-text-muted-dark: color-mix(in oklch, var(--_color-text-dark) var(--color-tune-dark-muted-depth), var(--_color-bg-dark));`;
@@ -220,7 +222,7 @@ function formatIdentityInternals(name, identity, onColor, config) {
   ];
 
   if (mode === "relative" && identity.mixRatio != null) {
-    lines.push(`  --_color-${name}-dark-generated: color-mix(in oklch, var(--_color-${name}-source) ${identity.mixRatio}%, oklch(1 0 0));`);
+    lines.push(`  --_color-${name}-dark-generated: color-mix(in oklch, var(--_color-${name}-source) ${identity.mixRatio}%, oklch(1 0 none));`);
   } else {
     lines.push(`  --_color-${name}-dark-generated: ${oklch(identity.dark)};`);
   }
@@ -239,12 +241,11 @@ function formatIdentityInternals(name, identity, onColor, config) {
 function formatIdentityPublic(name, onColor) {
   const colorToken = `  --color-${name}: light-dark(var(--_color-${name}-light), var(--_color-${name}-dark));`;
   const onToken = onColor ? `\n  --color-on-${name}: light-dark(var(--_color-on-${name}-light), var(--_color-on-${name}-dark));` : "";
-  const inkToken = `\n  --ink-${name}: contrast-color(var(--color-${name}));`;
-  return colorToken + onToken + inkToken;
+  return colorToken + onToken;
 }
 
-function formatFunctionalFamilies(identities) {
-  const entries = Object.entries(identities ?? {});
+function formatFunctionalFamilies(identities, onColors, role, heading) {
+  const entries = Object.entries(identities ?? {}).filter(([, identity]) => identity.role === role);
   if (!entries.length) return "";
 
   const definitions = entries.map(([name, identity]) => {
@@ -253,21 +254,24 @@ function formatFunctionalFamilies(identities) {
     // Border and solid reference the dark identity var. Hover stays resolved
     // so runtime CSS matches the color pair validated by the build-time model.
     const darkVar = `var(--_color-${name}-dark)`;
-    return `  /* ${name}: ${identity.role} functional family */
+    return `  /* ${name}: ${identity.role} — direct pair, surfaces, text, fills, borders */
+${formatIdentityPublic(name, onColors[name])}
   --color-${name}-surface: light-dark(${oklch(light.surface)}, ${oklch(dark.surface)});
   --color-${name}-surface-strong: light-dark(${oklch(light.surfaceStrong)}, ${oklch(dark.surfaceStrong)});
-  --color-${name}-border: light-dark(${oklch(light.border)}, ${darkVar});
-  --color-${name}-border-strong: light-dark(${oklch(light.borderStrong)}, ${oklch(dark.borderStrong)});
+  --color-${name}-text: light-dark(${oklch(light.text)}, ${oklch(dark.text)});
+  --color-${name}-text-strong: light-dark(${oklch(light.textStrong)}, ${oklch(dark.textStrong)});
   --color-${name}-solid: light-dark(${oklch(light.solid)}, ${darkVar});
   --color-${name}-solid-hover: light-dark(${oklch(light.solidHover)}, ${oklch(dark.solidHover)});
   --color-${name}-on-solid: light-dark(${oklch(light.onSolid)}, ${oklch(dark.onSolid)});
-  --color-${name}-text: light-dark(${oklch(light.text)}, ${oklch(dark.text)});
-  --color-${name}-text-strong: light-dark(${oklch(light.textStrong)}, ${oklch(dark.textStrong)});`;
+  --color-${name}-border: light-dark(${oklch(light.border)}, ${darkVar});
+  --color-${name}-border-strong: light-dark(${oklch(light.borderStrong)}, ${oklch(dark.borderStrong)});`;
   });
 
-  return `\n  /* ─── Functional color families ──────────────────────────────────────
-     Stable designer API. Each pair is generated and validated separately
-     in light and dark mode; numeric scales are optional advanced tokens. */
+  return `\n  /* ─── ${heading} ───────────────────────────────────────────────────
+     Stable designer API. Text/border-strong are checked on declared surfaces;
+     on-solid is checked on solid + hover with warnings for shortfalls.
+     Identity dark tuning changes border/solid, not hover or foregrounds;
+     overrides need local checks. Numeric scales are optional advanced tokens. */
 ${definitions.join("\n\n")}\n`;
 }
 
@@ -275,8 +279,9 @@ function formatSurfaceContract() {
   return `
 
   /* ─── Surface contract ───────────────────────────────────────────────────
-     Global substrate for local theming. Override --surface-color in a section,
-     component or future .surface-scope; the remaining tokens derive from it. */
+     Root-level substrate, not an automatic local theme scope. An inherited
+     root formula does not re-resolve after a child changes --surface-color;
+     local surfaces need an explicit foreground pair and local derivations. */
   --surface-color: var(--color-bg);
   --surface-contrast: contrast-color(var(--surface-color));
   --surface-text: var(--color-text);
@@ -343,15 +348,17 @@ function formatScale(name, scale) {
 }
 
 function formatAliases(aliases, onColors, identities) {
-  const entries = Object.entries(aliases ?? {});
+  const entries = Object.entries(aliases ?? {}).filter(([, target]) => Object.hasOwn(onColors, target));
   if (!entries.length) return "\n";
-  const functionalSuffixes = ["surface", "surface-strong", "border", "border-strong", "solid", "solid-hover", "on-solid", "text", "text-strong"];
+  const functionalSuffixes = ["surface", "surface-strong", "text", "text-strong", "solid", "solid-hover", "on-solid", "border", "border-strong"];
 
-  return `\n${entries
+  return `\n  /* ─── Aliases ───────────────────────────────────────────────────────────
+     Alternative names for existing colors, not additional palette choices. */
+${entries
     .map(([alias, target]) => {
-      const lines = [`  --color-${alias}: var(--color-${target});`];
-      if (onColors[target]) lines.push(`  --color-on-${alias}: var(--color-on-${target});`);
-      if (identities[target]) {
+      const lines = [`  /* ${alias} → ${target} */`, `  --color-${alias}: var(--color-${target});`];
+      if (Object.hasOwn(onColors, target)) lines.push(`  --color-on-${alias}: var(--color-on-${target});`);
+      if (Object.hasOwn(identities, target)) {
         for (const suffix of functionalSuffixes) {
           lines.push(`  --color-${alias}-${suffix}: var(--color-${target}-${suffix});`);
         }
@@ -370,8 +377,6 @@ function formatLogoSection(logoTokens) {
   css += "     Dark variants generated at build time. */\n";
 
   for (const name of names) {
-    css += `  --_logo-${name}-light: ${oklch(logoTokens[name].light)};\n`;
-    css += `  --_logo-${name}-dark: ${oklch(logoTokens[name].dark)};\n`;
     css += `  --logo-${name}: light-dark(var(--_logo-${name}-light), var(--_logo-${name}-dark));\n`;
   }
 
@@ -383,6 +388,13 @@ function formatLogoSection(logoTokens) {
   css += "  --logo-bg-fill: light-dark(var(--color-bg), var(--color-surface));\n";
 
   return css;
+}
+
+function formatLogoInternals(logoTokens) {
+  const entries = Object.entries(logoTokens ?? {});
+  if (!entries.length) return "";
+
+  return `\n${entries.map(([name, colors]) => `  --_logo-${name}-light: ${oklch(colors.light)};\n  --_logo-${name}-dark: ${oklch(colors.dark)};`).join("\n")}\n`;
 }
 
 function formatHueVariants(config, identities) {

@@ -18,23 +18,47 @@ export function parsePalette(css) {
 }
 
 export function parsePaletteWithDiagnostics(css) {
-  const hasPropertyBlocks = /@property\s+--/i.test(css);
-  if (hasPropertyBlocks) return parsePropertyBlocks(css);
+  const uncommentedCss = stripComments(css);
+  const hasPropertyBlocks = /@property\s+--/i.test(uncommentedCss);
+  if (hasPropertyBlocks) return parsePropertyBlocks(uncommentedCss);
   return parseRootBlock(css);
+}
+
+function stripComments(css, preserveRoles = false) {
+  return css.replace(/\/\*[\s\S]*?\*\//g, (comment) => {
+    const whitespace = comment.replace(/[^\r\n]/g, " ");
+    const roleMatch = preserveRoles ? ROLE_ANNOTATION_PATTERN.exec(comment) : null;
+    // Only a standalone annotation is metadata; prose and disabled CSS stay inert.
+    if (roleMatch?.[0] === comment) {
+      return `/* @role ${roleMatch[1]} */${whitespace}`;
+    }
+    return whitespace;
+  });
 }
 
 function parsePropertyBlocks(css) {
   const tokens = {};
+  const authoredTokens = {};
   const annotatedRoles = {};
   const annotatedDarkBlends = {};
   const errors = [];
-  const uncommentedCss = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  const seenProperties = new Set();
 
   PROPERTY_BLOCK_PATTERN.lastIndex = 0;
   let blockMatch;
-  while ((blockMatch = PROPERTY_BLOCK_PATTERN.exec(uncommentedCss))) {
+  while ((blockMatch = PROPERTY_BLOCK_PATTERN.exec(css))) {
     const [, propName, body] = blockMatch;
     const name = tokenKey(propName);
+
+    if (seenProperties.has(name)) {
+      errors.push(`${propName}: duplicate @property declaration; each palette token must be declared once.`);
+      delete tokens[name];
+      delete authoredTokens[name];
+      delete annotatedRoles[name];
+      delete annotatedDarkBlends[name];
+      continue;
+    }
+    seenProperties.add(name);
 
     const initialMatch = PROPERTY_INITIAL_VALUE.exec(body);
     if (!initialMatch) {
@@ -51,6 +75,7 @@ function parsePropertyBlocks(css) {
     }
 
     tokens[name] = parsed.color;
+    authoredTokens[name] = parsed.source;
 
     const roleMatch = PROPERTY_ROLE.exec(body);
     if (!roleMatch) {
@@ -101,16 +126,17 @@ function parsePropertyBlocks(css) {
   }
 
   validateFoundationRoles(annotatedRoles, errors);
-  return { tokens, errors, annotatedRoles, annotatedDarkBlends };
+  return { tokens, authoredTokens, errors, annotatedRoles, annotatedDarkBlends };
 }
 
 function parseRootBlock(css) {
   const tokens = {};
+  const authoredTokens = {};
   const annotatedRoles = {};
   const annotatedDarkBlends = {};
   const errors = [];
   let pendingRole = null;
-  const lines = css.split("\n");
+  const lines = stripComments(css, true).split("\n");
 
   for (const line of lines) {
     const roleMatch = ROLE_ANNOTATION_PATTERN.exec(line);
@@ -136,6 +162,7 @@ function parseRootBlock(css) {
       }
 
       tokens[name] = parsed.color;
+      authoredTokens[name] = parsed.source;
 
       if (pendingRole) {
         annotatedRoles[name] = pendingRole;
@@ -145,7 +172,7 @@ function parseRootBlock(css) {
   }
 
   validateFoundationRoles(annotatedRoles, errors);
-  return { tokens, errors, annotatedRoles, annotatedDarkBlends };
+  return { tokens, authoredTokens, errors, annotatedRoles, annotatedDarkBlends };
 }
 
 function validateFoundationRoles(annotatedRoles, errors) {
@@ -175,6 +202,7 @@ export function parseOklch(value) {
 
   return {
     color: parsed.errors.length ? null : fitToSrgb(parsed.color),
+    source: parsed.errors.length ? null : parsed.color,
     errors: parsed.errors,
   };
 }
@@ -188,6 +216,14 @@ function parseOklchChannels({ lightness, chroma, hue, alpha }) {
   const l = parseLightness(lightness, errors);
   const c = parseChroma(chroma, errors);
   const h = parseHue(hue, errors);
+
+  if (!errors.length) {
+    for (const [channel, number] of Object.entries({ lightness: l, chroma: c, hue: h })) {
+      if (!Number.isFinite(number)) {
+        errors.push(`${channel} must resolve to a finite number after unit conversion.`);
+      }
+    }
+  }
 
   if (alpha != null) {
     errors.push("Alpha channels are not supported in palette source colors; use an opaque OKLCH value.");

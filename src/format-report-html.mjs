@@ -412,7 +412,8 @@ export function proposalView(proposal, index, entries) {
       && labels.includes(before.item.label)).map(({ before }) => before.key));
     const rank = { pass: 0, "below-target": 1, "below-minimum": 2 };
   const changes = list(proposal.changes);
-  const complete = checks.length > 0 && paired.length === checks.length
+  // Every original pair needs a control, including previously passing pairs.
+  const complete = checks.length > 0 && checks.length === entries.length && paired.length === checks.length
     && new Set(paired.map(({ before }) => before.key)).size === paired.length
     && paired.every(({ item, before }) => rank[expectedStatus({ ...item, minimum: before.item.minimum, target: before.item.target })] <= rank[before.item.status])
     && labels.length > 0 && labels.every((label) => text(label) && expected.some(({ item }) => item.label === label))
@@ -892,8 +893,8 @@ export function validation(report, scenarios, entries) {
   return { problems, iso, digest };
 }
 
-/** Render a supplied snapshot only: no I/O, recalculation of contrast or client code. */
-export function formatContrastReportHtml(value) {
+/** Internal snapshot preparation shared by renderers and report summaries; no I/O or contrast recalculation. */
+export function prepareContrastReport(value) {
   const report = record(value) ? value : {};
   const scenarios = list(report.scenarios);
   const entries = entriesFor(scenarios);
@@ -914,6 +915,14 @@ export function formatContrastReportHtml(value) {
     ? `${groups.length} ${groups.length === 1 ? "problema di contrasto" : "problemi di contrasto"} · ${complete.length} ${complete.length === 1 ? "correzione verificata" : "correzioni verificate"}`
     : "Esito positivo dello snapshot: 0 issue";
   const files = record(report.files) ? report.files : {};
+  return { report, scenarios, entries, problems, iso, digest, issues, errors, verified, proposals,
+    groups, overlaps, variantShifts, tuningGroups, complete, outcome, files };
+}
+
+/** Render a supplied snapshot only: no I/O, recalculation of contrast or client code. */
+export function formatContrastReportHtml(value) {
+  const { report, scenarios, entries, problems, iso, digest, issues, errors, verified, proposals,
+    groups, overlaps, variantShifts, tuningGroups, complete, outcome, files } = prepareContrastReport(value);
   const messages = (heading, values) => `<h3>${heading}</h3>${values.length ? `<ul>${values.map((item) => `<li>${escape(item)}</li>`).join("")}</ul>` : "<p>Nessuno.</p>"}`;
   return `${MARKER}
 <!doctype html>

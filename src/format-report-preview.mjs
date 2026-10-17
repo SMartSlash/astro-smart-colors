@@ -4,8 +4,8 @@
 // positive verdict and no color is labeled as suggested.
 import {
   CSP, MARKER, VARIANT_SHIFT_THRESHOLD, agree, baselineNote, colorChoice, colorCss, compactRatio, deltaSummary,
-  entriesFor, escape, familyAtlasData, fileRole, it, issueGroups, list, overlapList, overlapView,
-  proposalSentence, proposalView, record, sampleVisual, sideEffectsHtml, status, validation, variantShiftView,
+  escape, familyAtlasData, fileRole, it, list, overlapList, prepareContrastReport,
+  proposalSentence, record, sampleVisual, sideEffectsHtml, status,
 } from "./format-report-html.mjs";
 
 const FILE_TITLES = {
@@ -159,10 +159,10 @@ const badge = (shape, label) => `<span class="badge badge--${shape}">${escape(la
 const count = (value) => `<strong class="count">${value}</strong>`;
 
 // One reading per measured pair: shortfalls get a shaped status badge plus their compact
-// ratio, pairs at or above target get a discreet pass marker. Text always carries the state.
+// ratio, validated passing pairs get a discreet pass marker. Text always carries the state.
 function measureState(item) {
   const ratio = `<span class="contrast-value">${compactRatio(item.ratio, [item.minimum, item.target])}</span>`;
-  if (item.ratio < item.target) return `${badge(item.status === "below-minimum" ? "solid" : "outline", status(item))} ${ratio}`;
+  if (item.status !== "pass") return `${badge(item.status === "below-minimum" ? "solid" : "outline", status(item))} ${ratio}`;
   return `<span class="tier">${item.kind === "non-text" ? "3:1" : "AA"}</span> ${ratio}`;
 }
 
@@ -270,7 +270,7 @@ function paletteHtml(families, verified) {
   const note = verified
     ? "Solo coppie realmente misurate negli scenari; per ogni abbinamento è mostrato il caso peggiore fra browser e preferenze."
     : "Verifica incompleta: il quadro è parziale e nessun campione vale come conferma.";
-  return `<p>${note} Il badge <span class="tier">AA</span> indica una coppia che raggiunge il target dichiarato; sotto target compare il rapporto con l'esito.</p>
+  return `<p>${note} Il badge <span class="tier">AA</span> indica una coppia che raggiunge minimo e target dichiarati; sotto minimo o target compare il rapporto con l'esito.</p>
 <div class="card-grid card-grid--wide">${families.names.map((name) => familyCard(name, families.find)).join("")}</div>`;
 }
 
@@ -308,24 +308,8 @@ ${textSafe.length ? overlapList(textSafe.slice(0, 3), [4.5]) : "<p>Nessuna coppi
 
 /** Render the compact preview of a supplied snapshot only: no I/O, no new measurements. */
 export function formatContrastPreviewHtml(value) {
-  const report = record(value) ? value : {};
-  const scenarios = list(report.scenarios);
-  const entries = entriesFor(scenarios);
-  const { problems, iso, digest } = validation(report, scenarios, entries);
-  const issues = entries.filter(({ valid, item }) => valid && item.status !== "pass");
-  const errors = [...list(report.generationErrors), ...list(report.auditErrors)];
-  const verified = !problems.length && !errors.length;
-  const proposals = list(report.proposals).filter((item) => record(item) && item.verified === true)
-    .map((item, index) => proposalView(item, index, entries))
-    .map((view) => verified ? view : { ...view, complete: false, covered: new Set() });
-  const complete = proposals.filter((view) => view.complete);
-  const groups = issueGroups(entries);
-  const overlaps = overlapView(report.overlaps, scenarios, verified);
-  const variantShifts = verified ? variantShiftView(entries, list(report.palette), record(report.roles) ? report.roles : null) : null;
-  // Same three verdict formulations as the full report, from the same verified data.
-  const outcome = !verified ? "Esito non verificato o incompleto" : issues.length
-    ? `${groups.length} ${groups.length === 1 ? "problema di contrasto" : "problemi di contrasto"} · ${complete.length} ${complete.length === 1 ? "correzione verificata" : "correzioni verificate"}`
-    : "Esito positivo dello snapshot: 0 issue";
+  const { report, scenarios, entries, problems, iso, digest, issues, errors, verified, proposals,
+    complete, groups, overlaps, variantShifts, outcome } = prepareContrastReport(value);
   const generated = iso
     ? `<time datetime="${escape(report.generatedAt)}">${escape(report.generatedAt)}</time>`
     : escape(report.generatedAt);

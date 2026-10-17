@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import * as renderer from "../src/format-report-html.mjs";
 
-const { formatContrastReportHtml: render } = renderer;
+const { formatContrastReportHtml: render, prepareContrastReport } = renderer;
 const color = (l = 0.5, c = 0.1, h = 350) => ({ l, c, h });
 const statusFor = (ratio, target, minimum) => ratio < minimum ? "below-minimum" : ratio < target ? "below-target" : "pass";
 function diagnostic(overrides = {}) {
@@ -436,7 +436,7 @@ test("exports the renderer with its internal helpers and returns a complete mark
   assert.deepEqual(Object.keys(renderer).sort(), [
     "CSP", "MARKER", "VARIANT_SHIFT_THRESHOLD", "agree", "baselineNote", "colorChoice", "colorCss", "compactRatio",
     "deltaSummary", "entriesFor", "escape", "familyAtlasData", "fileRole", "formatContrastReportHtml",
-    "issueGroups", "it", "list", "overlapList", "overlapView", "proposalSentence", "proposalView", "record",
+    "issueGroups", "it", "list", "overlapList", "overlapView", "prepareContrastReport", "proposalSentence", "proposalView", "record",
     "sampleVisual", "sideEffectsHtml", "status", "validation", "variantShiftView",
   ]);
   const html = render(issueReport());
@@ -679,6 +679,29 @@ test("coverage needs every affected scenario and the exact target and minimum, n
   assert.doesNotMatch(scenarioSection(complete), /Nessuna proposta verificata/);
 });
 
+test("proposal completeness requires every original control, even outside named issues", () => {
+  const original = [diagnostic({ ratio: 4 }), diagnostic({ label: "passing control", ratio: 5 }),
+    diagnostic({ label: "unrelated shortfall", ratio: 4.55 })];
+  const checks = original.map((item, index) => index === 0 ? diagnostic({ ratio: 6 }) : { ...item });
+  const input = issueReport({ scenarios: [scenario({ diagnostics: original })], proposals: [proposal({ checks })] });
+  assert.equal(prepareContrastReport(input).complete.length, 1);
+  for (const missingIndex of [0, 1, 2]) {
+    const partial = { ...input, proposals: [proposal({ checks: checks.filter((_, index) => index !== missingIndex) })] };
+    const prepared = prepareContrastReport(partial);
+    assert.equal(prepared.verified, true, "The original snapshot is still valid");
+    assert.equal(prepared.proposals[0].complete, false);
+    assert.equal(prepared.proposals[0].covered.size, 0);
+    assert.equal(prepared.complete.length, 0);
+    const html = render(partial);
+    assert.match(header(html), /0 correzioni verificate/);
+    assert.match(proposalsSection(html), /Verifica incompleta: nessuna copertura attribuita/);
+    assert.doesNotMatch(proposalsSection(html), /color-choice--suggested|<strong>Suggerito<\/strong>/);
+    assert.doesNotMatch(scenarioSection(html), /href="#proposal-/);
+  }
+  const duplicate = { ...input, proposals: [proposal({ checks: [checks[0], checks[1], checks[1]] })] };
+  assert.equal(prepareContrastReport(duplicate).complete.length, 0, "Equal counts cannot replace a missing control with a duplicate");
+});
+
 test("minimum ratio includes all checks, including unaffected pairs, and provenance is never synthesized", () => {
   const other = diagnostic({ label: "altra coppia", ratio: 5 });
   const input = issueReport({
@@ -804,6 +827,53 @@ test("changed proposal rows retain explicit browser and preference while unchang
   assert.match(html, /Altri 1 controlli invariati: rapporto identico al valore già misurato negli scenari/);
   const table = html.slice(html.indexOf("Controlli cambiati dalla proposta — 1 di 2"));
   assert.doesNotMatch(table, /<td>webkit \/ light \/ more<\/td>/, "An identical measurement is counted once, not reprinted");
+});
+
+test("shared preparation exposes the snapshot summary without mutating frozen inputs", () => {
+  const input = issueReport({
+    scenarios: [scenario({ diagnostics: [diagnostic({ ratio: 4, baselineRatio: 5 })] })],
+    proposals: [proposal()],
+  });
+  const before = structuredClone(input);
+  deepFreeze(input);
+  const prepared = prepareContrastReport(input);
+  assert.deepEqual(Object.keys(prepared).sort(), [
+    "report", "scenarios", "entries", "problems", "iso", "digest", "issues", "errors", "verified", "proposals",
+    "groups", "overlaps", "variantShifts", "tuningGroups", "complete", "outcome", "files",
+  ].sort());
+  assert.equal(prepared.report, input);
+  assert.equal(prepared.scenarios, input.scenarios);
+  assert.equal(prepared.files, input.files);
+  assert.equal(prepared.verified, true);
+  assert.equal(prepared.iso, true);
+  assert.equal(prepared.digest, true);
+  assert.deepEqual(prepared.problems, []);
+  assert.deepEqual(prepared.errors, []);
+  for (const key of ["entries", "issues", "groups", "tuningGroups", "proposals", "complete"]) assert.equal(prepared[key].length, 1, key);
+  assert.equal(prepared.complete[0], prepared.proposals[0]);
+  assert.deepEqual([...prepared.complete[0].covered], [prepared.entries[0].key]);
+  assert.equal(prepared.outcome, "1 problema di contrasto · 1 correzione verificata");
+  assert.deepEqual(prepareContrastReport(input), prepared);
+  assert.deepEqual(input, before);
+  assert.ok(header(render(input)).includes(prepared.outcome));
+  assert.equal(prepareContrastReport(report()).outcome, "Esito positivo dello snapshot: 0 issue");
+});
+
+test("shared preparation fails closed and rendering cannot bypass snapshot validation", () => {
+  const prepared = prepareContrastReport(issueReport({ proposals: [proposal()] }));
+  for (const input of [undefined, null, [], {}, report({ scenarios: [] }),
+    issueReport({ inputDigest: "invalid", proposals: [proposal()] }),
+    issueReport({ auditErrors: ["Audit incompleto"], proposals: [proposal()] }),
+    issueReport({ generationErrors: ["Generazione incompleta"], proposals: [proposal()] })]) {
+    const result = prepareContrastReport(input);
+    assert.equal(result.verified, false);
+    assert.equal(result.outcome, "Esito non verificato o incompleto");
+    assert.equal(result.complete.length, 0);
+    assert.ok(result.proposals.every((view) => !view.complete && view.covered.size === 0));
+    assert.equal(render(input, prepared), render(input), "No optional prepared-view bypass");
+  }
+  assert.equal(render.length, 1);
+  assert.match(header(render(prepared)), /Esito non verificato o incompleto/);
 });
 
 test("rendering is deterministic, has no side effects on inputs and states scope limitations", () => {

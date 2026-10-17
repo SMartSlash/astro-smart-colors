@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { defaultSmartColorsConfig } from "../src/defaults.mjs";
-import { formatContrastReportHtml } from "../src/format-report-html.mjs";
+import { formatContrastReportHtml, prepareContrastReport } from "../src/format-report-html.mjs";
 import { formatContrastPreviewHtml } from "../src/format-report-preview.mjs";
 import { writeContrastReport } from "../src/report-artifact.mjs";
 
@@ -157,6 +157,40 @@ test("incomplete proposals are never presented as verified corrections", () => {
   assert.match(section(html, "problemi"), /Nessuna correzione verificata copre questa coppia/);
 });
 
+test("a missing passing control in another scenario prevents verified preview actions", () => {
+  const control = diagnostic({ label: "passing control", scheme: "dark", ratio: 5 });
+  const input = report({ scenarios: [
+    scenario({ diagnostics: [diagnostic({ ratio: 4.2 })] }),
+    scenario({ browser: "webkit", scheme: "dark", diagnostics: [control] }),
+  ], proposals: [proposal()] });
+  const html = preview(input);
+  assert.match(html, /1 problema di contrasto · 0 correzioni verificate/);
+  assert.match(section(html, "azione"), /Nessuna correzione verificata/);
+  assert.doesNotMatch(html, /Suggerito|Coperta da|<pre/);
+  const complete = { ...input, proposals: [proposal({ checks: [
+    ...input.proposals[0].checks, { ...control, browser: "webkit", preference: "no-preference" },
+  ] })] };
+  assert.match(preview(complete), /1 problema di contrasto · 1 correzione verificata/);
+  assert.match(section(preview(complete), "azione"), /<strong>Suggerito<\/strong>/);
+});
+
+test("family badges respect validated minimum failures even when the target is met", () => {
+  for (const [kind, minimum, target, below, passing, foregroundToken, tier] of [
+    ["text", 4.5, 4, 4.4, 4.5, "--color-primary-text", "AA"],
+    ["non-text", 3, 2.5, 2.9, 3, "--color-primary-border-strong", "3:1"],
+  ]) {
+    const family = (ratio, overrides = {}) => section(preview(report({ scenarios: [scenario({ diagnostics: [
+      diagnostic({ label: "family name", foregroundToken: "--color-primary-text", backgroundToken: "--color-bg" }),
+      diagnostic({ kind, minimum, target, ratio, foregroundToken, backgroundToken: "--color-primary-surface", ...overrides }),
+    ] })] })), "palette").match(/<article class="card family-strip">[\s\S]*?<\/article>/)?.[0] ?? "";
+    assert.match(family(below), /badge--solid">Sotto il minimo/);
+    assert.doesNotMatch(family(below), /class="tier">/);
+    assert.ok(family(passing).includes(`<span class="tier">${tier}</span>`));
+    assert.match(family(passing, { target: passing + 0.1 }), /badge--outline">Sotto il target/);
+    assert.doesNotMatch(family(below, { status: "pass" }), /class="tier">/, "Incoherent diagnostics must not enter the family atlas");
+  }
+});
+
 test("state badges pair text with shape and keep minimum and target distinct", () => {
   const input = report({ scenarios: [scenario({ diagnostics: [
     diagnostic({ label: "sotto minimo", ratio: 4.4 }),
@@ -183,6 +217,22 @@ test("summary numbers and verdict stay identical to the full report on the same 
   }
   const empty = report({ scenarios: [] });
   assert.equal(preview(empty).match(/<p class="verdict">([\s\S]*?)<\/p>/)[1], formatContrastReportHtml(empty).match(/<p class="status overview">([\s\S]*?)<\/p>/)[1]);
+});
+
+test("both snapshot-only renderers use the shared verdict and reject prepared-view bypasses", () => {
+  const valid = report({ scenarios: [scenario({ diagnostics: [diagnostic({ ratio: 4.2 })] })], proposals: [proposal()] });
+  const prepared = prepareContrastReport(valid);
+  for (const input of [report(), valid, { ...valid, proposals: [proposal({ checks: [] })] },
+    { ...valid, auditErrors: ["Audit incompleto"] }, { ...valid, inputDigest: "invalid" }, undefined]) {
+    const summary = prepareContrastReport(input);
+    const full = formatContrastReportHtml(input);
+    const html = preview(input);
+    assert.equal(html.match(/<p class="verdict">([\s\S]*?)<\/p>/)[1], summary.outcome);
+    assert.equal(full.match(/<p class="status overview">([\s\S]*?)<\/p>/)[1], summary.outcome);
+    assert.equal(formatContrastPreviewHtml(input, prepared), html);
+  }
+  assert.equal(formatContrastPreviewHtml.length, 1);
+  assert.match(preview(prepared), /<p class="verdict">Esito non verificato o incompleto<\/p>/);
 });
 
 test("heading hierarchy never skips a level and the sections follow the navigation", () => {
@@ -256,23 +306,23 @@ function bigScenario(browser, scheme, preference) {
 }
 function bigReport() {
   const light = forcedScenario("light");
+  const scenarios = BIG_SCENARIOS.map(([browser, scheme, preference]) => bigScenario(browser, scheme, preference));
   return report({
     palette: BIG_NAMES.map((name, index) => ({
       name: `--${name}`, role: "ui", authored: color(0.62 + index * 0.01, 0.12, (index * 25) % 360),
       resolved: color(0.62 + index * 0.01, 0.12, (index * 25) % 360),
     })),
     roles: { identities: BIG_NAMES.map((name) => ({ name, role: "ui", token: `--color-${name}-text`, paletteName: `--${name}` })) },
-    scenarios: BIG_SCENARIOS.map(([browser, scheme, preference]) => bigScenario(browser, scheme, preference)),
+    scenarios,
     overlaps: BIG_SCENARIOS.map(([browser, scheme, preference]) => overlapScenario(browser, scheme, preference)),
     proposals: [{
       id: "tune-pair-0", title: "Correzione di prova sul primo abbinamento", kind: "tuning",
       destination: { file: "src/styles/tokens/colors-tuning.css", path: "--color-tune-muted-lightness-shift", snippet: ":root {\n  --color-tune-muted-lightness-shift: -0.04;\n}" },
       impact: "Regola il testo secondario senza cambiare la palette", search: "dipendenza monotona in lightness",
       changes: [{ label: "--color-text-muted", before: color(0.6, 0.02, 250), after: color(0.55, 0.02, 250) }],
-      checks: BIG_SCENARIOS.filter(([, scheme]) => scheme === "light").map(([browser, scheme, preference]) => diagnostic({
-        label: light, scheme, browser, preference, foregroundToken: "--color-primary-text", backgroundToken: "--color-primary-surface",
-        foreground: color(0.3, 0.08, 30), background: color(0.98, 0.01, 0), ratio: 5.4, target: 4.6, minimum: 4.5,
-      })),
+      checks: scenarios.flatMap(({ diagnostics }) => diagnostics.map((item) => item.label === light
+        ? { ...item, foreground: color(0.3, 0.08, 30), ratio: 5.4, status: "pass" }
+        : { ...item })),
       issueLabels: [light], verified: true,
     }],
   });

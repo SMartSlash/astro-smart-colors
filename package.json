@@ -34,6 +34,11 @@
   "peerDependencies": {
     "astro": ">=5"
   },
+  "peerDependenciesMeta": {
+    "astro": {
+      "optional": true
+    }
+  },
   "engines": {
     "node": ">=22.12.0"
   }

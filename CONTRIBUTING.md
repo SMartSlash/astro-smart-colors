@@ -38,8 +38,10 @@ network access, so it stays fast enough to run on every save.
 - **Report renderers stay static.** No scripts, no external assets, and an
   unverified snapshot never receives a positive verdict or a suggested colour.
 
-## What is not in this package
+## Optional peers and browser E2E
 
-The browser audit, the snapshot builder and the visual report generation are
-project tooling that lives in the reference site repository. This package stays
-free of Playwright so it can be installed anywhere.
+`astro` and `playwright` (`@playwright/test`) are optional peer dependencies:
+`init`, `build` and `check` run without either, while `audit` and `report` load
+Playwright on demand to measure computed styles in a real browser. The unit and
+contract suite in `test/` runs entirely in Node (`pnpm test`), without launching
+a browser.

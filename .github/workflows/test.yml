@@ -1,0 +1,17 @@
+name: test
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # No lockfile is committed yet: remove the flag once one is committed, so
+      # CI installs exactly the resolved versions.
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm test

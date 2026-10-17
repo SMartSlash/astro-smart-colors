@@ -456,7 +456,7 @@ function usageCategory(item) {
   if (item.kind === "non-text") return "boundaries";
   if (item.kind !== "text") return "other";
   if (["--color-bg", "--color-surface"].includes(item.backgroundToken)) return "neutral";
-  if (/^--color-on-/.test(item.foregroundToken) || /-on-solid$/.test(item.foregroundToken)) return "fills";
+  if (/^--color-on-/.test(item.foregroundToken) || /-(?:on-solid|ink|solid-text)$/.test(item.foregroundToken)) return "fills";
   return "surfaces";
 }
 
@@ -591,7 +591,8 @@ ${themes.map((scheme) => {
 export function familyAtlasData(entries) {
   const valid = entries.filter(({ valid }) => valid);
   const names = [...new Set([
-    ...valid.map(({ item }) => /^--color-(.+)-text$/.exec(item.foregroundToken)?.[1]),
+    ...valid.map(({ item }) => /^--color-(.+)-text$/.exec(item.foregroundToken)?.[1]).filter((name) => name && !name.endsWith("-solid")),
+    ...valid.map(({ item }) => /^--color-(.+)-ink$/.exec(item.foregroundToken)?.[1]),
     ...valid.map(({ item }) => /^--color-on-(.+)$/.exec(item.foregroundToken)?.[1]),
   ].filter(Boolean))];
   const worst = new Map();
@@ -624,9 +625,9 @@ function familyAtlas(entries, verified) {
   const theme = (scheme, name) => {
     const card = find(scheme, "text", `--color-${name}-text`, `--color-${name}-surface`);
     const border = find(scheme, "non-text", `--color-${name}-border-strong`, `--color-${name}-surface`);
-    const button = find(scheme, "text", `--color-${name}-on-solid`, `--color-${name}-solid`);
-    const hover = find(scheme, "text", `--color-${name}-on-solid`, `--color-${name}-solid-hover`);
-    const direct = find(scheme, "text", `--color-on-${name}`, `--color-${name}`);
+    const button = find(scheme, "text", `--color-${name}-solid-text`, `--color-${name}-solid`);
+    const hover = find(scheme, "text", `--color-${name}-solid-text`, `--color-${name}-solid-hover`);
+    const direct = find(scheme, "text", `--color-${name}-ink`, `--color-${name}`);
     return [
       card ? sample("Testo su callout", card, border ? [border] : [], border) : "",
       button ? sample("Bottone", button, hover ? [hover] : []) : "",

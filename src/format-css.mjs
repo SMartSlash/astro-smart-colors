@@ -17,8 +17,8 @@ export function formatColorsCss(model, config) {
 
      Use public tokens below; edit the palette, not this generated file.
      Each identity stays beside its variants, in palette order within its role.
-     Pair bg/surface + text, family surface + text, solid/hover + on-solid,
-     or a direct fill + its own on-* companion (not interchangeable).
+     Pair bg/surface + text, family surface + text, solid/hover + solid-text,
+     or a direct fill + its own *-ink companion (not interchangeable).
      Contrast checks cover declared pairs; shortfalls remain warnings.
      Alpha, arbitrary backgrounds and overrides need local checks.
      Advanced options follow the daily API; --_* internals are last.
@@ -95,7 +95,7 @@ ${formatLogoInternals(logoTokens)}}
 export function formatColorsMotionCss(model) {
   const identityNames = Object.keys(model.identities);
   const decorativeNames = Object.keys(model.decoratives ?? {});
-  const functionalSuffixes = ["surface", "surface-strong", "border", "border-strong", "solid", "solid-hover", "on-solid", "text", "text-strong"];
+  const functionalSuffixes = ["surface", "surface-strong", "border", "border-strong", "solid", "solid-hover", "solid-text", "text", "text-strong"];
   const colorNames = [...identityNames, ...decorativeNames];
   const registrations = [
     ["--color-bg", "transparent"],
@@ -107,11 +107,11 @@ export function formatColorsMotionCss(model) {
     ["--color-focus-ring", "black"],
     ...colorNames.flatMap((name) => [
       [`--color-${name}`, "transparent"],
-      [`--color-on-${name}`, "black"],
+      [`--color-${name}-ink`, "black"],
     ]),
     ...identityNames.flatMap((name) => functionalSuffixes.map((suffix) => [
       `--color-${name}-${suffix}`,
-      suffix === "on-solid" || suffix.startsWith("text") ? "black" : "transparent",
+      suffix === "solid-text" || suffix.startsWith("text") ? "black" : "transparent",
     ])),
     ["--surface-color", "transparent"],
     ["--surface-contrast", "black"],
@@ -123,7 +123,7 @@ export function formatColorsMotionCss(model) {
     "--color-border-subtle",
     "--color-border-strong",
     "--color-focus-ring",
-    ...colorNames.flatMap((name) => [`--color-${name}`, `--color-on-${name}`]),
+    ...colorNames.flatMap((name) => [`--color-${name}`, `--color-${name}-ink`]),
     ...identityNames.flatMap((name) => functionalSuffixes.map((suffix) => `--color-${name}-${suffix}`)),
   ];
 
@@ -150,7 +150,7 @@ function formatDecorativeSection(decoratives, onColors) {
   const names = Object.keys(decoratives ?? {});
   if (!names.length) return "";
 
-  return `\n  /* ─── Decorative ────────────────────────────────────────────────────\n     Theme-adapted ornamental colors. Canvas contrast is not guaranteed;\n     each color receives a checked, best-effort companion for its own fill.\n     Do not use decorative color alone to communicate meaning or state. */\n${names.map((name) => `  --color-${name}: light-dark(var(--_color-${name}-light), var(--_color-${name}-dark));\n  --color-on-${name}: light-dark(${onColors[name].light}, ${onColors[name].dark});`).join("\n")}\n`;
+  return `\n  /* ─── Decorative ────────────────────────────────────────────────────\n     Theme-adapted ornamental colors. Canvas contrast is not guaranteed;\n     each color receives a checked, best-effort companion for its own fill.\n     Do not use decorative color alone to communicate meaning or state. */\n${names.map((name) => `  --color-${name}: light-dark(var(--_color-${name}-light), var(--_color-${name}-dark));\n  --color-${name}-ink: light-dark(${onColors[name].light}, ${onColors[name].dark});`).join("\n")}\n`;
 }
 
 function formatTuningContract(config, neutrals) {
@@ -162,10 +162,10 @@ function formatTuningContract(config, neutrals) {
   --color-tune-light-warmth: 100%;
   --color-tune-surface-lightness-shift: ${formatSignedNumber(surface.lightShift)};
   --color-tune-dark-warmth: 100%;
-  --color-tune-dark-bg-depth: ${dark.bgMixRatio}%;
-  --color-tune-dark-surface-depth: ${dark.surfaceMixRatio}%;
-  --color-tune-dark-text-depth: ${formatPercentage(neutrals.textDarkMixRatio ?? dark.textMixRatio)};
-  --color-tune-dark-muted-depth: ${formatPercentage(neutrals.textMutedDarkMixRatio ?? 72)};
+  --color-tune-dark-bg-mix: ${dark.bgMixRatio}%;
+  --color-tune-dark-surface-mix: ${dark.surfaceMixRatio}%;
+  --color-tune-dark-text-mix: ${formatPercentage(neutrals.textDarkMixRatio ?? dark.textMixRatio)};
+  --color-tune-dark-muted-mix: ${formatPercentage(neutrals.textMutedDarkMixRatio ?? 72)};
   --color-tune-elevation-1-shadow-alpha: 10%;
   --color-tune-elevation-1-border-alpha: 28%;
   --color-tune-elevation-1-glow-alpha: 14%;
@@ -182,16 +182,16 @@ function formatNeutrals(neutrals, config) {
   --_color-bg-neutral: oklch(${neutrals.bgLight.l} 0 none);
   --_color-bg-light: color-mix(in oklch, var(--_color-bg-source) var(--color-tune-light-warmth), var(--_color-bg-neutral));
   --_color-bg-warm: color-mix(in oklch, var(--_color-bg-source) var(--color-tune-dark-warmth), var(--_color-bg-neutral));
-  --_color-bg-dark: color-mix(in oklch, var(--_color-bg-warm) var(--color-tune-dark-bg-depth), oklch(0 0 none));
+  --_color-bg-dark: color-mix(in oklch, var(--_color-bg-warm) var(--color-tune-dark-bg-mix), oklch(0 0 none));
 
   --_color-surface-light: oklch(from var(--_color-bg-light) clamp(0, calc(l + var(--color-tune-surface-lightness-shift)), 1) c h);
-  --_color-surface-dark: color-mix(in oklch, var(--_color-bg-warm) var(--color-tune-dark-surface-depth), oklch(0 0 none));
+  --_color-surface-dark: color-mix(in oklch, var(--_color-bg-warm) var(--color-tune-dark-surface-mix), oklch(0 0 none));
 
   --_color-text-light: ${oklch(neutrals.textLight)};
-  --_color-text-dark: color-mix(in oklch, var(--_color-bg-source) var(--color-tune-dark-text-depth), oklch(0.99 0 none));
+  --_color-text-dark: color-mix(in oklch, var(--_color-bg-source) var(--color-tune-dark-text-mix), oklch(0.99 0 none));
 
   --_color-text-muted-light: ${oklch(neutrals.textMutedLight)};
-  --_color-text-muted-dark: color-mix(in oklch, var(--_color-text-dark) var(--color-tune-dark-muted-depth), var(--_color-bg-dark));`;
+  --_color-text-muted-dark: color-mix(in oklch, var(--_color-text-dark) var(--color-tune-dark-muted-mix), var(--_color-bg-dark));`;
   }
 
   return `  --_color-bg-light: ${oklch(neutrals.bgLight)};
@@ -222,7 +222,7 @@ function formatIdentityInternals(name, identity, onColor, config) {
   ];
 
   if (mode === "relative" && identity.mixRatio != null) {
-    lines.push(`  --_color-${name}-dark-generated: color-mix(in oklch, var(--_color-${name}-source) ${identity.mixRatio}%, oklch(1 0 none));`);
+    lines.push(`  --_color-${name}-dark-generated: color-mix(in oklch, var(--_color-${name}-source) var(--color-tune-${name}-dark-mix, ${identity.mixRatio}%), oklch(1 0 none));`);
   } else {
     lines.push(`  --_color-${name}-dark-generated: ${oklch(identity.dark)};`);
   }
@@ -240,7 +240,7 @@ function formatIdentityInternals(name, identity, onColor, config) {
 
 function formatIdentityPublic(name, onColor) {
   const colorToken = `  --color-${name}: light-dark(var(--_color-${name}-light), var(--_color-${name}-dark));`;
-  const onToken = onColor ? `\n  --color-on-${name}: light-dark(var(--_color-on-${name}-light), var(--_color-on-${name}-dark));` : "";
+  const onToken = onColor ? `\n  --color-${name}-ink: light-dark(var(--_color-on-${name}-light), var(--_color-on-${name}-dark));` : "";
   return colorToken + onToken;
 }
 
@@ -262,14 +262,14 @@ ${formatIdentityPublic(name, onColors[name])}
   --color-${name}-text-strong: light-dark(${oklch(light.textStrong)}, ${oklch(dark.textStrong)});
   --color-${name}-solid: light-dark(${oklch(light.solid)}, ${darkVar});
   --color-${name}-solid-hover: light-dark(${oklch(light.solidHover)}, ${oklch(dark.solidHover)});
-  --color-${name}-on-solid: light-dark(${oklch(light.onSolid)}, ${oklch(dark.onSolid)});
+  --color-${name}-solid-text: light-dark(${oklch(light.onSolid)}, ${oklch(dark.onSolid)});
   --color-${name}-border: light-dark(${oklch(light.border)}, ${darkVar});
   --color-${name}-border-strong: light-dark(${oklch(light.borderStrong)}, ${oklch(dark.borderStrong)});`;
   });
 
   return `\n  /* ─── ${heading} ───────────────────────────────────────────────────
      Stable designer API. Text/border-strong are checked on declared surfaces;
-     on-solid is checked on solid + hover with warnings for shortfalls.
+     solid-text is checked on solid + hover with warnings for shortfalls.
      Identity dark tuning changes border/solid, not hover or foregrounds;
      overrides need local checks. Numeric scales are optional advanced tokens. */
 ${definitions.join("\n\n")}\n`;
@@ -324,7 +324,7 @@ function formatScaleSection(scales) {
   return `
   /* ─── Optional numeric tonal steps ────────────────────────────────────────
      Advanced tuning API. Functional components should prefer the validated
-     surface / border / solid / on-solid / text family above. */
+     surface / border / solid / solid-text / text family above. */
 ${entries.map(([name, scale]) => formatScale(name, scale)).join("\n")}
 `;
 }
@@ -350,14 +350,14 @@ function formatScale(name, scale) {
 function formatAliases(aliases, onColors, identities) {
   const entries = Object.entries(aliases ?? {}).filter(([, target]) => Object.hasOwn(onColors, target));
   if (!entries.length) return "\n";
-  const functionalSuffixes = ["surface", "surface-strong", "text", "text-strong", "solid", "solid-hover", "on-solid", "border", "border-strong"];
+  const functionalSuffixes = ["surface", "surface-strong", "text", "text-strong", "solid", "solid-hover", "solid-text", "border", "border-strong"];
 
   return `\n  /* ─── Aliases ───────────────────────────────────────────────────────────
      Alternative names for existing colors, not additional palette choices. */
 ${entries
     .map(([alias, target]) => {
       const lines = [`  /* ${alias} → ${target} */`, `  --color-${alias}: var(--color-${target});`];
-      if (Object.hasOwn(onColors, target)) lines.push(`  --color-on-${alias}: var(--color-on-${target});`);
+      if (Object.hasOwn(onColors, target)) lines.push(`  --color-${alias}-ink: var(--color-${target}-ink);`);
       if (Object.hasOwn(identities, target)) {
         for (const suffix of functionalSuffixes) {
           lines.push(`  --color-${alias}-${suffix}: var(--color-${target}-${suffix});`);

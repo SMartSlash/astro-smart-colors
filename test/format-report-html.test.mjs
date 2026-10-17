@@ -129,9 +129,9 @@ test("family atlas renders only measured families, keeps the worst measurement a
   const diagnostics = [
     diagnostic({ label: "primary-text / family surface", foregroundToken: "--color-primary-text", backgroundToken: "--color-primary-surface", ratio: 4.4 }),
     diagnostic({ label: "primary-border-strong / family surface", foregroundToken: "--color-primary-border-strong", backgroundToken: "--color-primary-surface", ratio: 3.2, minimum: 3, target: 3, kind: "non-text" }),
-    diagnostic({ label: "primary-on-solid / solid", foregroundToken: "--color-primary-on-solid", backgroundToken: "--color-primary-solid", ratio: 4.8 }),
-    diagnostic({ label: "on-primary / primary", foregroundToken: "--color-on-primary", backgroundToken: "--color-primary", ratio: 5.1 }),
-    diagnostic({ label: "on-spark / spark", foregroundToken: "--color-on-spark", backgroundToken: "--color-spark", ratio: 2.2 }),
+    diagnostic({ label: "primary-on-solid / solid", foregroundToken: "--color-primary-solid-text", backgroundToken: "--color-primary-solid", ratio: 4.8 }),
+    diagnostic({ label: "on-primary / primary", foregroundToken: "--color-primary-ink", backgroundToken: "--color-primary", ratio: 5.1 }),
+    diagnostic({ label: "on-spark / spark", foregroundToken: "--color-spark-ink", backgroundToken: "--color-spark", ratio: 2.2 }),
   ];
   const html = render(report({ scenarios: [scenario({ diagnostics })] }));
   const guide = section(html, "usi");
@@ -213,7 +213,7 @@ function overlapScenario(overrides = {}) {
 test("usage overview separates usage, theme, minimum and target and does not multiply browser measurements", () => {
   const diagnostics = [
     diagnostic({ foregroundToken: "--color-text-muted", ratio: 6.8, target: 7 }),
-    diagnostic({ label: "fill", foregroundToken: "--color-info-on-solid", backgroundToken: "--color-info-solid", ratio: 4.49999999999999 }),
+    diagnostic({ label: "fill", foregroundToken: "--color-info-solid-text", backgroundToken: "--color-info-solid", ratio: 4.49999999999999 }),
     diagnostic({ label: "callout", foregroundToken: "--color-info-text", backgroundToken: "--color-info-surface" }),
     diagnostic({ label: "border", foregroundToken: "--color-focus-ring", minimum: 3, target: 3, ratio: 3.2, kind: "non-text" }),
   ];
@@ -388,7 +388,7 @@ test("variant shifts are reported only above threshold, from measured variants a
 test("the proposal summary sentence follows the actual tuning knob and never mislabels it", () => {
   const cases = [
     ["--color-tune-surface-lightness-shift", /Regola la superficie del tema chiaro/],
-    ["--color-tune-dark-surface-depth", /Regola il tema scuro senza cambiare la palette/],
+    ["--color-tune-dark-surface-mix", /Regola il tema scuro senza cambiare la palette/],
     ["--color-tune-tertiary-dark", /Regola una manopola di tuning senza cambiare la palette/],
     ["", /Regola una manopola di tuning senza cambiare la palette/],
   ];

@@ -159,7 +159,7 @@ function assertFiniteUniqueOutput(report) {
 
 function publicColorNames(declarations, name) {
   return [...declarations.keys()].filter((token) =>
-    token === `--color-${name}` || token === `--color-on-${name}` || token.startsWith(`--color-${name}-`)).sort();
+    token === `--color-${name}` || token === `--color-${name}-ink` || token.startsWith(`--color-${name}-`)).sort();
 }
 
 test("legacy UI constructor declaration uses the default dark blend, not inherited metadata", async (t) => {
@@ -175,14 +175,14 @@ test("legacy UI constructor declaration uses the default dark blend, not inherit
   assert.equal(report.config.roles.focus, "constructor");
   assert.equal(declarations.get("--_color-constructor-source"), "oklch(0.62 0.16 32)");
   assert.equal(declarations.get("--_color-constructor-dark-generated"),
-    "color-mix(in oklch, var(--_color-constructor-source) 81%, oklch(1 0 none))");
+    "color-mix(in oklch, var(--_color-constructor-source) var(--color-tune-constructor-dark-mix, 81%), oklch(1 0 none))");
   assert.equal(declarations.get("--color-constructor"),
     "light-dark(var(--_color-constructor-light), var(--_color-constructor-dark))");
-  assert.equal(declarations.get("--color-on-constructor"),
+  assert.equal(declarations.get("--color-constructor-ink"),
     "light-dark(var(--_color-on-constructor-light), var(--_color-on-constructor-dark))");
   assert.equal(declarations.get("--color-brand"), "var(--color-constructor)");
-  assert.equal(declarations.get("--color-on-brand"), "var(--color-on-constructor)");
-  for (const suffix of ["surface", "surface-strong", "text", "text-strong", "solid", "solid-hover", "on-solid", "border", "border-strong"]) {
+  assert.equal(declarations.get("--color-brand-ink"), "var(--color-constructor-ink)");
+  for (const suffix of ["surface", "surface-strong", "text", "text-strong", "solid", "solid-hover", "solid-text", "border", "border-strong"]) {
     assert.equal(declarations.has(`--color-constructor-${suffix}`), true);
     assert.equal(declarations.get(`--color-brand-${suffix}`), `var(--color-constructor-${suffix})`);
   }
@@ -219,13 +219,13 @@ test("declared decorative constructor emits its pair and alias without phantom f
   assert.equal(Object.hasOwn(report.config.roles.decoratives, "constructor"), true);
   assert.deepEqual(report.config.roles.decoratives.constructor, { token: "--constructor", role: "decorative" });
   assert.equal(Object.hasOwn(report.config.roles.identities, "constructor"), false);
-  assert.deepEqual(publicColorNames(declarations, "constructor"), ["--color-constructor", "--color-on-constructor"]);
-  assert.deepEqual(publicColorNames(declarations, "brand"), ["--color-brand", "--color-on-brand"]);
+  assert.deepEqual(publicColorNames(declarations, "constructor"), ["--color-constructor", "--color-constructor-ink"]);
+  assert.deepEqual(publicColorNames(declarations, "brand"), ["--color-brand", "--color-brand-ink"]);
   assert.equal(declarations.get("--color-constructor"),
     "light-dark(var(--_color-constructor-light), var(--_color-constructor-dark))");
-  assert.match(declarations.get("--color-on-constructor"), /^light-dark\(oklch\([^)]*\), oklch\([^)]*\)\)$/);
+  assert.match(declarations.get("--color-constructor-ink"), /^light-dark\(oklch\([^)]*\), oklch\([^)]*\)\)$/);
   assert.equal(declarations.get("--color-brand"), "var(--color-constructor)");
-  assert.equal(declarations.get("--color-on-brand"), "var(--color-on-constructor)");
+  assert.equal(declarations.get("--color-brand-ink"), "var(--color-constructor-ink)");
   assert.equal(report.warnings.some((warning) => warning.includes("Missing decorative")), false);
 });
 

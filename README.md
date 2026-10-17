@@ -20,17 +20,17 @@ This organization changes neither token names nor generated values. It adds no u
 
 ## Start here: “I want X → use Y/Z”
 
-Choose a **background/foreground pair**, not an isolated color. For daily component work, start with the seven neutral/border/focus names (`bg`, `surface`, `text`, `text-muted`, `border-subtle`, `border-strong`, `focus-ring`) plus five suffixes of one family (`surface`, `text`, `solid`, `on-solid`, `solid-hover`): **12 names**, not 230 choices. Substitute the family name when you need another brand color or a feedback state.
+Choose a **background/foreground pair**, not an isolated color. For daily component work, start with the seven neutral/border/focus names (`bg`, `surface`, `text`, `text-muted`, `border-subtle`, `border-strong`, `focus-ring`) plus five suffixes of one family (`surface`, `text`, `solid`, `solid-text`, `solid-hover`): **12 names**, not 230 choices. Substitute the family name when you need another brand color or a feedback state.
 
 | I want… | Use this token combination | Important boundary |
 |---|---|---|
 | Neutral page and body text | `--color-bg` / `--color-text` | Use `--color-text-muted` for secondary content on neutral backgrounds. |
 | Neutral card | `--color-surface` / `--color-text` | `--color-border-subtle` is an ornamental separator; optional `--elevation-1` is root-based elevation. |
-| Filled button or badge | `--color-primary-solid` / `--color-primary-on-solid`; hover: `--color-primary-solid-hover` | Keep the same `on-solid` on hover. Check the current report and both rendered states; do not substitute `--color-on-primary`. |
+| Filled button or badge | `--color-primary-solid` / `--color-primary-solid-text`; hover: `--color-primary-solid-hover` | Keep the same `solid-text` on hover. Check the current report and both rendered states; do not substitute `--color-primary-ink`. |
 | Soft colored callout or status | `--color-success-surface` / `--color-success-text` | The same family's `surface-strong` / `text-strong` are stronger variants. Include a label/icon, not color alone. |
 | Decorative border or separator | `--color-primary-border` on `--color-primary-surface`, or neutral `--color-border-subtle` | Family `border` preserves the source; neither this nor a translucent neutral border promises a necessary control boundary. |
 | Meaningful chromatic boundary | `--color-primary-border-strong` against the intended background | This family variant uses a stronger UI generation target derived from `contrast.ui`, capped by `contrast.maxIdentity`, then a final UI check against canvas, neutral surface and both family surfaces. This is not a guarantee on arbitrary backgrounds. Neutral `--color-border-strong` is a different, translucent token. |
-| Identity color itself with overlaid content | `--color-primary` / `--color-on-primary` (or `--color-accent` / `--color-on-accent`) | Direct companions belong to direct fills, not family surfaces or hover fills. Check the actual pair after tuning. |
+| Identity color itself with overlaid content | `--color-primary` / `--color-primary-ink` (or `--color-accent` / `--color-accent-ink`) | Direct companions belong to direct fills, not family surfaces or hover fills. Check the actual pair after tuning. |
 | Visible keyboard focus | `--color-focus-ring` against `--color-bg` or `--color-surface` | For example `outline: 2px solid var(--color-focus-ring); outline-offset: 2px` on `:focus-visible`. The generated target covers these neutral backgrounds, not every local surface. |
 
 Use the same family combinations for `primary`, `secondary`, `tertiary`, `quaternary`, `success`, `warning`, `danger` and `info` when present in your palette. Controls have their own `--color-control-*` state tokens; the [control state pairs](#control-state-pairs) below list the opaque combinations checked. Alpha borders/icons and arbitrary combinations are not validated.
@@ -122,7 +122,7 @@ export default defineSmartColorsConfig({
 });
 ```
 
-### Optional on-solid foregrounds
+### Optional solid-text foregrounds
 
 The optional root-level `onSolid` map lets you author the functional foreground for an existing `ui` or `feedback` identity, independently for `light` and `dark`. Omitted identities and themes keep the generated foreground.
 
@@ -138,7 +138,7 @@ onSolid: {
 
 This is an optional authoring example, not a required fix: the current solver already generates `oklch(0.9944 0 0)` for this project's light `info` functional and direct companions without a palette/config edit.
 
-`info` must already be a resolved UI/feedback identity. This setting affects only the light-theme value of `--color-info-on-solid`, used on both `--color-info-solid` and `--color-info-solid-hover`. It does not change `--color-on-info`, the direct identity companion, or either fill.
+`info` must already be a resolved UI/feedback identity. This setting affects only the light-theme value of `--color-info-solid-text`, used on both `--color-info-solid` and `--color-info-solid-hover`. It does not change `--color-info-ink`, the direct identity companion, or either fill.
 
 Values must be concrete opaque OKLCH strings accepted by the same parser as the palette, including its numeric/percentage channels and hue angle units. Alpha channels, calculated values, malformed colors, unknown identities and theme keys other than `light` or `dark` are validation errors. A syntax-valid foreground that misses contrast is retained (subject to the usual sRGB gamut mapping) and produces the existing contrast warnings, not an automatic replacement: the authored source remains yours to change.
 
@@ -150,9 +150,9 @@ The palette is the designer-facing source of truth. Each opaque OKLCH source dec
 |---|---|---|
 | `canvas` | Main interface foundation; exactly one | `--color-bg`, neutral surfaces and dark foundation |
 | `ink` | Main neutral content color; exactly one | `--color-text`, `--color-text-muted` and dark counterparts |
-| `ui` | Operational brand/interface color | Source-preserving `border`/`solid`, derived surfaces, validated text and best-effort `on-solid` |
+| `ui` | Operational brand/interface color | Source-preserving `border`/`solid`, derived surfaces, validated text and best-effort `solid-text` |
 | `feedback` | Status or outcome such as success, warning, danger, info | Same source-preserving family, classified separately from brand UI |
-| `decorative` | Ornament, mask, gradient or visual detail that carries no meaning alone | Theme-adapted base plus readable `--color-on-*` companion |
+| `decorative` | Ornament, mask, gradient or visual detail that carries no meaning alone | Theme-adapted base plus readable `--color-*-ink` companion |
 
 `content`, `action` and `fill` are deliberately not palette roles: they are usage variants generated by the engine. Every `@property` block must declare a role. Exactly one `canvas` and one `ink` must be available after palette/config resolution.
 
@@ -221,17 +221,17 @@ Contrast is validated as a relationship between generated foreground/background 
 | `<name>-border-strong` / the same four backgrounds | `contrast.ui` (default `3`) | Stronger generation target; final UI-target shortfalls fail generation |
 | `<name>-border` or `solid` / canvas | No automatic correction | Preserve the designer's source (after sRGB gamut mapping) |
 | direct `on-<name>` / direct identity | `contrast.onColor` (default `4.6`) | Foreground solver; target or normal-text minimum shortfalls warn |
-| `<name>-on-solid` / solid and solid-hover | `contrast.onColor` | Best-effort or authored common foreground; target or normal-text minimum shortfalls warn |
+| `<name>-solid-text` / solid and solid-hover | `contrast.onColor` | Best-effort or authored common foreground; target or normal-text minimum shortfalls warn |
 | focus ring / canvas and neutral surface | `contrast.ui` | Adapted; target shortfalls fail generation |
 | opaque control text / active or focus background | `contrast.text` | Explicit state pairs checked; shortfalls warn, fills preserved |
 | opaque control active border / canvas and active background | `contrast.ui` | Shortfalls warn, state colors preserved |
 | decorative `on-*` / decorative base | `contrast.onColor` | Adapted; target or normal-text minimum shortfalls warn |
 
-Dark body/family text and family UI targets retain `min(contrast.maxIdentity, configuredTarget × contrast.darkRichness)`. Direct companions use `contrast.onColor + 0.02` during foreground search in **both** themes, with no `darkRichness` multiplier; their final warning target is `contrast.onColor`, as for `on-solid`. Focus and control active-border checks also use unamplified `contrast.ui`. Decorative derivation retains its existing dark-richness target and may adjust the derived decorative background; this is separate from UI/feedback fill preservation. The table describes generated defaults, not runtime CSS overrides or arbitrary token combinations.
+Dark body/family text and family UI targets retain `min(contrast.maxIdentity, configuredTarget × contrast.darkRichness)`. Direct companions use `contrast.onColor + 0.02` during foreground search in **both** themes, with no `darkRichness` multiplier; their final warning target is `contrast.onColor`, as for `solid-text`. Focus and control active-border checks also use unamplified `contrast.ui`. Decorative derivation retains its existing dark-richness target and may adjust the derived decorative background; this is separate from UI/feedback fill preservation. The table describes generated defaults, not runtime CSS overrides or arbitrary token combinations.
 
 The palette remains the source of truth. In each theme, `border` and `solid` retain the resolved identity color; `solid-hover` is derived from it without automatic correction of the fill. Dark identities respect authored `dark-blend` or the adaptive fallback. Out-of-sRGB colors have their chroma reduced while preserving lightness and hue; that gamut mapping is not a contrast correction.
 
-Unless an `onSolid` foreground is authored for that identity/theme, the solver seeks one `on-solid` foreground for both normal and hover fills; direct companions run the same solver against their direct fill alone. Candidate contrast is scored **after sRGB fitting and serialization**, maximizing the minimum contrast across the supplied backgrounds when ranking preferred colors. The best preferred foreground among emitted ink, neutral `L = 0.02` and neutral `L = 0.99` is kept when it passes the search target. Otherwise the solver searches `L = 0…1` inclusive in `0.0001` steps (including black/white endpoints), in the ink's C/H domain and a neutral domain, selecting a passing candidate nearest to a preferred emitted L. If none passes, it retains the highest minimum-contrast candidate found as best effort within those domains—not a claim of global impossibility or perceptual nearest color.
+Unless an `onSolid` foreground is authored for that identity/theme, the solver seeks one `solid-text` foreground for both normal and hover fills; direct companions run the same solver against their direct fill alone. Candidate contrast is scored **after sRGB fitting and serialization**, maximizing the minimum contrast across the supplied backgrounds when ranking preferred colors. The best preferred foreground among emitted ink, neutral `L = 0.02` and neutral `L = 0.99` is kept when it passes the search target. Otherwise the solver searches `L = 0…1` inclusive in `0.0001` steps (including black/white endpoints), in the ink's C/H domain and a neutral domain, selecting a passing candidate nearest to a preferred emitted L. If none passes, it retains the highest minimum-contrast candidate found as best effort within those domains—not a claim of global impossibility or perceptual nearest color.
 
 Foreground warnings do not rewrite the source, lower the target or abort generation. Body/family text, family `border-strong` and focus target failures still abort before CSS is written.
 
@@ -239,21 +239,21 @@ A warning is not an accessibility certification: inspect the actual component an
 
 Source-preserving borders/fills must not be relied on as the necessary control boundary or sole state indicator unless their actual contrast is sufficient. Neutral alpha borders and alpha control focus-border/icon-muted tokens are decorative and are **not contrast-validated**.
 
-Contrast pass/fail uses the emitted OKLCH literals (up to four decimal places) and emitted mix percentages, not higher-precision pre-serialization candidates. There is no permissive epsilon: a ratio below the target fails. Shortfall diagnostics reveal extra precision when two-decimal rounding would hide the difference. The text-generation safety margin is applied after the target cap, including a dark target capped at `7.5`; on-solid shortfalls remain warnings, not automatic source or authored-foreground replacements.
+Contrast pass/fail uses the emitted OKLCH literals (up to four decimal places) and emitted mix percentages, not higher-precision pre-serialization candidates. There is no permissive epsilon: a ratio below the target fails. Shortfall diagnostics reveal extra precision when two-decimal rounding would hide the difference. The text-generation safety margin is applied after the target cap, including a dark target capped at `7.5`; solid-text shortfalls remain warnings, not automatic source or authored-foreground replacements.
 
 Native OKLCH mixes use neutral endpoints with missing hue (`none`), not explicit hue `0`. The JavaScript model follows CSS shorter-hue interpolation and missing-hue borrowing, keeping native mix intermediates raw rather than gamut-mapping or rounding them again. Correcting this correspondence can change native dark colors and derived family surfaces in both themes without changing the authored palette or light identity fills. Project-level overrides remain outside these checks.
 
 ### Read-only contrast suggestions
 
-For on-solid shortfalls, the CLI prints the advice returned in `report.suggestions`. Suggestions never autofix the palette, config or generated `colors.css`. Existing palette and config choices stay unchanged until you explicitly apply an option.
+For solid-text shortfalls, the CLI prints the advice returned in `report.suggestions`. Suggestions never autofix the palette, config or generated `colors.css`. Existing palette and config choices stay unchanged until you explicitly apply an option.
 
 The search prefers preserving the fill:
 
-1. **Foreground first.** Find the nearest foreground lightness on a four-decimal `L` grid, keeping its hue and chroma fixed. Both solid and hover contrast must meet `contrast.onColor + 0.02` (capped at `21`) after sRGB gamut mapping and CSS serialization. Advice identifies the authored and resolved fill source, destination `onSolid.<name>.<theme>` key and exact scope: only that identity/theme's `on-solid`, shared by solid/hover, not the direct companion or either fill. “Nearest” means nearest L on that four-decimal grid, not globally nearest perceptual color.
+1. **Foreground first.** Find the nearest foreground lightness on a four-decimal `L` grid, keeping its hue and chroma fixed. Both solid and hover contrast must meet `contrast.onColor + 0.02` (capped at `21`) after sRGB gamut mapping and CSS serialization. Advice identifies the authored and resolved fill source, destination `onSolid.<name>.<theme>` key and exact scope: only that identity/theme's `solid-text`, shared by solid/hover, not the direct companion or either fill. “Nearest” means nearest L on that four-decimal grid, not globally nearest perceptual color.
 2. **Optional source fallback.** If no foreground candidate works, search for the nearest authored palette-source lightness on the same grid, keeping the source's chroma and hue fixed. The parser retains raw authored chroma and hue separately from gamut-mapped colors, so source advice preserves those authored channels even for out-of-sRGB sources. Advice identifies the actual source syntax: the palette `@property` and its `initial-value`, or the legacy `:root` custom-property declaration. The source trial preserves full authored chroma/hue precision. Full generation is rechecked in both light and dark schemes; the affected pair must meet the safety target, and neither new contrast-warning labels nor deterioration of an existing warning to `below-minimum` may appear. A source edit affects the identity in both themes and its derived families/scales; logo sources remain separate. This is an optional palette edit, not a silent fill correction.
 3. **Explicitly unavailable.** If neither search yields a verified candidate, the report says no verified suggestion was found within those constraints. It does not claim that another hue/chroma or a redesigned solid/hover pair could never work, and it never applies an unverified fix.
 
-For this project's current light `info`, generation now selects `oklch(0.9944 0 0)` automatically for **both** `--color-info-on-solid` and `--color-on-info`, preserving the authored palette/config and fills. The `onSolid.info.light` example remains a valid optional override but is no longer necessary to fix this pair; do not assume its former warning or suggestion still appears. An existing generated file can be stale until regeneration. Advice remains read-only: it never applies a config/palette edit.
+For this project's current light `info`, generation now selects `oklch(0.9944 0 0)` automatically for **both** `--color-info-solid-text` and `--color-info-ink`, preserving the authored palette/config and fills. The `onSolid.info.light` example remains a valid optional override but is no longer necessary to fix this pair; do not assume its former warning or suggestion still appears. An existing generated file can be stale until regeneration. Advice remains read-only: it never applies a config/palette edit.
 
 Suggestions reflect the generated model, not runtime overrides in `colors-tuning.css` or other project-level tuning styles. Those overrides are not included in the advisory contrast checks.
 
@@ -322,7 +322,7 @@ The full page starts with the correction, not the audit log:
 
 The **usage overview** separately summarizes normal text on neutral backgrounds, text on solid colors, callout/control pairs, and opaque boundaries/focus. Each category shows light/dark results from the **current snapshot**, not the proposed corrections: OK applies only to measured pairs, below-target means the minimum is met but the project target is missed, and below-minimum means avoid that pair for the indicated use. Browser/preference repeats count once, using the worst outcome; missing or incomplete data never receives an OK badge.
 
-A **family atlas** then renders each `--color-<name>` that appears in the measurements: text on its callout (with the strong border), the solid/hover button pair with its on-solid text, and the chip/badge on-color pair, for light and dark. Samples are built **only from pairs that were actually measured**, each using its worst browser/preference measurement; families without measurements produce no sample, and an incomplete snapshot says so instead of implying a clean result. Visual samples use a real typographic scale (title, body, small label) and real border widths (1, 2, 3 px), because an isolated thick border does not show how visible a 1 px border is.
+A **family atlas** then renders each `--color-<name>` that appears in the measurements: text on its callout (with the strong border), the solid/hover button pair with its solid-text text, and the chip/badge on-color pair, for light and dark. Samples are built **only from pairs that were actually measured**, each using its worst browser/preference measurement; families without measurements produce no sample, and an incomplete snapshot says so instead of implying a clean result. Visual samples use a real typographic scale (title, body, small label) and real border widths (1, 2, 3 px), because an isolated thick border does not show how visible a 1 px border is.
 
 The same section reports **functional variants that drift away from their brand color**: for each identity it compares the resolved palette source with its `*-text` and `*-border-strong` variants and lists the ones beyond `|ΔL|` or `|ΔC| ≥ 0.04`, sorted by magnitude, with the direction (lighter/darker). This is presentation only: the generator does **not** warn about normal, intentional contrast adaptation, so `colors:build` output is unchanged. A variant equal to its source is never listed, and when no source/variant comparison is possible the block is omitted instead of implying a clean result.
 
@@ -334,7 +334,7 @@ A tuning knob the generator reads at build time (`derivation.surface.lightShift`
 
 The report remains static and useful without JavaScript. Recommendations do not claim a globally optimal palette. Multiple corrections are independent options, not an automatically verified combined patch.
 
-Correction order is conservative: preserve the fill via an existing on-solid foreground override, refine the neutral light-surface knob when that causes the deficit, then consider available source-palette suggestions. The same machinery also searches the **dark** neutral knobs (`--color-tune-dark-bg-depth`, `-surface-depth`, `-muted-depth`) and the per-identity `--color-tune-<id>-dark` escape hatch, and a source-palette trial covers both the on-solid pair and the direct `--color-on-<id>` companion. Every candidate is applied only in memory and checked in **all four theme/preference scenarios and every requested browser**. It must resolve its named issues without new target failures or deterioration below a reference minimum. A search that cannot be verified produces no proposal at all. Source trials use the exact authored serialization shown in their snippets. Ambiguous repeated tuning declarations are not rewritten speculatively. If no candidate passes within these supported searches, the report explicitly says no verified proposal is available; it never promises an optimal palette or a globally nearest color.
+Correction order is conservative: preserve the fill via an existing solid-text foreground override, refine the neutral light-surface knob when that causes the deficit, then consider available source-palette suggestions. The same machinery also searches the **dark** neutral knobs (`--color-tune-dark-bg-mix`, `-surface-mix`, `-muted-mix`) and the per-identity `--color-tune-<id>-dark` escape hatch, and a source-palette trial covers both the solid-text pair and the direct `--color-<id>-ink` companion. Every candidate is applied only in memory and checked in **all four theme/preference scenarios and every requested browser**. It must resolve its named issues without new target failures or deterioration below a reference minimum. A search that cannot be verified produces no proposal at all. Source trials use the exact authored serialization shown in their snippets. Ambiguous repeated tuning declarations are not rewritten speculatively. If no candidate passes within these supported searches, the report explicitly says no verified proposal is available; it never promises an optimal palette or a globally nearest color.
 
 The report command preserves palette, config, tuning and generated color files. Unlike the strict generator, its internal read-only analysis can inspect a finite but contrast-failing model. If generated output is missing or differs, the page clearly identifies the measured CSS as a **diagnostic in-memory candidate**, not accepted production output. Invalid input produces an incomplete report without verified proposals when its configured paths are known safely; an unloadable config or an input change during the session aborts publication. Captured palette bytes drive both analysis and trials, so a fingerprint cannot silently identify a different palette from the one measured.
 
@@ -363,10 +363,10 @@ Components should consume only the public tokens:
 --color-tertiary
 --color-accent
 
---color-on-primary
---color-on-secondary
---color-on-tertiary
---color-on-accent
+--color-primary-ink
+--color-secondary-ink
+--color-tertiary-ink
+--color-accent-ink
 
 --ink-primary
 --ink-secondary
@@ -375,7 +375,7 @@ Components should consume only the public tokens:
 --color-<identity>-surface
 --color-<identity>-border
 --color-<identity>-solid
---color-<identity>-on-solid
+--color-<identity>-solid-text
 --color-<identity>-text
 
 --color-border-subtle
@@ -398,10 +398,10 @@ Components should consume only the public tokens:
 --color-tune-light-warmth
 --color-tune-surface-lightness-shift
 --color-tune-dark-warmth
---color-tune-dark-bg-depth
---color-tune-dark-surface-depth
---color-tune-dark-text-depth
---color-tune-dark-muted-depth
+--color-tune-dark-bg-mix
+--color-tune-dark-surface-mix
+--color-tune-dark-text-mix
+--color-tune-dark-muted-mix
 --color-tune-elevation-*
 --color-tune-<identity>-dark
 ```
@@ -479,12 +479,12 @@ Recommended tokens:
 
 ### 3. Buttons, badges, chips and colored states
 
-For colored UI, prefer the semantic functional families over raw identity colors or numeric steps. They describe intent instead of tonal math. Text variants are contrast-adapted; source-preserving solid/on-solid pairs must be checked when generation reports a warning:
+For colored UI, prefer the semantic functional families over raw identity colors or numeric steps. They describe intent instead of tonal math. Text variants are contrast-adapted; source-preserving solid/solid-text pairs must be checked when generation reports a warning:
 
 ```css
 .button--primary {
   background: var(--color-primary-solid);
-  color: var(--color-primary-on-solid);
+  color: var(--color-primary-solid-text);
 }
 
 .button--primary:hover {
@@ -507,7 +507,7 @@ Stable functional family:
 --color-<identity>-border-strong
 --color-<identity>-solid
 --color-<identity>-solid-hover
---color-<identity>-on-solid
+--color-<identity>-solid-text
 --color-<identity>-text
 --color-<identity>-text-strong
 ```
@@ -516,12 +516,12 @@ Numeric steps such as `--color-primary-500` are optional advanced tokens. They n
 
 ### 4. Direct identity/on-color pairs
 
-Use the direct identity pair when you need the configured identity color itself and the foreground generated for that fill. This is a different pairing from `solid` / `on-solid`; it does not promise contrast on a family surface or hover fill:
+Use the direct identity pair when you need the configured identity color itself and the foreground generated for that fill. This is a different pairing from `solid` / `solid-text`; it does not promise contrast on a family surface or hover fill:
 
 ```css
 .callout-icon {
   background: var(--color-primary);
-  color: var(--color-on-primary);
+  color: var(--color-primary-ink);
 }
 ```
 
@@ -529,16 +529,16 @@ Recommended tokens:
 
 ```css
 --color-primary
---color-on-primary
+--color-primary-ink
 --color-secondary
---color-on-secondary
+--color-secondary-ink
 --color-tertiary
---color-on-tertiary
+--color-tertiary-ink
 --color-accent
---color-on-accent
+--color-accent-ink
 ```
 
-`--ink-*` tokens are native `contrast-color()` helpers for progressive enhancement. Keep `--color-on-*` as the deterministic baseline when text/icon contrast is critical.
+`--ink-*` tokens are native `contrast-color()` helpers for progressive enhancement. Keep `--color-*-ink` as the deterministic baseline when text/icon contrast is critical.
 
 ### Control state pairs
 
@@ -573,7 +573,7 @@ Do not consume palette sources or generated internals from components, pages or 
 | Page background | `--color-bg` |
 | Neutral card | `--color-surface`, `--surface-*`, `--elevation-1` |
 | Clipped/masked surface | `--surface-*`, `--elevation-filter-1` |
-| Filled button | `--color-primary-solid`, `--color-primary-on-solid` |
+| Filled button | `--color-primary-solid`, `--color-primary-solid-text` |
 | Soft badge/callout | `--color-primary-surface`, `--color-primary-text`, `--color-primary-border` |
 | Generic border | `--color-border-subtle` |
 | Focus state | `--color-focus-ring` |
@@ -613,11 +613,11 @@ For every identity, the generator emits a native `contrast-color()` helper:
 --ink-secondary: contrast-color(var(--color-secondary));
 ```
 
-These tokens are progressive-enhancement hooks for components that want to branch with style queries. Keep the deterministic `--color-on-<identity>` pair as the baseline when readable text or icons are critical:
+These tokens are progressive-enhancement hooks for components that want to branch with style queries. Keep the deterministic `--color-<identity>-ink` pair as the baseline when readable text or icons are critical:
 
 ```css
 .button {
-  color: var(--color-on-primary);
+  color: var(--color-primary-ink);
 }
 
 @container style(--ink-primary: white) {
@@ -661,22 +661,33 @@ The package emits public tuning knobs intended to be overridden by a project-lev
 :root {
   --color-tune-light-warmth: 45%;
   --color-tune-dark-warmth: 75%;
-  --color-tune-dark-bg-depth: 14%;
-  --color-tune-dark-surface-depth: 19%;
-  --color-tune-dark-text-depth: 88%;
-  --color-tune-dark-muted-depth: 72%;
+  --color-tune-dark-bg-mix: 14%;
+  --color-tune-dark-surface-mix: 19%;
+  --color-tune-dark-text-mix: 88%;
+  --color-tune-dark-muted-mix: 72%;
 
   --color-tune-elevation-1-shadow-alpha: 10%;
   --color-tune-elevation-1-border-alpha: 28%;
   --color-tune-elevation-1-glow-alpha: 14%;
+
+  /* Per-identity dark mix: share of the authored source kept in the dark variant. */
+  --color-tune-primary-dark-mix: 77.6%;
 }
 ```
 
 Project-level overrides are applied by the browser after generation and therefore are not revalidated by `smart-colors check`. Keep accessibility-critical palette and contrast decisions in the source palette/config; use tuning tokens for controlled visual refinement.
 
-In relative mode, `--color-tune-dark-text-depth` is the **weight of the authored canvas source** in the dark text mix with `oklch(0.99 0 none)`, not a percentage of ink, text opacity or a generic “make text brighter” control. More weight moves the text toward that source; with this project's canvas it slightly lowers lightness. `--color-tune-dark-muted-depth` instead weights the resolved dark text against the dark canvas: increasing it moves muted text toward full text. The emitted percentages may be adjusted by generation to meet contrast and need not equal the requested config ratio.
+In relative mode, `--color-tune-dark-text-mix` is the **weight of the authored canvas source** in the dark text mix with `oklch(0.99 0 none)`, not a percentage of ink, text opacity or a generic “make text brighter” control. More weight moves the text toward that source; with this project's canvas it slightly lowers lightness. `--color-tune-dark-muted-mix` instead weights the resolved dark text against the dark canvas: increasing it moves muted text toward full text. The emitted percentages may be adjusted by generation to meet contrast and need not equal the requested config ratio.
 
-An identity override `--color-tune-<name>-dark` affects the dark direct `--color-<name>` **and the dark functional `<name>-border` and `<name>-solid`**, which reference the same identity variable. It does **not** regenerate `solid-hover`, `on-solid`, the direct `on-*` companion, surfaces, `border-strong`, text variants, numeric scales or hue variants, whose values were resolved separately. Aliases follow their target. If `<name>` is the configured focus identity, its dark override also feeds the dark control active-background, active-border and focus-background mixes; their foregrounds and the generated focus ring are not recomputed. A tuned fill/state can therefore disagree with its original hover state or foreground: recheck those rendered pairs explicitly.
+Each `ui`/`feedback` identity also emits `--color-tune-<name>-dark-mix`, the percentage of the authored source kept in the dark variant:
+
+```css
+--_color-<name>-dark-generated: color-mix(in oklch, var(--_color-<name>-source) var(--color-tune-<name>-dark-mix, <mixRatio>%), oklch(1 0 none));
+```
+
+The fallback `<mixRatio>` is the generated default (from `dark-blend` or the adaptive rule); lowering the knob mixes in more white and lightens the dark identity. It is a runtime knob only: `solid-hover`, `solid-text`, text variants, scales and hue variants are resolved at build time and are not recomputed by it. For a fully custom dark identity, override `--color-tune-<name>-dark` with a complete OKLCH color instead.
+
+An identity override `--color-tune-<name>-dark` affects the dark direct `--color-<name>` **and the dark functional `<name>-border` and `<name>-solid`**, which reference the same identity variable. It does **not** regenerate `solid-hover`, `solid-text`, the direct `-ink` companion, surfaces, `border-strong`, text variants, numeric scales or hue variants, whose values were resolved separately. Aliases follow their target. If `<name>` is the configured focus identity, its dark override also feeds the dark control active-background, active-border and focus-background mixes; their foregrounds and the generated focus ring are not recomputed. A tuned fill/state can therefore disagree with its original hover state or foreground: recheck those rendered pairs explicitly.
 
 For one-off dark identity corrections, prefer palette/config first. If a project still needs a CSS-level override, use public tuning tokens instead of internal generated variables:
 
@@ -697,7 +708,7 @@ Every `ui` and `feedback` color emits the same stable family, even when numeric 
 --color-primary-border-strong    /* stronger border/accent line */
 --color-primary-solid            /* filled control / emphasis surface */
 --color-primary-solid-hover      /* hover/pressed solid tone */
---color-primary-on-solid         /* text/icon on the solid color */
+--color-primary-solid-text         /* text/icon on the solid color */
 --color-primary-text             /* colored text/icon on neutral surfaces */
 --color-primary-text-strong      /* stronger colored text/icon */
 ```
@@ -796,6 +807,7 @@ Astro/Vite shutdown cancels the debounce, removes watcher listeners, skips queue
 
 ```sh
 smart-colors init
+smart-colors init --dir src/tokens
 smart-colors init --palette colors/personal.css --tuning colors/colors-tuning.css
 smart-colors init --yes
 smart-colors build
@@ -809,11 +821,11 @@ smart-colors report chromium firefox
 smart-colors --help
 ```
 
-Options can be placed before or after the command. Supported flags are `--config`/`-c`, `--root`/`-r`, `--palette`, `--tuning`, `--yes`/`-y`, and `--help`/`-h`. For `audit` and `report`, positional arguments after the command select browsers (`chromium`, `firefox`, `webkit`); the default is `chromium`.
+Options can be placed before or after the command. Supported flags are `--config`/`-c`, `--root`/`-r`, `--dir`/`-d`, `--palette`, `--tuning`, `--yes`/`-y`, and `--help`/`-h`. For `audit` and `report`, positional arguments after the command select browsers (`chromium`, `firefox`, `webkit`); the default is `chromium`.
 
 `audit` measures the generated tokens and `colors-tuning.css` in a real browser across four theme/preference scenarios and reports the shortfalls; it never writes. `report` runs the same measurement plus the read-only proposal solver and publishes `reports/smart-colors.html` and `reports/smart-colors-preview.html`. Playwright is an **optional** peer dependency: install `playwright` or `@playwright/test` (`>=1.40`) in the project and its browser binaries with `pnpm exec playwright install chromium` (or `firefox`/`webkit`). Without Playwright the command exits with a clear error and writes nothing; `build`, `check` and `init` never load it and never need it.
 
-`init` creates the two authored files a project starts from: a palette with neutral example values and a `colors-tuning.css` panel whose values are all commented out. The palette path comes from `config.palette` unless `--palette` is given; the tuning path defaults to `colors-tuning.css` in the palette directory unless `--tuning` is given. Both parents are created as needed, and backslash separators in explicit paths are normalized to `/`. On an interactive terminal and with no path flags, it prints the resolved paths and asks for confirmation first. `--yes` skips the question, and a run without a terminal (CI) uses the resolved paths without ever prompting. Only an empty answer, `y` or `yes` proceeds; any other answer leaves the project untouched. If either target already exists, `init` exits non-zero, names the existing file and writes nothing. It also refuses a target that would overwrite `config.output` or an enabled `config.motion.output`. `build` and `check` never prompt and never create a palette.
+`init` creates the two authored files a project starts from: a palette with neutral example values and a `colors-tuning.css` panel whose values are all commented out. The palette path comes from `config.palette` unless `--palette` or `--dir` is given; the tuning path defaults to `colors-tuning.css` in the palette directory unless `--tuning` is given. `--dir` picks a token directory (default `src/styles/tokens`) and cannot be combined with `--palette`; choosing a different directory also writes `smart-colors.config.mjs` with the matching `palette` and `output` paths, so `build`, `check`, `audit` and `report` resolve the custom layout. Both parents are created as needed, and backslash separators in explicit paths are normalized to `/`. On an interactive terminal and with no path options, it asks for the token directory first (Enter keeps the default) and then shows the files it will create before asking for confirmation. `--yes` skips the prompts, and a run without a terminal (CI) uses the resolved paths without ever prompting. Only an empty answer, `y` or `yes` proceeds; any other answer leaves the project untouched. If any target already exists, `init` exits non-zero, names the existing file and writes nothing. It also refuses a target that would overwrite `config.output` or an enabled `config.motion.output`. `build` and `check` never prompt and never create a palette.
 
 Diagnostic statuses do **not** change exit policy: a successful warning-only run exits `0`, including `below-minimum` warnings. Stale output in `check` mode, generation/validation errors or config/I/O failures exit non-zero. Treat warnings separately if your CI needs a stricter policy; the package introduces no new CI gate.
 

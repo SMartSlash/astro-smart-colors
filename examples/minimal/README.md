@@ -33,12 +33,12 @@ npx smart-colors init
 
 - The page background, cards and body text use `--color-bg`,
   `--color-surface`, `--color-text` and `--color-text-muted`.
-- The button uses `--color-brand-solid` with `--color-brand-on-solid`, and
+- The button uses `--color-brand-solid` with `--color-brand-solid-text`, and
   hover moves to `--color-brand-solid-hover`.
 - The success callout pairs `--color-success-surface` with
   `--color-success-text` and `--color-success-border`.
 - The badge uses the decorative `--color-highlight` and its
-  `--color-on-highlight` companion.
+  `--color-highlight-ink` companion.
 - Keyboard focus (Tab) uses `--color-focus-ring`.
 - Light and dark values come from generated `light-dark()` pairs and
   `color-scheme: light dark`; switch the OS appearance to see both.

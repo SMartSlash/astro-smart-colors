@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { analyzeColorTokens } from "./generate-colors.mjs";
@@ -12,6 +12,56 @@ export const REPORT_FILES = {
   palette: "src/styles/tokens/palette.css", config: "smart-colors.config.mjs",
   tuning: "src/styles/tokens/colors-tuning.css", output: "src/styles/tokens/colors.css",
 };
+
+/** Follow the palette directory for the authored tuning file when it moved there. */
+export async function resolveTuningFile(root, config) {
+  const palette = typeof config?.palette === "string" ? config.palette : null;
+  if (palette === null) return REPORT_FILES.tuning;
+
+  const candidate = path.posix.join(path.posix.dirname(palette.replaceAll("\\", "/")), "colors-tuning.css");
+  if (candidate !== REPORT_FILES.tuning
+    && !await pathExists(path.resolve(root, REPORT_FILES.tuning))
+    && await pathExists(path.resolve(root, candidate))) {
+    return candidate;
+  }
+
+  return REPORT_FILES.tuning;
+}
+
+async function pathExists(file) {
+  try {
+    await lstat(file);
+    return true;
+  } catch (error) {
+    if (error.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+/** Read-only tuning status for CLI blocks; it never throws and never changes exit codes. */
+export async function inspectTuningStatus(root, config) {
+  let tuningPath = REPORT_FILES.tuning;
+
+  try {
+    tuningPath = await resolveTuningFile(root, config);
+    const css = await readFile(path.resolve(root, tuningPath), "utf8");
+    const activeCount = (css.replace(/\/\*[\s\S]*?\*\//g, "").match(/--[a-z0-9_-]+\s*:/gi) ?? []).length;
+
+    if (activeCount === 0) {
+      return { path: tuningPath, exists: true, activeCount, summary: "presente, nessun override attivo (verificato da audit/report)" };
+    }
+
+    return {
+      path: tuningPath,
+      exists: true,
+      activeCount,
+      summary: `presente, ${activeCount} ${activeCount === 1 ? "override attivo" : "override attivi"} (verificati da audit/report)`,
+    };
+  } catch (error) {
+    if (error.code === "ENOENT") return { path: tuningPath, exists: false, activeCount: 0, summary: "non presente (opzionale)" };
+    return { path: tuningPath, exists: false, activeCount: 0, summary: "non leggibile (stato non verificato)" };
+  }
+}
 
 /** Same integrity gates and grouping as the HTML; presentation only, no new measurements. */
 export function formatReportSummary(snapshot) {
@@ -49,7 +99,7 @@ async function optionalRead(file) {
 }
 
 export async function captureReportInputs(root, config) {
-  const files = { ...REPORT_FILES, ...(config ? { palette: config.palette, output: config.output } : {}) };
+  const files = { ...REPORT_FILES, ...(config ? { palette: config.palette, output: config.output } : {}), tuning: await resolveTuningFile(root, config) };
   const inputs = await Promise.all(Object.entries(files).map(async ([name, file]) => [name, file, ...await optionalRead(path.resolve(root, file))]));
   return { files, inputs };
 }
@@ -315,9 +365,9 @@ function sameColor(first, second) {
 // configured one: promoting the runtime value here is the structural alternative.
 const TUNING_CONFIG_KEYS = new Map([
   ["--color-tune-surface-lightness-shift", "derivation.surface.lightShift"],
-  ["--color-tune-dark-bg-depth", "derivation.dark.bgMixRatio"],
-  ["--color-tune-dark-surface-depth", "derivation.dark.surfaceMixRatio"],
-  ["--color-tune-dark-text-depth", "derivation.dark.textMixRatio"],
+  ["--color-tune-dark-bg-mix", "derivation.dark.bgMixRatio"],
+  ["--color-tune-dark-surface-mix", "derivation.dark.surfaceMixRatio"],
+  ["--color-tune-dark-text-mix", "derivation.dark.textMixRatio"],
 ]);
 
 // Absent, malformed or non-numeric paths stay null: the report never invents a
@@ -583,7 +633,7 @@ export async function reportCandidates(root, analysis, tuningCss, states, reject
   // where the existing configuration has a dedicated on-solid override.
   for (const identity of Object.keys(analysis.config.roles.identities)) {
     for (const scheme of ["light", "dark"]) {
-      const foreground = `--color-${identity}-on-solid`;
+      const foreground = `--color-${identity}-solid-text`;
       const affected = allRows.filter((pair) => pair.foreground === foreground && pair.label.startsWith(`${scheme} `));
       if (!affected.some((pair) => pair.status !== "pass")) continue;
       const color = nearestLightness(affected[0].foregroundColor, (candidate) => affected.every((pair) =>
@@ -708,8 +758,8 @@ export async function reportCandidates(root, analysis, tuningCss, states, reject
     const darkState = states.find((state) => state.scheme === "dark");
     const mutedText = darkState?.computed?.tokens.get("--color-text");
     for (const [knob, background, id, label, title] of [
-      ["--color-tune-dark-bg-depth", "--color-bg", "browser-neutral-bg-dark", "--color-bg (dark)", "Preserva la palette: raffina il canvas dark"],
-      ["--color-tune-dark-surface-depth", "--color-surface", "browser-neutral-surface-dark", "--color-surface (dark)", "Preserva la palette: raffina la superficie dark"],
+      ["--color-tune-dark-bg-mix", "--color-bg", "browser-neutral-bg-dark", "--color-bg (dark)", "Preserva la palette: raffina il canvas dark"],
+      ["--color-tune-dark-surface-mix", "--color-surface", "browser-neutral-surface-dark", "--color-surface (dark)", "Preserva la palette: raffina la superficie dark"],
     ]) {
       const affected = failures.filter((pair) => pair.label.startsWith("dark ") && pair.background === background);
       if (!affected.length) continue;
@@ -718,7 +768,7 @@ export async function reportCandidates(root, analysis, tuningCss, states, reject
       const constraints = allRows.filter((pair) => pair.label.startsWith("dark ") && pair.background === background);
       const reModelsMuted = background === "--color-bg";
       const mutedDepth = reModelsMuted
-        ? tuningPercentage(tuningCss, "--color-tune-dark-muted-depth") ?? tuningPercentage(analysis.css, "--color-tune-dark-muted-depth")
+        ? tuningPercentage(tuningCss, "--color-tune-dark-muted-mix") ?? tuningPercentage(analysis.css, "--color-tune-dark-muted-mix")
         : null;
       // Without the resolved dark text and the active muted depth the interaction
       // is not measurable: skip this candidate instead of modelling it with a
@@ -761,7 +811,7 @@ export async function reportCandidates(root, analysis, tuningCss, states, reject
     }
 
     const mutedFailures = failures.filter((pair) => pair.label.startsWith("dark ") && pair.foreground === "--color-text-muted");
-    const mutedCurrent = tuningPercentage(tuningCss, "--color-tune-dark-muted-depth") ?? tuningPercentage(analysis.css, "--color-tune-dark-muted-depth");
+    const mutedCurrent = tuningPercentage(tuningCss, "--color-tune-dark-muted-mix") ?? tuningPercentage(analysis.css, "--color-tune-dark-muted-mix");
     const mutedCanvas = darkState?.computed?.tokens.get("--color-bg");
     // An active --color-text override reshapes the muted mix source, which is not
     // observable through the public tokens; leave that knob to a human decision.
@@ -771,10 +821,10 @@ export async function reportCandidates(root, analysis, tuningCss, states, reject
         constraints.every((pair) => contrast(mixOklch(mutedText, mutedCanvas, candidate / 100), pair.backgroundColor) >= directMargin(pair)));
       if (depth !== null) {
         const value = percentageValue(depth);
-        const tuning = replaceTuningDeclaration(tuningCss, "--color-tune-dark-muted-depth", value);
+        const tuning = replaceTuningDeclaration(tuningCss, "--color-tune-dark-muted-mix", value);
         if (tuning !== null) candidates.push({
           id: "browser-neutral-muted-dark", title: "Preserva la palette: raffina il testo secondario dark", kind: "tuning",
-          destination: { file: REPORT_FILES.tuning, path: "--color-tune-dark-muted-depth", snippet: `--color-tune-dark-muted-depth: ${value};` },
+          destination: { file: REPORT_FILES.tuning, path: "--color-tune-dark-muted-mix", snippet: `--color-tune-dark-muted-mix: ${value};` },
           impact: "Cambia solo il testo muted del tema scuro; non tocca palette, canvas o superficie. Sostituisci la dichiarazione esistente in colors-tuning.css, non aggiungere un override altrove.",
           search: "Ricerca a 2 decimali sul rapporto di miscela tra testo e canvas risolti dal browser, con margine 0.02 sulle coppie misurate che usano il testo muted; poi verifica browser completa, senza promessa di ottimo globale.",
           changes: [{ label: "--color-text-muted (dark)", before: mutedFailures[0].foregroundColor, after: mixOklch(mutedText, mutedCanvas, depth / 100) }],
@@ -844,12 +894,12 @@ export async function reportCandidates(root, analysis, tuningCss, states, reject
   }
 
   for (const proposal of analysis.proposals.filter((item) => item.kind === "palette-source")) {
-    // Keep the direct on-color companion in the same verification: the source
-    // edit must hold for --color-<id>-on-solid and for --color-on-<id> on its
-    // own fill, so both labels are named instead of only the on-solid pair.
+    // Keep the direct ink companion in the same verification: the source
+    // edit must hold for --color-<id>-solid-text and for --color-<id>-ink on its
+    // own fill, so both labels are named instead of only the solid-text pair.
     const issueLabels = failures.filter((pair) => pair.label.startsWith(`${proposal.scheme} `)
-      && (pair.foreground === `--color-${proposal.identity}-on-solid`
-        || (pair.foreground === `--color-on-${proposal.identity}` && pair.background === `--color-${proposal.identity}`)))
+      && (pair.foreground === `--color-${proposal.identity}-solid-text`
+        || (pair.foreground === `--color-${proposal.identity}-ink` && pair.background === `--color-${proposal.identity}`)))
       .map((pair) => pair.label);
     if (!issueLabels.length) continue;
     const trial = await inspectSourceTrial(analysis, paletteCss, proposal);

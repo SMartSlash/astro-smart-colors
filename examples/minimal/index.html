@@ -82,7 +82,7 @@
         border: 1px solid transparent;
         border-radius: 0.5rem;
         background: var(--color-brand-solid);
-        color: var(--color-brand-on-solid);
+        color: var(--color-brand-solid-text);
         font-weight: 600;
         text-decoration: none;
       }
@@ -133,7 +133,7 @@
         padding: 0.55rem 0.85rem;
         border-radius: 0.5rem;
         background: var(--color-brand-solid);
-        color: var(--color-brand-on-solid);
+        color: var(--color-brand-solid-text);
         font-weight: 600;
       }
 
@@ -150,7 +150,7 @@
         padding: 0.3rem 0.7rem;
         border-radius: 999px;
         background: var(--color-highlight);
-        color: var(--color-on-highlight);
+        color: var(--color-highlight-ink);
         font-size: 0.875rem;
         font-weight: 600;
       }
@@ -188,11 +188,11 @@
 
       <main id="tokens" class="grid">
         <section class="card" aria-labelledby="solid-title">
-          <p class="label">Solid / on-solid</p>
+          <p class="label">Solid / solid-text</p>
           <h2 id="solid-title">A fill and its readable companion</h2>
           <p>
             The button uses <code>--color-brand-solid</code> with
-            <code>--color-brand-on-solid</code>. Hover switches the fill to the
+            <code>--color-brand-solid-text</code>. Hover switches the fill to the
             generated hover value.
           </p>
           <p class="swatch">Sample label</p>
@@ -210,11 +210,11 @@
         </section>
 
         <section class="card" aria-labelledby="decorative-title">
-          <p class="label">Decorative / on-color</p>
+          <p class="label">Decorative / ink</p>
           <h2 id="decorative-title">Color for emphasis, never for meaning</h2>
           <p>
             The badge uses <code>--color-highlight</code> with
-            <code>--color-on-highlight</code>. Decorative colors are never the
+            <code>--color-highlight-ink</code>. Decorative colors are never the
             only signal for state or action.
           </p>
           <p><span class="badge">New</span> A decorative accent.</p>

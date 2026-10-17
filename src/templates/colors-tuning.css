@@ -12,7 +12,6 @@
    1. MACRO THEME TUNING — warmth, depth, surfaces
    2. PER-COLOR DARK TUNING — one identity at a time
    3. ELEVATION TUNING — alpha and semantic mapping
-   4. LEGACY BRIDGE — temporary aliases for unmigrated components
    ========================================================================== */
 
 /* ==========================================================================
@@ -24,13 +23,13 @@
      How much of the source hue survives in light mode.
    --color-tune-dark-warmth
      How much of the source hue survives in dark mode.
-   --color-tune-dark-bg-depth
+   --color-tune-dark-bg-mix
      How much of the light background tint reaches the dark background.
-   --color-tune-dark-surface-depth
+   --color-tune-dark-surface-mix
      Same as above for cards and panels.
-   --color-tune-dark-text-depth
+   --color-tune-dark-text-mix
      How much of the light background tint is kept in dark text.
-   --color-tune-dark-muted-depth
+   --color-tune-dark-muted-mix
      Blend ratio of muted text against the dark background.
    --color-tune-surface-lightness-shift
      Lightness delta of the light surface. Negative means darker than the
@@ -45,10 +44,10 @@
   --color-tune-light-warmth: 100%;
   --color-tune-dark-warmth: 100%;
 
-  --color-tune-dark-bg-depth: 14%;
-  --color-tune-dark-surface-depth: 18%;
-  --color-tune-dark-text-depth: 88%;
-  --color-tune-dark-muted-depth: 72%;
+  --color-tune-dark-bg-mix: 14%;
+  --color-tune-dark-surface-mix: 18%;
+  --color-tune-dark-text-mix: 88%;
+  --color-tune-dark-muted-mix: 72%;
 
   --color-tune-surface-lightness-shift: -0.018;
 }
@@ -61,15 +60,20 @@
    palette.css. Prefer that for stable choices: the generator validates it
    and derives readable pairs from the result.
 
-   The tokens below are an unvalidated runtime escape hatch for temporary
-   experiments. The percentage is the amount of source color preserved;
-   lower values mix in more white and produce a lighter dark-mode variant.
+   Two unvalidated runtime escape hatches remain for temporary experiments:
+
+   --color-tune-<id>-dark-mix
+     Percentage of the source color preserved in the generated dark fill;
+     lower values mix in more white. It only reparametrizes the generated
+     color-mix(), so border and solid stay aligned with it.
+   --color-tune-<id>-dark
+     Whole OKLCH color for the dark fill, overriding the generated value.
    ========================================================================== */
 
 /*
 :root {
-  --color-tune-brand-dark: color-mix(in oklch, var(--_color-brand-source) 78%, oklch(1 0 none));
-  --color-tune-success-dark: color-mix(in oklch, var(--_color-success-source) 81%, oklch(1 0 none));
+  --color-tune-brand-dark-mix: 78%;
+  --color-tune-success-dark-mix: 81%;
 }
 */
 
@@ -95,21 +99,5 @@
 
   --elevation-filter-surface: var(--elevation-filter-1);
   --elevation-filter-control: var(--elevation-filter-1);
-}
-*/
-
-/* ==========================================================================
-   4. LEGACY BRIDGE
-
-   Temporary aliases for components that have not migrated to the current
-   contract yet. New code should use `--color-on-*`, `--ink-*`,
-   `--surface-*` and `--color-*-on-solid`.
-   ========================================================================== */
-
-/*
-:root {
-  --color-on-brand-tinted: var(--color-on-brand);
-  --color-on-success-tinted: var(--color-on-success);
-  --color-border-tinted: color-mix(in oklch, var(--color-text) 14%, transparent);
 }
 */

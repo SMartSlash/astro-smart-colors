@@ -25,10 +25,10 @@ const MACRO_TUNING_TOKENS = [
   "--color-tune-light-warmth",
   "--color-tune-surface-lightness-shift",
   "--color-tune-dark-warmth",
-  "--color-tune-dark-bg-depth",
-  "--color-tune-dark-surface-depth",
-  "--color-tune-dark-text-depth",
-  "--color-tune-dark-muted-depth",
+  "--color-tune-dark-bg-mix",
+  "--color-tune-dark-surface-mix",
+  "--color-tune-dark-text-mix",
+  "--color-tune-dark-muted-mix",
 ];
 
 function declaredValue(css, token) {
@@ -55,11 +55,12 @@ test("minimal example builds, checks and consumes only generated tokens", async 
   await cp(EXAMPLE_ROOT, root, { recursive: true });
 
   const built = await execFileAsync(process.execPath, [CLI_PATH, "build"], { cwd: root, timeout: 30_000 });
-  assert.match(built.stdout, /\[smart-colors\] src\/styles\/tokens\/colors\.css generated\./);
+  assert.match(built.stdout, /src\/styles\/tokens\/colors\.css generated\./);
+  assert.equal((built.stdout.match(/\[smart-colors\]/g) ?? []).length, 1);
   assert.equal(built.stderr, "");
 
   const checked = await execFileAsync(process.execPath, [CLI_PATH, "check"], { cwd: root, timeout: 30_000 });
-  assert.match(checked.stdout, /\[smart-colors\] src\/styles\/tokens\/colors\.css is up to date\./);
+  assert.match(checked.stdout, /src\/styles\/tokens\/colors\.css is up to date\./);
 
   const [html, css, tuningTemplate] = await Promise.all([
     readFile(path.join(root, "index.html"), "utf8"),

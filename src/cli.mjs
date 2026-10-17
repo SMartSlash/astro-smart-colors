@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { arrow, badge, check, file, note, title, warn } from "./cli-style.mjs";
 import { generateColorTokens } from "./generate-colors.mjs";
 import { initSmartColors } from "./init.mjs";
 import { DEFAULT_CONFIG_FILE } from "./load-config.mjs";
+import { inspectTuningStatus } from "./report-data.mjs";
 
 const VALID_COMMANDS = new Set(["build", "check", "init", "audit", "report"]);
 const BROWSERS = new Set(["chromium", "firefox", "webkit"]);
@@ -21,6 +23,7 @@ Options:
   -r, --root <dir>      Project root (default: current working directory)
       --palette <file>  Palette path for init (default: config.palette)
       --tuning <file>   Tuning path for init (default: <palette dir>/colors-tuning.css)
+  -d, --dir <dir>       Token directory for init (default: src/styles/tokens)
   -y, --yes             Skip the init confirmation prompt
   -h, --help            Show this help message`;
 
@@ -64,16 +67,35 @@ async function runAuditOrReport({ command, browsers, root, configFile }) {
   await projectAudit(browsers, { root, configFile, emitReport: command === "report" });
 }
 
-async function runInit({ root, configFile, palette, tuning, yes }) {
-  const result = await initSmartColors({ root, configFile, palette, tuning, yes });
+async function runInit({ root, configFile, dir, palette, tuning, yes }) {
+  const result = await initSmartColors({ root, configFile, dir, palette, tuning, yes });
 
   if (!result.written) {
-    console.log("[smart-colors] Nothing written.");
+    console.log(`${badge()} Operazione annullata. Nessun file scritto.\n`);
     return;
   }
 
-  for (const file of result.files) console.log(`[smart-colors] Created ${file}.`);
-  console.log(`[smart-colors] Next: edit ${result.files[0]} and run smart-colors build.`);
+  const [palettePath, tuningPath, configPath] = result.files;
+  const created = [
+    [palettePath, "sorgente creativa del designer"],
+    [tuningPath, "override opzionali di progetto"],
+    ...(configPath ? [[configPath, "configurazione percorsi token"]] : []),
+  ];
+  const width = Math.max(...created.map(([createdPath]) => createdPath.length));
+
+  console.log([
+    `${badge()} Inizializzazione completata`,
+    "",
+    `  ${title("File creati")}`,
+    ...created.map(([createdPath, label]) => `    ${check()} ${file(createdPath.padEnd(width))}  ${note(`(${label})`)}`),
+    "",
+    `  ${title("Prossimi passi")}`,
+    `    1. Modifica la palette in ${file(palettePath)}`,
+    "    2. Genera i token CSS:   smart-colors build",
+    '    3. Importa nel tuo CSS:  @import "./colors.css";',
+    '                              @import "./colors-tuning.css";',
+    "",
+  ].join("\n"));
 }
 
 async function runBuildOrCheck({ root, configFile, command }) {
@@ -90,23 +112,61 @@ async function runBuildOrCheck({ root, configFile, command }) {
     console.warn(`[smart-colors] Suggestion: ${suggestion}`);
   }
 
-  if (report.changed && command !== "check") {
-    const generated = report.outputs.filter((output) => output.changed).map((output) => output.path);
-    console.log(`[smart-colors] ${generated.join(", ")} generated.`);
-  } else if (!report.changed) {
-    const outputs = report.outputs.map((output) => output.path);
-    console.log(`[smart-colors] ${outputs.join(", ")} ${outputs.length === 1 ? "is" : "are"} up to date.`);
+  const generated = report.outputs.filter((output) => output.changed).map((output) => output.path);
+  const outputs = report.outputs.map((output) => output.path);
+  const tuning = await inspectTuningStatus(root, report.config);
+  const header = report.changed
+    ? (command === "check" ? "Controllo token" : "Token colore generati")
+    : "Controllo token completato";
+  const lines = [`${badge()} ${header}`, ""];
+
+  lines.push(`  ${title("Stato")}`);
+  if (!(report.changed && command === "check")) {
+    const paths = report.changed ? generated.join(", ") : outputs.join(", ");
+    const suffix = report.changed ? " generated." : ` ${outputs.length === 1 ? "is" : "are"} up to date.`;
+    lines.push(`    ${check()} ${file(paths)}${suffix}`);
   }
+  const { warnings, suggestions } = report;
+  lines.push(warnings.length === 0 && suggestions.length === 0
+    ? `    ${check()} Contrasto baseline: 0 errori, 0 avvisi, 0 suggerimenti.`
+    : `    ${warn()} Contrasto baseline: 0 errori, ${warnings.length} ${warnings.length === 1 ? "avviso" : "avvisi"}, ${suggestions.length} ${suggestions.length === 1 ? "suggerimento" : "suggerimenti"} ${note("(vedi dettagli su stderr)")}.`);
+  if (tuning.activeCount > 0) {
+    lines.push(`    ${warn()} Tuning runtime: ${tuning.activeCount} ${tuning.activeCount === 1 ? "override attivo" : "override attivi"} in ${file(tuning.path)} ${note("(da verificare con audit/report)")}.`);
+  } else if (tuning.exists) {
+    lines.push(`    ${check()} Tuning runtime: nessun override attivo in ${file(tuning.path)}.`);
+  } else {
+    lines.push(`    ${check()} Tuning runtime: nessun file ${file(tuning.path)} attivo.`);
+  }
+
+  lines.push(
+    "",
+    `  ${title("Sorgenti e ambito")}`,
+    `    palette   config.palette (${file(report.config.palette)}) è la sorgente del designer.`,
+    `    tuning    ${file(tuning.path)} — ${dimParenthetical(tuning.summary)}.`,
+    "    nota      build/check verificano solo i default generati, NON il tuning nel browser né i componenti reali.",
+  );
+
+  if (await hasProjectReportScript({ root, configFile })) {
+    lines.push(
+      "",
+      `  ${title("Verifica nel browser")}`,
+      `    ${arrow()} Dalla root del progetto, esegui pnpm colors:report, poi apri ${file("reports/smart-colors-preview.html")}`,
+      "      per esempi realmente misurati e proposte manuali. Un'anteprima già presente potrebbe essere obsoleta.",
+    );
+  }
+
+  lines.push("");
+  console.log(lines.join("\n"));
 
   if (report.errors.length) {
     for (const error of report.errors) console.error(`[smart-colors] ${error}`);
     process.exitCode = 1;
   }
+}
 
-  console.log(`[smart-colors] config.palette (${report.config.palette}) è la sorgente del designer. build/check verificano solo i default generati, NON il tuning nel browser né i componenti reali.`);
-  if (await hasProjectReportScript({ root, configFile })) {
-    console.log("[smart-colors] Dalla root del progetto, esegui pnpm colors:report, poi apri reports/smart-colors-preview.html per esempi realmente misurati e proposte manuali. Un'anteprima già presente potrebbe essere obsoleta.");
-  }
+function dimParenthetical(summary) {
+  const match = /^(.*?)\s*(\([^()]*\))$/.exec(summary);
+  return match ? `${match[1]} ${note(match[2])}` : summary;
 }
 
 async function hasProjectReportScript({ root, configFile }) {
@@ -129,6 +189,7 @@ function parseArgs(args) {
     root: process.cwd(),
     palette: undefined,
     tuning: undefined,
+    dir: undefined,
     browsers: [],
     yes: false,
     help: false,
@@ -212,6 +273,27 @@ function parseArgs(args) {
       continue;
     }
 
+    if (arg === "--dir" || arg === "-d") {
+      const value = args[index + 1];
+      if (isMissingOptionValue(value)) {
+        parsedArgs.errors.push(`Missing value for ${arg}.`);
+      } else {
+        parsedArgs.dir = value;
+        index += 1;
+      }
+      continue;
+    }
+
+    if (arg.startsWith("--dir=")) {
+      const value = arg.slice("--dir=".length);
+      if (!value) {
+        parsedArgs.errors.push("Missing value for --dir.");
+      } else {
+        parsedArgs.dir = value;
+      }
+      continue;
+    }
+
     if (arg === "--root" || arg === "-r") {
       const value = args[index + 1];
       if (isMissingOptionValue(value)) {
@@ -265,7 +347,7 @@ function parseArgs(args) {
   }
 
   if (parsedArgs.command !== "init") {
-    for (const [flag, value] of [["--palette", parsedArgs.palette], ["--tuning", parsedArgs.tuning]]) {
+    for (const [flag, value] of [["--palette", parsedArgs.palette], ["--tuning", parsedArgs.tuning], ["--dir", parsedArgs.dir]]) {
       if (value !== undefined) parsedArgs.errors.push(`Option ${flag} is only supported by init.`);
     }
     if (parsedArgs.yes) parsedArgs.errors.push("Option --yes is only supported by init.");

@@ -309,7 +309,7 @@ test("logo validation allows non-colliding sources and disabled logo sources", (
 });
 
 test("validator reserves tune-* names for tuning tokens and identity dark escape hatches", () => {
-  for (const name of ["tune-light-warmth", "tune-dark-bg-depth", "tune-primary-dark", "tune-secondary-dark", "tune-future-knob"]) {
+  for (const name of ["tune-light-warmth", "tune-dark-bg-mix", "tune-primary-dark", "tune-secondary-dark", "tune-future-knob"]) {
     for (const owner of ["identities", "decoratives", "aliases"]) {
       const config = validPublicConfig();
       assert.deepEqual(validate(config).errors, []);
@@ -344,7 +344,7 @@ test("validator permits non-reserved names containing tune away from the prefix"
 });
 
 test("public registry retains collisions for generated on-color, functional, scale and hue names including aliases", () => {
-  for (const name of ["on-primary", "primary-solid", "primary-500", "primary-warm", "primary-hue-plus-30"]) {
+  for (const name of ["primary-ink", "primary-solid", "primary-500", "primary-warm", "primary-hue-plus-30"]) {
     for (const owner of ["identities", "decoratives", "aliases"]) {
       const config = validPublicConfig();
       config.scales.enabled = true;

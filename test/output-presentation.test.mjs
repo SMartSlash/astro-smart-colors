@@ -29,7 +29,7 @@ const FUNCTIONAL_SUFFIXES = [
   "text-strong",
   "solid",
   "solid-hover",
-  "on-solid",
+  "solid-text",
   "border",
   "border-strong",
 ];
@@ -118,7 +118,7 @@ function assertHeadingOrder(css, expected) {
 }
 
 function familyNames(name) {
-  return [`--color-${name}`, `--color-on-${name}`, ...FUNCTIONAL_SUFFIXES.map((suffix) => `--color-${name}-${suffix}`)];
+  return [`--color-${name}`, `--color-${name}-ink`, ...FUNCTIONAL_SUFFIXES.map((suffix) => `--color-${name}-${suffix}`)];
 }
 
 function assertContiguous(css, expected) {
@@ -190,9 +190,9 @@ test("interleaved palette roles become contiguous families without sorting withi
   }
   const decorativeNames = ["spark", "glow"];
   assert.deepEqual(sectionDeclarations(css, "Decorative").map((entry) => entry.name),
-    decorativeNames.flatMap((name) => [`--color-${name}`, `--color-on-${name}`]));
+    decorativeNames.flatMap((name) => [`--color-${name}`, `--color-${name}-ink`]));
   for (const name of decorativeNames) {
-    assertContiguous(css, [`--color-${name}`, `--color-on-${name}`]);
+    assertContiguous(css, [`--color-${name}`, `--color-${name}-ink`]);
     assert.ok(!declarations(css).some((entry) => FUNCTIONAL_SUFFIXES.some((suffix) => entry.name === `--color-${name}-${suffix}`)));
   }
 });
@@ -203,8 +203,8 @@ test("aliases keep the family suffix order and reference their targets instead o
   const tokens = values(css);
   const expectedNames = [];
   for (const [alias, target] of Object.entries(ALIASES)) {
-    const aliasNames = alias === "ornament" ? [`--color-${alias}`, `--color-on-${alias}`] : familyNames(alias);
-    const targetNames = alias === "ornament" ? [`--color-${target}`, `--color-on-${target}`] : familyNames(target);
+    const aliasNames = alias === "ornament" ? [`--color-${alias}`, `--color-${alias}-ink`] : familyNames(alias);
+    const targetNames = alias === "ornament" ? [`--color-${target}`, `--color-${target}-ink`] : familyNames(target);
     expectedNames.push(...aliasNames);
     assertContiguous(css, aliasNames);
     for (const [index, name] of aliasNames.entries()) {
@@ -257,7 +257,7 @@ for (const mode of ["relative", "static"]) {
     const generatedDark = value(tokens, "--_color-zeta-dark-generated");
     let dark;
     if (mode === "relative") {
-      const mix = /^color-mix\(in oklch, var\(--_color-zeta-source\) ([\d.]+)%, oklch\(1 0 none\)\)$/.exec(generatedDark);
+      const mix = /^color-mix\(in oklch, var\(--_color-zeta-source\) var\(--color-tune-zeta-dark-mix, ([\d.]+)%\), oklch\(1 0 none\)\)$/.exec(generatedDark);
       assert.ok(mix, "Relative dark output must retain its native color-mix formula.");
       dark = mixOklch(light, { l: 1, c: 0, h: null }, Number(mix[1]) / 100);
     } else {

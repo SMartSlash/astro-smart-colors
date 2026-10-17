@@ -59,7 +59,7 @@ function resolveStaticColor(declarations, value, stack = []) {
   return parsed.source;
 }
 
-function getSolidRatios(css, name, scheme, foreground = getThemeColor(css, `--color-${name}-on-solid`, scheme)) {
+function getSolidRatios(css, name, scheme, foreground = getThemeColor(css, `--color-${name}-solid-text`, scheme)) {
   return ["solid", "solid-hover"].map((suffix) => contrast(
     foreground,
     getThemeColor(css, `--color-${name}-${suffix}`, scheme),
@@ -90,7 +90,7 @@ function assertOnlyOnSolidChanged(beforeCss, afterCss, name) {
   assert.deepEqual([...after.keys()], [...before.keys()]);
   assert.deepEqual(
     [...before.keys()].filter((token) => before.get(token) !== after.get(token)),
-    [`--color-${name}-on-solid`],
+    [`--color-${name}-solid-text`],
   );
 }
 
@@ -99,7 +99,7 @@ test("onSolid is optional and an empty override preserves the default output", a
   const baseline = await generateColorTokens({ root });
   const empty = await generateColorTokens({ root, inlineConfig: { onSolid: {} } });
 
-  assert.equal(getThemeColor(baseline.css, "--color-info-on-solid", "light").l, 0.9944);
+  assert.equal(getThemeColor(baseline.css, "--color-info-solid-text", "light").l, 0.9944);
   assertSolidTarget(baseline.css, "info", "light", 4.62);
   assert.ok(!baseline.warnings.some((warning) => /info-on-solid/.test(warning)));
   assert.ok(!baseline.suggestions.some((entry) => entry.startsWith("info (light):")));
@@ -166,10 +166,10 @@ test("per-theme UI/feedback overrides change only family onSolid and warn withou
         const otherScheme = scheme === "light" ? "dark" : "light";
 
         assert.deepEqual(report.errors, []);
-        assert.deepEqual(getThemeColor(report.css, `--color-${name}-on-solid`, scheme), parseOklch(override).color);
+        assert.deepEqual(getThemeColor(report.css, `--color-${name}-solid-text`, scheme), parseOklch(override).color);
         assert.deepEqual(
-          getThemeColor(report.css, `--color-${name}-on-solid`, otherScheme),
-          getThemeColor(baseline.css, `--color-${name}-on-solid`, otherScheme),
+          getThemeColor(report.css, `--color-${name}-solid-text`, otherScheme),
+          getThemeColor(baseline.css, `--color-${name}-solid-text`, otherScheme),
         );
         assertOnlyOnSolidChanged(baseline.css, report.css, name);
         assert.equal(report.motionCss, baseline.motionCss);
@@ -190,7 +190,7 @@ test("both theme overrides are applied independently without changing other toke
   const report = await generateColorTokens({ root, inlineConfig: { ...STATIC_CONFIG, onSolid } });
 
   for (const scheme of ["light", "dark"]) {
-    assert.deepEqual(getThemeColor(report.css, "--color-info-on-solid", scheme), parseOklch(onSolid.info[scheme]).color);
+    assert.deepEqual(getThemeColor(report.css, "--color-info-solid-text", scheme), parseOklch(onSolid.info[scheme]).color);
     assertSolidTarget(report.css, "info", scheme, 4.62);
   }
   assertOnlyOnSolidChanged(baseline.css, report.css, "info");
@@ -211,7 +211,7 @@ test("on-solid contrast never rounds a below-threshold emitted pair into a pass"
     });
     const ratio = getSolidRatios(report.css, "info", "light")[0];
     assert.ok(ratio < 4.5 && ratio > 4.495, `Fixture must exercise a hidden shortfall, received ${ratio}.`);
-    assert.equal(getThemeColor(report.css, "--color-info-on-solid", "light").l, lightness);
+    assert.equal(getThemeColor(report.css, "--color-info-solid-text", "light").l, lightness);
     const warning = report.warnings.find((entry) => entry.startsWith("light info-on-solid / solid is "));
     assert.ok(warning);
     assert.ok(warning.includes(`${ratio.toFixed(6)}:1 (target 4.500000:1)`));
@@ -237,7 +237,7 @@ test("on-solid warnings distinguish target shortfalls from the normal-text minim
       assert.ok(warning);
       assert.ok(warning.includes(`Status: ${status}; WCAG AA normal-text reference minimum 4.50`));
       assert.ok(warning.endsWith("Ratios use generated defaults, before CSS overrides."));
-      assert.equal(getThemeColor(report.css, "--color-info-on-solid", "light").l, lightness);
+      assert.equal(getThemeColor(report.css, "--color-info-solid-text", "light").l, lightness);
       assert.deepEqual(report.errors, []);
       assert.equal(await readFile(path.join(root, PALETTE_PATH), "utf8"), PALETTE);
     });
@@ -258,7 +258,7 @@ test("on-solid validates serialized colors even when the unrounded override pass
   });
   const solid = getThemeColor(report.css, "--color-info-solid", "light");
   assert.ok(contrast(authored, solid) >= target, "Unrounded fixture must pass.");
-  assert.equal(getThemeColor(report.css, "--color-info-on-solid", "light").l, 0.9852);
+  assert.equal(getThemeColor(report.css, "--color-info-solid-text", "light").l, 0.9852);
   const emittedRatio = getSolidRatios(report.css, "info", "light")[0];
   assert.ok(emittedRatio < target, "Serialized fixture must fail.");
   assert.ok(report.warnings.some((entry) => entry.startsWith(`light info-on-solid / solid is ${emittedRatio.toFixed(6)}:1 (target ${target.toFixed(6)}:1)`)));
@@ -293,14 +293,14 @@ test("info foreground suggestion is nearest on the four-decimal grid and copy-pa
   const suggestion = getSuggestion(baseline, "info", "light");
   assert.match(suggestion, /preserve the palette/);
   assert.match(suggestion, /In smart-colors\.config\.mjs, set onSolid\.info\.light/);
-  assert.match(suggestion, /Changes only --color-info-on-solid \(light\), shared by solid\/hover; not --color-on-info or either fill/);
+  assert.match(suggestion, /Changes only --color-info-solid-text \(light\), shared by solid\/hover; not --color-info-ink or either fill/);
   assert.match(suggestion, /Search: nearest L on a 4-decimal grid with C\/H fixed, checked after gamut mapping and serialization; not a global perceptual nearest-color claim/);
   assert.match(suggestion, /Merge into existing onSolid settings; no changes applied/);
   const match = /onSolid: \{ "info": \{ light: "(oklch\([^()]+\))" \} \}/.exec(suggestion);
   assert.ok(match, "Expected copy-pasteable onSolid config.");
   assert.equal(match[1], "oklch(0.9944 0 0)");
   const candidate = parseOklch(match[1]).color;
-  const original = getThemeColor(baseline.css, "--color-info-on-solid", "light");
+  const original = getThemeColor(baseline.css, "--color-info-solid-text", "light");
   assert.equal(candidate.c, original.c);
   assert.equal(candidate.h, original.h);
   const distance = Math.abs(candidate.l - original.l);
@@ -347,7 +347,7 @@ test("advice uses the configured identity key, authored source and config destin
   const foreground = getSuggestion(report, "info", "light");
   assert.match(foreground, /In config\/mapped-colors\.mjs, set onSolid\.info\.light/);
   assert.match(foreground, /onSolid: \{ "info": \{ light: "oklch\(0\.9944 0 0\)" \} \}/);
-  assert.match(foreground, /Changes only --color-info-on-solid \(light\), shared by solid\/hover; not --color-on-info or either fill/);
+  assert.match(foreground, /Changes only --color-info-solid-text \(light\), shared by solid\/hover; not --color-info-ink or either fill/);
   assert.match(foreground, /Search: nearest L on a 4-decimal grid with C\/H fixed, checked after gamut mapping and serialization; not a global perceptual nearest-color claim/);
   assert.doesNotMatch(foreground, /onSolid\.notice|--color-notice|In smart-colors\.config\.mjs/);
   const source = getSuggestion(report, "primary", "light");

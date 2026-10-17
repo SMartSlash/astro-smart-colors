@@ -27,7 +27,7 @@ const SCALE_SEMANTIC_SUFFIXES = [
   "border-strong",
   "solid",
   "solid-hover",
-  "on-solid",
+  "solid-text",
   "text",
   "text-strong",
 ];
@@ -240,7 +240,7 @@ function validatePublicTokenCollisions(config, errors) {
     register(name, owner);
 
     if (Object.hasOwn(ROLE_PRESETS, identityDef.role) && ROLE_PRESETS[identityDef.role].generateOnColor) {
-      register(`on-${name}`, owner);
+      register(`${name}-ink`, owner);
     }
 
     for (const suffix of SCALE_SEMANTIC_SUFFIXES) {
@@ -272,12 +272,12 @@ function validatePublicTokenCollisions(config, errors) {
 
   for (const name of Object.keys(config.roles?.decoratives ?? {})) {
     register(name, `roles.decoratives.${name}`);
-    register(`on-${name}`, `roles.decoratives.${name}`);
+    register(`${name}-ink`, `roles.decoratives.${name}`);
   }
 
   for (const [alias, target] of Object.entries(config.aliases ?? {})) {
     register(alias, `aliases.${alias}`);
-    register(`on-${alias}`, `aliases.${alias}`);
+    register(`${alias}-ink`, `aliases.${alias}`);
 
     if (Object.hasOwn(config.roles?.identities ?? {}, target)) {
       for (const suffix of SCALE_SEMANTIC_SUFFIXES) {

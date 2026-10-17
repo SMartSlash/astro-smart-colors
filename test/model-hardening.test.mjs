@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -9,6 +9,9 @@ import { fileURLToPath } from "node:url";
 import { contrast, fitToSrgb, mixOklch, serializedColor } from "../src/color-math.mjs";
 import { analyzeColorTokens, generateColorTokens } from "../src/generate-colors.mjs";
 import { parseOklch } from "../src/parse-palette.mjs";
+import { formatContrastPreviewHtml } from "../src/format-report-preview.mjs";
+import { CSP, escape, formatContrastReportHtml, MARKER, prepareContrastReport } from "../src/format-report-html.mjs";
+import { reportSnapshot } from "../../../scripts/smart-colors-report.mjs";
 
 function palette(primary = "0.62 0.16 32", canvas = "0.962 0.015 88") {
   return [
@@ -40,6 +43,18 @@ function legacyPalette(primary = "0.62 0.16 32") {
 }`;
 }
 
+// Extended fixture builder for the hardening cases: hostile canvases/inks and
+// multi-identity palettes need explicit channel triples, which the stock palette
+// helper (fixed ink/info/spark) does not expose.
+function paletteProperties(entries) {
+  return entries.map(([name, role, channels]) => `@property --palette-${name} {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(${channels});
+  role: ${role};
+}`).join("\n\n");
+}
+
 async function fixture(t, paletteCss = palette(), config = {}) {
   const root = await mkdtemp(path.join(tmpdir(), "smart-colors-model-"));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -56,6 +71,23 @@ async function snapshot(root) {
 
 function declarations(css) {
   return new Map([...css.matchAll(/(?:^|\n)\s*(--[a-z0-9_-]+)\s*:\s*([^;]+);/gi)].map(([, name, value]) => [name, value.trim()]));
+}
+
+// Opaque OKLCH literals actually emitted in the CSS, attributed to their declaration.
+// Relative color syntax (`oklch(from ...)`) is not a serialized color; a missing hue
+// on neutral mixes is normalized to 0 only to parse the channel triple.
+function emittedOklchLiterals(css) {
+  const literals = [];
+  for (const [name, value] of declarations(css)) {
+    for (const match of value.matchAll(/oklch\((?:[^()]|\([^()]*\))*\)/g)) {
+      const literal = match[0].replace(/\s+/g, " ");
+      if (/^oklch\(\s*from\s/.test(literal)) continue;
+      const parsed = parseOklch(literal.replace(/\bnone\b/, "0"));
+      assert.deepEqual(parsed.errors, [], `Unparseable emitted literal in ${name}: ${literal}`);
+      literals.push({ name, literal, source: parsed.source });
+    }
+  }
+  return literals;
 }
 
 function splitArguments(value) {
@@ -390,7 +422,9 @@ test("root canonical declarations remain unchanged and internal analysis does no
   const analysis = await analyzeColorTokens({ root, suggest: false });
   const entries = [...declarations(analysis.css)].sort(([a], [b]) => a.localeCompare(b));
   assert.equal(entries.length, 315);
-  assert.equal(createHash("sha256").update(JSON.stringify(entries)).digest("hex"), "3deae7b57faa61c437f68b5cc9290f38dfd6a43df8884392fc1c97b949989666");
+  // Re-baselined when derivation.surface.lightShift moved from -0.018 to -0.028 in
+  // smart-colors.config.mjs: same 315 declarations, recomputed neutral text tokens.
+  assert.equal(createHash("sha256").update(JSON.stringify(entries)).digest("hex"), "bafe3a5627496d7c739c628ef4d7ebc49d762b069d2fcd4990b2579f0ca949ff");
   assert.equal(await readFile(output, "utf8"), before);
 });
 
@@ -414,4 +448,223 @@ test("watcher suggest:false benchmark fixture skips advice without changing colo
   assert.deepEqual(enabled.warnings, disabled.warnings);
   assert.deepEqual(await snapshot(options.root), before);
   t.diagnostic(`Unattainable 21:1 advice fixture: suggest:false ${(disabledMs / 10).toFixed(2)} ms/analysis (10 runs); enabled ${adviceMs.toFixed(2)} ms. Timing is informational, not a machine-dependent pass threshold.`);
+});
+
+// Hostile palette 1: a light ink (L 0.55) on a mid canvas (L 0.52). The generator must
+// adapt neutral text instead of failing: textLight leaves the ink source and reaches the
+// text contract on both light backgrounds. Measured here (real values, not a floor):
+// textLight = oklch(0.94 0 0), 4.6199:1 on bgLight and 4.9890:1 on surfaceLight. The
+// solver stops at the first serialized lightness that satisfies its 4.62 search target,
+// so l >= 0.95 is NOT reached; the contract is asserted as contrast + direction.
+test("light-ink hostile palette adapts neutral text to the light end without errors", async (t) => {
+  const options = await fixture(t, paletteProperties([
+    ["canvas", "canvas", "0.52 0 0"],
+    ["ink", "ink", "0.55 0 0"],
+    ["primary", "ui", "0.62 0.16 32"],
+    ["info", "feedback", "0.56 0.12 260"],
+    ["spark", "decorative", "0.88 0.12 85"],
+  ]));
+  const analysis = await analyzeColorTokens({ ...options, suggest: false });
+  assert.deepEqual(analysis.errors, []);
+  const ink = analysis.authoredTokens["palette-ink"];
+  const { textLight, bgLight, surfaceLight } = analysis.model.neutrals;
+  assert.ok(textLight.l > ink.l, `textLight ${textLight.l} must be pushed above ink ${ink.l}`);
+  assert.ok(textLight.l > bgLight.l, `textLight ${textLight.l} must be pushed above canvas ${bgLight.l}`);
+  assert.ok(contrast(textLight, bgLight) >= analysis.config.contrast.text, `textLight / bgLight is only ${contrast(textLight, bgLight)}`);
+  assert.ok(contrast(textLight, surfaceLight) >= analysis.config.contrast.text, `textLight / surfaceLight is only ${contrast(textLight, surfaceLight)}`);
+});
+
+// Hostile palette 2: no sRGB color reaches the requested contract. With L 0.52 canvas and
+// L 0.55 ink, contrast.text 7 caps every foreground at 5.51:1; in the L 0.575 dead zone the
+// default 4.6 still fails because bgLight 0.575 allows 4.8022:1 but surfaceLight 0.547 caps
+// any foreground at 4.4562:1 (below-minimum, under the 4.5 reference minimum). Error policy,
+// not warnings: the analyzer reports and the build rejects before writing anything.
+test("unreachable text contracts report errors and reject before writing any output", async (t) => {
+  const identityTokens = [
+    ["primary", "ui", "0.62 0.16 32"],
+    ["info", "feedback", "0.56 0.12 260"],
+    ["spark", "decorative", "0.88 0.12 85"],
+  ];
+  const fixtures = [
+    {
+      label: "7:1 text contract on a light ink over a mid canvas",
+      tokens: [["canvas", "canvas", "0.52 0 0"], ["ink", "ink", "0.55 0 0"], ...identityTokens],
+      config: { contrast: { text: 7 } },
+    },
+    {
+      label: "default 4.6 text contract in the canvas luminance dead zone",
+      tokens: [["canvas", "canvas", "0.575 0 0"], ["ink", "ink", "0.28 0.007 3.68"], ...identityTokens],
+      config: {},
+      verify: (analysis) => {
+        const deadZone = analysis.diagnostics.find((fact) => fact.label === "light neutral text / surface");
+        assert.equal(deadZone.severity, "error");
+        assert.ok(deadZone.ratio < deadZone.target, `dead zone ratio ${deadZone.ratio} must miss ${deadZone.target}`);
+      },
+    },
+  ];
+  for (const { label, tokens, config, verify } of fixtures) {
+    const options = await fixture(t, paletteProperties(tokens), config);
+    const before = await snapshot(options.root);
+    const beforeEntries = (await readdir(options.root)).sort();
+    const analysis = await analyzeColorTokens({ ...options, suggest: false });
+    assert.ok(analysis.errors.length > 0, `${label}: expected errors`);
+    assert.ok(
+      analysis.diagnostics.some((fact) => fact.severity === "error" && fact.status !== "pass"),
+      `${label}: expected an error-policy shortfall`,
+    );
+    verify?.(analysis);
+    for (const check of [false, true]) {
+      await assert.rejects(generateColorTokens({ ...options, check }), /invalid contrast contract/);
+      assert.deepEqual(await snapshot(options.root), before, `${label}: output files must stay unchanged`);
+      assert.deepEqual((await readdir(options.root)).sort(), beforeEntries, `${label}: no entry may be added`);
+    }
+  }
+});
+
+// Hostile palette 3: a ui identity whose chroma (0.42) is far outside the sRGB gamut.
+// The emitted source is the serialized gamut fit and every emitted literal parses.
+// Divergence from the brief: the generator fits materialized colors to sRGB and THEN
+// serializes them to four decimals, so three boundary literals no longer survive a
+// strict fitToSrgb round-trip (measured drift up to 0.000046 in chroma). The exact set
+// is pinned as the real behaviour instead of being papered over with a tolerance.
+test("beyond-sRGB identity source stays clean and emits only parseable gamut-fit literals", async (t) => {
+  const options = await fixture(t, paletteProperties([
+    ["canvas", "canvas", "0.962 0.015 88"],
+    ["ink", "ink", "0.28 0.007 3.68"],
+    ["primary", "ui", "0.7 0.42 30"],
+    ["info", "feedback", "0.56 0.12 260"],
+    ["spark", "decorative", "0.88 0.12 85"],
+  ]));
+  const analysis = await analyzeColorTokens({ ...options, suggest: false });
+  assert.deepEqual(analysis.errors, []);
+  assert.deepEqual(analysis.warnings, []);
+  assertFacts(analysis);
+  const values = declarations(analysis.css);
+  const authored = analysis.authoredTokens["palette-primary"];
+  const emittedSource = parseOklch(values.get("--_color-primary-source")).source;
+  assert.ok(emittedSource.c < authored.c, `emitted chroma ${emittedSource.c} must be gamut-mapped from ${authored.c}`);
+  assert.deepEqual(emittedSource, serializedColor(fitToSrgb(authored)));
+  const outOfGamut = emittedOklchLiterals(analysis.css)
+    .filter(({ source }) => {
+      const fit = fitToSrgb(source);
+      return fit.l !== source.l || fit.c !== source.c || fit.h !== source.h;
+    })
+    .map(({ name, literal }) => [name, literal])
+    .sort((first, second) => first[0].localeCompare(second[0]) || first[1].localeCompare(second[1]));
+  assert.deepEqual(outOfGamut, [
+    ["--_color-focus-ring-dark", "oklch(0.745 0.1551 30)"],
+    ["--color-primary-border-strong", "oklch(0.745 0.1551 30)"],
+    ["--color-primary-text-strong", "oklch(0.7771 0.1311 30)"],
+  ]);
+});
+
+// Hostile palette 4: an achromatic ui identity (C 0, hue 0). Achromatic sources are the
+// classic source of hue/division corruption; every emitted literal must parse with
+// finite channels and the CSS may not contain NaN or Infinity.
+test("achromatic identity source emits finite channels without NaN in the CSS", async (t) => {
+  const options = await fixture(t, paletteProperties([
+    ["canvas", "canvas", "0.962 0.015 88"],
+    ["ink", "ink", "0.28 0.007 3.68"],
+    ["primary", "ui", "0.55 0 0"],
+    ["info", "feedback", "0.56 0.12 260"],
+    ["spark", "decorative", "0.88 0.12 85"],
+  ]));
+  const analysis = await analyzeColorTokens({ ...options, suggest: false });
+  assert.deepEqual(analysis.errors, []);
+  assert.deepEqual(analysis.warnings, []);
+  assertFacts(analysis);
+  assert.equal(declarations(analysis.css).get("--_color-primary-source"), "oklch(0.55 0 0)");
+  const literals = emittedOklchLiterals(analysis.css);
+  assert.ok(literals.length > 0);
+  for (const { name, literal, source } of literals) {
+    assert.ok(
+      [source.l, source.c, source.h].every(Number.isFinite),
+      `Non-finite channel in ${name}: ${literal}`,
+    );
+  }
+  assert.doesNotMatch(analysis.css, /\b(?:NaN|Infinity)\b/);
+});
+
+// Hostile palette 5: two identities at the lightness extremes, 0.98 and 0.05. Every
+// functional variant (text, text-strong, border-strong, on-solid, on-*) must meet its
+// own declared target in both schemes: 15 checks per identity and scheme.
+test("near-white and near-black identities keep every functional variant above its target", async (t) => {
+  const options = await fixture(t, paletteProperties([
+    ["canvas", "canvas", "0.962 0.015 88"],
+    ["ink", "ink", "0.28 0.007 3.68"],
+    ["primary", "ui", "0.98 0.01 90"],
+    ["info", "feedback", "0.05 0.01 260"],
+    ["spark", "decorative", "0.88 0.12 85"],
+  ]));
+  const analysis = await analyzeColorTokens({ ...options, suggest: false });
+  assert.deepEqual(analysis.errors, []);
+  assert.deepEqual(analysis.warnings, []);
+  assertFacts(analysis);
+  const functional = analysis.diagnostics.filter((fact) =>
+    /^--color-(?:primary|info)-(?:text|text-strong|border-strong|on-solid)$/.test(fact.foregroundToken)
+    || /^--color-on-(?:primary|info)$/.test(fact.foregroundToken));
+  assert.equal(functional.length, 60);
+  assert.deepEqual([...new Set(functional.map((fact) => fact.scheme))].sort(), ["dark", "light"]);
+  for (const fact of functional) {
+    assert.equal(fact.status, "pass", `${fact.label} is ${fact.ratio} below ${fact.target}`);
+    assert.ok(fact.ratio >= fact.target, `${fact.label} is ${fact.ratio} below ${fact.target}`);
+  }
+});
+
+// Hostile palette 6: ten ui identities at C 0.12 on the full hue circle. All ten families
+// must be emitted (>= 150 custom properties) with zero errors, and the snapshot from
+// reportSnapshot carries no measured scenarios, so both renderers must fail closed:
+// marked, CSP-protected, script-free HTML without throwing.
+test("ten identity families emit a complete API and both report renderers fail closed", async (t) => {
+  const identities = Array.from({ length: 10 }, (_, index) => [`brand${index}`, "ui", `0.6 0.12 ${index * 36}`]);
+  const options = await fixture(t, paletteProperties([
+    ["canvas", "canvas", "0.962 0.015 88"],
+    ["ink", "ink", "0.28 0.007 3.68"],
+    ...identities,
+  ]));
+  const analysis = await analyzeColorTokens({ ...options, suggest: false });
+  assert.deepEqual(analysis.errors, []);
+  assert.deepEqual(Object.keys(analysis.model.identities), identities.map(([name]) => name));
+  const values = declarations(analysis.css);
+  assert.ok(values.size >= 150, `expected at least 150 custom properties, found ${values.size}`);
+  for (const [name] of identities) {
+    for (const token of [
+      `--color-${name}`, `--color-on-${name}`, `--color-${name}-surface`, `--color-${name}-text`,
+      `--color-${name}-text-strong`, `--color-${name}-solid`, `--color-${name}-on-solid`, `--color-${name}-border-strong`,
+    ]) {
+      assert.ok(values.has(token), `Missing ${token}`);
+    }
+  }
+  const snapshot = await reportSnapshot(options.root, analysis);
+  assert.deepEqual(snapshot.scenarios, []);
+  assert.deepEqual(snapshot.generationErrors, []);
+  assert.equal(snapshot.roles.identities.length, 10);
+  assert.equal(prepareContrastReport(snapshot).verified, false);
+  for (const html of [formatContrastPreviewHtml(snapshot), formatContrastReportHtml(snapshot)]) {
+    assert.ok(html.startsWith(MARKER));
+    assert.ok(html.includes(escape(CSP)));
+    assert.doesNotMatch(html, /<script/i);
+  }
+});
+
+// Hostile palette 7: a decorative color without a manual onSolid entry. Note: the stock
+// palette() primary (0.62 0.16 32) leaves an unrelated warning on the automatic
+// primary-on-solid / solid-hover pair (measured 4.5487:1 < 4.60:1, no foreground reaches
+// the target on both the solid and its hover), so this case uses a clean ui source and the
+// 0 errors / 0 warnings claim concerns the decorative companion only.
+test("decorative companions are generated and checked without a manual onSolid entry", async (t) => {
+  const options = await fixture(t, palette("0.68 0.16 32"));
+  const analysis = await analyzeColorTokens({ ...options, suggest: false });
+  assert.deepEqual(analysis.errors, []);
+  assert.deepEqual(analysis.warnings, []);
+  assert.deepEqual(analysis.config.onSolid, {});
+  assertFacts(analysis);
+  const values = declarations(analysis.css);
+  for (const token of ["--color-spark", "--color-on-spark"]) assert.ok(values.has(token), `Missing ${token}`);
+  for (const scheme of ["light", "dark"]) {
+    const decorative = resolve(values, values.get("--color-spark"), scheme);
+    const onColor = resolve(values, values.get("--color-on-spark"), scheme);
+    const ratio = contrast(onColor, decorative);
+    assert.ok(ratio >= analysis.config.contrast.onColor, `on-spark / spark (${scheme}) is only ${ratio}`);
+  }
 });

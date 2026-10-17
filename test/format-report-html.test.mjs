@@ -402,6 +402,88 @@ test("the proposal summary sentence follows the actual tuning knob and never mis
   assert.match(publicContent(proposalsSection(foreground)), /Cambia il testo sul riempimento indicato/);
 });
 
+test("tuning proposals name the build-time home and the runtime override caveat", () => {
+  const tuning = (restoresConfig) => proposal({
+    kind: "tuning",
+    destination: { file: "tokens/colors-tuning.css", path: "--color-tune-surface-lightness-shift", snippet: "--color-tune-surface-lightness-shift: 0.02;" },
+    configKey: "derivation.surface.lightShift",
+    configValue: -0.018,
+    restoresConfig,
+  });
+  const restored = publicContent(proposalsSection(render(issueReport({ proposals: [tuning(true)] }))));
+  assert.match(restored, /Il valore di build vive in <code>smart-colors\.config\.mjs<\/code> \(<code>derivation\.surface\.lightShift = -0,018<\/code>\)/);
+  assert.match(restored, /<code>colors-tuning\.css<\/code> sovrascrive <code>--color-tune-\*<\/code> solo a runtime/);
+  assert.match(restored, /i token di testo derivati \(<code>--color-text-muted<\/code>, <code>--color-\*-text<\/code>\) restano quelli calcolati per il valore configurato/);
+  assert.match(restored, /Il valore proposto coincide già con quello in <code>smart-colors\.config\.mjs<\/code>: allineare o rimuovere l’override lo ripristina\./);
+  assert.doesNotMatch(restored, /L’alternativa strutturale/);
+
+  const alternative = publicContent(proposalsSection(render(issueReport({ proposals: [tuning(false)] }))));
+  assert.match(alternative, /L’alternativa strutturale è cambiare <code>derivation\.surface\.lightShift<\/code> in <code>smart-colors\.config\.mjs<\/code>\./);
+  assert.doesNotMatch(alternative, /Il valore proposto coincide già/);
+});
+
+test("config proposals describe the structural definition and the regenerated derived tokens", () => {
+  const input = issueReport({ proposals: [proposal({
+    kind: "config",
+    destination: { file: "smart-colors.config.mjs", path: "derivation.surface.lightShift", snippet: "derivation: { surface: { lightShift: -0.016 } }," },
+    configKey: "derivation.surface.lightShift",
+    configValue: -0.018,
+    promotedValue: -0.016,
+    configToken: "--color-tune-surface-lightness-shift",
+  })] });
+  const primary = publicContent(proposalsSection(render(input)));
+  assert.match(primary, /Definizione strutturale in <code>smart-colors\.config\.mjs<\/code>: <code>derivation\.surface\.lightShift = -0,016<\/code>/);
+  assert.match(primary, /La build rigenera i token di testo derivati \(<code>--color-text-muted<\/code>, <code>--color-\*-text<\/code>\)\./);
+  assert.match(primary, /La dichiarazione <code>--color-tune-surface-lightness-shift<\/code> in <code>colors-tuning\.css<\/code> diventa ridondante: va rimossa o allineata\./);
+});
+
+test("rejected palette sources render only when valid, inside the proposals section", () => {
+  const entries = [
+    { id: "surface-hover", file: "tokens/palette.css", reason: "non raggiunge il minimo" },
+    { id: "dark-border", file: "tokens/palette.css", reason: "copre solo un tema" },
+  ];
+  const input = issueReport({ proposals: [proposal()], rejectedSources: [
+    ...entries,
+    { id: 5, file: "tokens/palette.css", reason: "id non valido" },
+    { id: "missing-reason", file: "tokens/palette.css" },
+    { id: "missing-file", reason: "file assente" },
+    "testo", null,
+  ] });
+  const html = render(input);
+  const proposals = proposalsSection(html);
+  assert.match(proposals, /Nessuna alternativa verificata in palette\.css/);
+  assert.match(proposals, /Per questi problemi non esiste un’alternativa verificata in palette\.css\./);
+  assert.match(proposals, /<code>surface-hover<\/code> — non raggiunge il minimo/);
+  assert.match(proposals, /<code>dark-border<\/code> — copre solo un tema/);
+  assert.doesNotMatch(proposals, /missing-reason|missing-file|<code>5<\/code>/);
+  assert.deepEqual(prepareContrastReport(input).rejectedSources, entries);
+  assert.doesNotMatch(render(issueReport({ rejectedSources: [{ id: "", file: "tokens/palette.css", reason: "x" }, "testo"] })), /Nessuna alternativa verificata/);
+});
+
+test("invalid structural fields render nothing and never invent values", () => {
+  const tuningWithoutKey = publicContent(proposalsSection(render(issueReport({ proposals: [proposal({
+    kind: "tuning", configKey: 42, configValue: -0.018, restoresConfig: true,
+  })] }))));
+  assert.doesNotMatch(tuningWithoutKey, /Il valore di build vive|<code>42<\/code>/);
+
+  const tuningBadValue = publicContent(proposalsSection(render(issueReport({ proposals: [proposal({
+    kind: "tuning", configKey: "derivation.surface.lightShift", configValue: Number.POSITIVE_INFINITY, restoresConfig: true,
+  })] }))));
+  assert.match(tuningBadValue, /Il valore di build vive in <code>smart-colors\.config\.mjs<\/code> \(<code>derivation\.surface\.lightShift<\/code>\)/);
+  assert.doesNotMatch(tuningBadValue, /Infinity|NaN|non disponibile/);
+
+  const configBadValue = publicContent(proposalsSection(render(issueReport({ proposals: [proposal({
+    kind: "config", configKey: "derivation.surface.lightShift", promotedValue: "14", configToken: 5,
+  })] }))));
+  assert.doesNotMatch(configBadValue, /Definizione strutturale|La dichiarazione/);
+});
+
+test("file roles distinguish build-time config from runtime tuning and palette sources", () => {
+  assert.match(renderer.fileRole("smart-colors.config.mjs"), /Definizioni strutturali di build \(derivazioni e companion\)/);
+  assert.match(renderer.fileRole("tokens/colors-tuning.css"), /Regolazioni a runtime/);
+  assert.match(renderer.fileRole("tokens/palette.css"), /Fonte iniziale/);
+});
+
 test("proposal cards report the border side effect as information, never as a verification", () => {
   const entry = (ratio, scheme = "dark") => ({ label: `${scheme} primary-border / canvas`, scheme, foregroundToken: "--color-primary-border", backgroundToken: "--color-bg",
     before: { color: color(0.4), ratio: 4.2 }, after: { color: color(0.5), ratio }, provenance: "browser-proposal-side-effect" });
@@ -839,7 +921,7 @@ test("shared preparation exposes the snapshot summary without mutating frozen in
   const prepared = prepareContrastReport(input);
   assert.deepEqual(Object.keys(prepared).sort(), [
     "report", "scenarios", "entries", "problems", "iso", "digest", "issues", "errors", "verified", "proposals",
-    "groups", "overlaps", "variantShifts", "tuningGroups", "complete", "outcome", "files",
+    "groups", "overlaps", "variantShifts", "tuningGroups", "complete", "rejectedSources", "outcome", "files",
   ].sort());
   assert.equal(prepared.report, input);
   assert.equal(prepared.scenarios, input.scenarios);

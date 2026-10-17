@@ -700,17 +700,50 @@ function variantShiftsHtml(shifts) {
 // palette.css is the single source of the initial choices.
 export function fileRole(file) {
   if (/palette\.css$/i.test(file)) return "Fonte iniziale delle scelte del designer: qui si cambiano i colori di marca.";
-  if (/colors-tuning\.css$/i.test(file)) return "Regolazioni di progetto: cambiano la resa senza toccare la palette.";
-  if (/smart-colors\.config\.mjs$/i.test(file)) return "Configurazione: override puntuali, ad esempio i companion on-solid.";
+  if (/colors-tuning\.css$/i.test(file)) return "Regolazioni a runtime: sovrascrivono i --color-tune-* senza toccare palette.css.";
+  if (/smart-colors\.config\.mjs$/i.test(file)) return "Definizioni strutturali di build (derivazioni e companion): la build rigenera i token derivati.";
   return "File di destinazione della modifica.";
 }
 
-function proposalsHtml(proposals, variantShifts) {
+// Build-time and runtime are different homes for the same knob: colors-tuning.css only
+// overrides --color-tune-* at runtime, while the generator keeps the derived text tokens
+// computed for the configured value. Invalid values are omitted, never replaced by a guess.
+function structuralHtml(proposal) {
+  const key = text(proposal.configKey) ? proposal.configKey : null;
+  if (!key) return "";
+  if (proposal.kind === "tuning") {
+    const value = finite(proposal.configValue) ? ` = ${it(proposal.configValue, 4)}` : "";
+    const restore = proposal.restoresConfig === true
+      ? " Il valore proposto coincide già con quello in <code>smart-colors.config.mjs</code>: allineare o rimuovere l’override lo ripristina."
+      : proposal.restoresConfig === false
+        ? ` L’alternativa strutturale è cambiare <code>${escape(key)}</code> in <code>smart-colors.config.mjs</code>.`
+        : "";
+    return `<p class="margin-note">Il valore di build vive in <code>smart-colors.config.mjs</code> (<code>${escape(key)}${value}</code>), ma <code>colors-tuning.css</code> sovrascrive <code>--color-tune-*</code> solo a runtime: i token di testo derivati (<code>--color-text-muted</code>, <code>--color-*-text</code>) restano quelli calcolati per il valore configurato.${restore}</p>`;
+  }
+  if (proposal.kind === "config") {
+    if (!finite(proposal.promotedValue)) return "";
+    const token = text(proposal.configToken) ? ` <code>${escape(proposal.configToken)}</code>` : "";
+    return `<p class="margin-note">Definizione strutturale in <code>smart-colors.config.mjs</code>: <code>${escape(key)} = ${it(proposal.promotedValue, 4)}</code>. La build rigenera i token di testo derivati (<code>--color-text-muted</code>, <code>--color-*-text</code>). La dichiarazione${token} in <code>colors-tuning.css</code> diventa ridondante: va rimossa o allineata.</p>`;
+  }
+  return "";
+}
+
+// Rejected candidates are informational only: no positive verdict and no new suggestion.
+function rejectedSourcesHtml(value) {
+  const sources = list(value);
+  if (!sources.length) return "";
+  return `<div class="side-effect"><p><strong>Nessuna alternativa verificata in palette.css</strong></p>
+<p>Per questi problemi non esiste un’alternativa verificata in palette.css. Candidati scartati:</p>
+<ul>${sources.map((source) => `<li><code>${escape(source.id)}</code> — ${escape(source.reason)}</li>`).join("")}</ul></div>`;
+}
+
+function proposalsHtml(proposals, variantShifts, rejectedSources) {
+  const rejected = rejectedSourcesHtml(rejectedSources);
   if (!proposals.length) {
     const hint = variantShifts === null ? ""
       : variantShifts.length ? " Le varianti da rivedere sono elencate in «Colpo d’occhio sugli usi», con le modifiche da valutare su palette.css."
       : "";
-    return `<p>Nessuna proposta verificata disponibile.${hint}</p>`;
+    return `<p>Nessuna proposta verificata disponibile.${hint}</p>${rejected}`;
   }
   const order = ["palette", "tuning", "config"];
   const key = (file) => /palette\.css$/i.test(file) ? "palette" : /colors-tuning\.css$/i.test(file) ? "tuning" : "config";
@@ -721,7 +754,7 @@ function proposalsHtml(proposals, variantShifts) {
     const file = items[0].proposal.destination.file;
     const pointer = bucket === "palette" ? "" : ` <a href="#usi">Varianti e usi</a> rimandano alla fonte delle scelte.`;
     return `<div class="card file-group"><h3>${titles[bucket]}</h3><p class="margin-note"><code>${escape(file)}</code> — ${escape(fileRole(file))}${pointer}</p>${items.map(proposalHtml).join("")}</div>`;
-  }).join("");
+  }).join("") + rejected;
 }
 
 function problemsHtml(groups, proposals, verified) {
@@ -813,9 +846,9 @@ function proposalHtml(view, index) {
   const where = ({ item, before }) => before ? context(before.scenario) : `${escape(item.browser ?? "browser non indicato")} / ${escape(item.scheme)} / ${escape(item.preference ?? "preferenza non indicata")}`;
   return `<article class="card${complete ? " recommendation" : ""}" id="${id}"><h3>Correzione ${index + 1} · ${escape(proposal.title)}</h3>
 <p><span class="badge">${complete ? "Verificata nello snapshot" : "Verifica incompleta: nessuna copertura attribuita"}</span></p>
-<p>${escape(proposal.kind === "tuning" ? proposalSentence(proposal)
-    : proposal.kind === "foreground" ? proposalSentence(proposal)
+<p>${escape(proposal.kind === "tuning" || proposal.kind === "foreground" ? proposalSentence(proposal)
     : proposal.impact)}</p>
+${structuralHtml(proposal)}
 ${list(proposal.changes).map((value) => {
     const change = record(value) ? value : {};
     const summary = deltaSummary(change.before, change.after);
@@ -911,18 +944,21 @@ export function prepareContrastReport(value) {
   const tuningGroups = groups.filter((group) => group.some(({ item }) => ratioValid(item.baselineRatio)
     && Math.abs(item.baselineRatio - item.ratio) > 1e-9 && item.baselineRatio >= Math.max(item.minimum, item.target)));
   const complete = proposals.filter((view) => view.complete);
+  const rejectedSources = list(report.rejectedSources)
+    .filter((item) => record(item) && text(item.id) && text(item.file) && text(item.reason))
+    .map(({ id, file, reason }) => ({ id, file, reason }));
   const outcome = !verified ? "Esito non verificato o incompleto" : issues.length
     ? `${groups.length} ${groups.length === 1 ? "problema di contrasto" : "problemi di contrasto"} · ${complete.length} ${complete.length === 1 ? "correzione verificata" : "correzioni verificate"}`
     : "Esito positivo dello snapshot: 0 issue";
   const files = record(report.files) ? report.files : {};
   return { report, scenarios, entries, problems, iso, digest, issues, errors, verified, proposals,
-    groups, overlaps, variantShifts, tuningGroups, complete, outcome, files };
+    groups, overlaps, variantShifts, tuningGroups, complete, rejectedSources, outcome, files };
 }
 
 /** Render a supplied snapshot only: no I/O, recalculation of contrast or client code. */
 export function formatContrastReportHtml(value) {
   const { report, scenarios, entries, problems, iso, digest, issues, errors, verified, proposals,
-    groups, overlaps, variantShifts, tuningGroups, complete, outcome, files } = prepareContrastReport(value);
+    groups, overlaps, variantShifts, tuningGroups, complete, rejectedSources, outcome, files } = prepareContrastReport(value);
   const messages = (heading, values) => `<h3>${heading}</h3>${values.length ? `<ul>${values.map((item) => `<li>${escape(item)}</li>`).join("")}</ul>` : "<p>Nessuno.</p>"}`;
   return `${MARKER}
 <!doctype html>
@@ -942,7 +978,7 @@ ${verified ? "" : `<div class="notice"><p class="status">Nessuna conclusione pos
 ${list(report.notes).length ? `<p>${escape(report.notes[0])}</p>` : ""}
 <section aria-labelledby="proposte"><h2 id="proposte">${complete.length > 1 ? "Correzioni da valutare" : "Correzione consigliata"}</h2>
 <p>${complete.length ? "Usa il colore suggerito applicando la modifica nel file indicato." : verified && !issues.length ? "Non serve una correzione per le coppie misurate." : "Non applicare correzioni non verificate: i dati disponibili non permettono di consigliarne una."}${complete.length > 1 ? " Le opzioni sono verificate separatamente: non sommarle senza una nuova verifica." : ""}</p>
-${proposalsHtml(proposals, variantShifts)}</section>
+${proposalsHtml(proposals, variantShifts, rejectedSources)}</section>
 <section aria-labelledby="problemi"><h2 id="problemi">${groups.length ? "Cosa migliora" : "Problemi rilevati"}</h2>
 ${groups.length ? '<p>Confronta il contrasto attuale con quello ottenuto dalla correzione. I rapporti sono sintetici; minimo, target ed esiti restano distinti.</p>' : ""}
 ${tuningGroups.length ? `<p><strong>${tuningGroups.length} di ${groups.length}</strong> problemi compaiono con i tuning di progetto: senza tuning il generatore rispettava il target. La riga “Senza i tuning” lo mostra coppia per coppia.</p>` : ""}

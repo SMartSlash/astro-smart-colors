@@ -3,7 +3,7 @@ import test from "node:test";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { assertReportInputsUnchanged, captureReportInputs, darkFillTuningIdentity, formatReportSummary, mergeSideEffect, proposalImproves, publishedProposal, readPaletteDarkBlend, replacePaletteDarkBlend, replacePaletteSource, replaceTuningDeclaration, reportCandidates, reportOverlapScenario, reportScenario, reportSideEffect, reportSnapshot, worstSideEffect } from "../../../scripts/smart-colors-report.mjs";
+import { assertReportInputsUnchanged, captureReportInputs, configSnippet, darkFillTuningIdentity, formatReportSummary, mergeSideEffect, readConfigValue, structuralChanges, withConfigValue, proposalImproves, publishedProposal, readPaletteDarkBlend, replacePaletteDarkBlend, replacePaletteSource, replaceTuningDeclaration, reportCandidates, reportOverlapScenario, reportScenario, reportSideEffect, reportSnapshot, worstSideEffect } from "../../../scripts/smart-colors-report.mjs";
 
 import { analyzeColorTokens } from "../src/generate-colors.mjs";
 import { nearestLightness, resolvedColor, sourceColorValue } from "../src/contrast-advice.mjs";
@@ -72,6 +72,51 @@ test("CLI report summary counts only proposals covering every original control",
   input.proposals[0].checks = checks.slice(0, 1);
   assert.match(formatReportSummary(input), /0 correzioni verificate/);
   assert.doesNotMatch(formatReportSummary(input), /Le correzioni sono opzioni/);
+});
+
+test("structural helpers read, write and print build-time paths without mutating the inspected configuration", () => {
+  const config = { derivation: { surface: { lightShift: -0.018 }, dark: { bgMixRatio: 14 } } };
+  assert.equal(readConfigValue(config, "derivation.surface.lightShift"), -0.018);
+  assert.equal(readConfigValue(config, "derivation.dark.bgMixRatio"), 14);
+  assert.equal(readConfigValue(config, "derivation.missing.value"), null);
+  assert.equal(readConfigValue(config, "derivation.surface.lightShift.deep"), null);
+  assert.equal(readConfigValue({ derivation: { surface: { lightShift: "-0.018" } } }, "derivation.surface.lightShift"), null, "a non-numeric value is never used as a build-time fact");
+  const updated = withConfigValue(config, "derivation.surface.lightShift", -0.028);
+  assert.equal(readConfigValue(updated, "derivation.surface.lightShift"), -0.028);
+  assert.equal(readConfigValue(config, "derivation.surface.lightShift"), -0.018, "the inspected configuration is never mutated");
+  const created = withConfigValue(config, "derivation.surface.newKnob", 3);
+  assert.equal(readConfigValue(created, "derivation.surface.newKnob"), 3);
+  assert.equal(readConfigValue(created, "derivation.surface.lightShift"), -0.018);
+  assert.equal(configSnippet("derivation.surface.lightShift", -0.028), "derivation: { surface: { lightShift: -0.028 } }");
+  assert.equal(configSnippet("derivation.dark.bgMixRatio", 18), "derivation: { dark: { bgMixRatio: 18 } }");
+});
+
+test("structural changes lead with the foregrounds of the pairs the proposal fixes", () => {
+  const measured = (label, foreground, l) => ({ label, foreground, foregroundColor: { l, c: 0.01, h: 30 },
+    backgroundColor: { l: 0.92, c: 0.01, h: 88 }, ratio: 7, status: "pass", minimum: 4.5, target: 7, kind: "text" });
+  const before = [
+    measured("neutral border / surface", "--color-primary-border-strong", 0.5),
+    measured("muted / surface", "--color-text-muted", 0.417),
+    measured("identity text / surface", "--color-primary-text", 0.414),
+    measured("unchanged / surface", "--color-border-subtle", 0.6),
+  ];
+  const after = [
+    measured("neutral border / surface", "--color-primary-border-strong", 0.49),
+    measured("muted / surface", "--color-text-muted", 0.41),
+    measured("identity text / surface", "--color-primary-text", 0.408),
+    measured("unchanged / surface", "--color-border-subtle", 0.6),
+  ];
+  // Audit order puts the border first, but it is not a pair the proposal fixes.
+  assert.deepEqual(structuralChanges(before, after, ["muted / surface", "identity text / surface"]).map((change) => change.label),
+    ["--color-text-muted", "--color-primary-text", "--color-primary-border-strong"]);
+  const [first] = structuralChanges(before, after, ["muted / surface"]);
+  assert.deepEqual(first.before, { l: 0.417, c: 0.01, h: 30 });
+  assert.deepEqual(first.after, { l: 0.41, c: 0.01, h: 30 });
+  assert.equal(structuralChanges(before, after, []).length, 3, "Unchanged tokens are never published as changes");
+  assert.equal(structuralChanges(before, after, [], 2).length, 2, "The published list stays capped");
+  const repeated = structuralChanges([...before, before[1]], [...after, after[1]], ["muted / surface"]);
+  assert.equal(repeated.filter((change) => change.label === "--color-text-muted").length, 1, "One entry per token");
+  assert.deepEqual(structuralChanges(before, after, undefined).length, 3, "A malformed label list never breaks the ordering");
 });
 
 test("report facts preserve full precision and distinguish boundary usage from text", () => {
@@ -957,8 +1002,10 @@ test("palette-bg-lightness stays silent when the canvas cannot be rewritten or n
   // No lightness on the grid clears a 21:1 requirement from a mid-tone foreground.
   const impossible = [measuredRow("light neutral text / canvas", "--color-text", "--color-bg", { l: 0.5, c: 0, h: 0 }, canvas, 21, 21)];
   assert.equal(impossible[0].status, "below-minimum");
-  const impossibleCandidates = await reportCandidates(root, analysis, ":root {}", [{ scheme: "light", preference: "light", tuned: impossible, computed: { tokens: new Map([["--color-bg", canvas], ["--color-surface", surface]]) } }]);
+  const rejections = [];
+  const impossibleCandidates = await reportCandidates(root, analysis, ":root {}", [{ scheme: "light", preference: "light", tuned: impossible, computed: { tokens: new Map([["--color-bg", canvas], ["--color-surface", surface]]) } }], rejections);
   assert.equal(impossibleCandidates.some((item) => item.id === "palette-bg-lightness"), false);
+  assert.ok(rejections.some((entry) => entry.id === "palette-bg-lightness" && entry.file === "src/styles/tokens/palette.css" && /nessuna luminosità/.test(entry.reason)), "a discarded palette candidate must publish its reason");
   // Without the browser-resolved neutrals the canvas move is not measurable.
   const blind = [{ scheme: "light", preference: "light", tuned: [tuned[0]] }];
   assert.equal((await reportCandidates(root, analysis, ":root {}", blind)).some((item) => item.id === "palette-bg-lightness"), false);

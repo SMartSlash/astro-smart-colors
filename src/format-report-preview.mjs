@@ -85,6 +85,7 @@ const PREVIEW_CSS = `
   .pair-border--3 { border-width: 3px; }
   .color-choice { padding: var(--space-3); border: 1px solid var(--ink-muted); border-radius: var(--radius); background: var(--paper); }
   .color-choice--suggested { border: 2px solid var(--accent); box-shadow: var(--shadow-1); }
+  .change-label { margin-block-end: var(--space-2); font-size: var(--text-sm); font-weight: 750; color: var(--ink); overflow-wrap: anywhere; }
   .swatch { height: 7.5rem; border: 1px solid var(--ink-soft); border-radius: var(--radius-sm); background: var(--sample-color, var(--soft)); }
   .color-choice figcaption strong { display: block; margin-block-end: var(--space-1); }
   .destination dt, .destination dd { display: inline; }
@@ -178,6 +179,38 @@ function bucketFor(file) {
   return "config";
 }
 
+// Two short lines keep build-time definitions and runtime overrides near the destination.
+// Invalid keys, values or flags add nothing: the preview never fills gaps with a guess.
+function structuralLines(proposal) {
+  const key = typeof proposal.configKey === "string" && proposal.configKey.trim() ? proposal.configKey : null;
+  if (!key) return "";
+  if (proposal.kind === "tuning") {
+    const value = typeof proposal.configValue === "number" && Number.isFinite(proposal.configValue) ? ` = ${it(proposal.configValue, 4)}` : "";
+    const line = proposal.restoresConfig === true
+      ? "colors-tuning.css lo sovrascrive solo a runtime; il valore proposto è già in <code>smart-colors.config.mjs</code>: allineare o rimuovere l’override lo ripristina."
+      : proposal.restoresConfig === false
+        ? `colors-tuning.css lo sovrascrive solo a runtime; l’alternativa strutturale è cambiare <code>${escape(key)}</code> in <code>smart-colors.config.mjs</code>.`
+        : "colors-tuning.css lo sovrascrive solo a runtime: i token di testo derivati restano quelli calcolati per il valore configurato.";
+    return `<p class="margin-note">Build: <code>${escape(key)}${value}</code> in <code>smart-colors.config.mjs</code>.</p>
+<p class="margin-note">${line}</p>`;
+  }
+  if (proposal.kind === "config") {
+    if (typeof proposal.promotedValue !== "number" || !Number.isFinite(proposal.promotedValue)) return "";
+    const token = typeof proposal.configToken === "string" && proposal.configToken.trim() ? ` <code>${escape(proposal.configToken)}</code>` : "";
+    return `<p class="margin-note">Struttura: <code>${escape(key)} = ${it(proposal.promotedValue, 4)}</code> in <code>smart-colors.config.mjs</code>.</p>
+<p class="margin-note">La build rigenera i token di testo derivati; la dichiarazione${token} in <code>colors-tuning.css</code> diventa ridondante: rimuovila o allineala.</p>`;
+  }
+  return "";
+}
+
+// Informational only: rejected candidates get no positive verdict and no new suggestion.
+function rejectedSourcesHtml(sources) {
+  if (!sources.length) return "";
+  return `<div class="side-effect"><p><strong>Nessuna alternativa verificata in palette.css</strong></p>
+<p>Per questi problemi non esiste un’alternativa verificata in palette.css. Candidati scartati:</p>
+<ul>${sources.map((source) => `<li><code>${escape(source.id)}</code> — ${escape(source.reason)}</li>`).join("")}</ul></div>`;
+}
+
 function actionCard(view) {
   const { proposal } = view;
   const destination = record(proposal.destination) ? proposal.destination : {};
@@ -187,12 +220,14 @@ function actionCard(view) {
 <p>${escape(sentence)}</p>
 ${list(proposal.changes).map((value) => {
     const change = record(value) ? value : {};
+    const label = typeof change.label === "string" && change.label.trim() ? change.label.trim() : "";
     const summary = deltaSummary(change.before, change.after);
-    return `<div class="change"><div class="grid-2">${colorChoice(change.before, "Attuale")}${colorChoice(change.after, "Suggerito", true)}</div>
+    return `<div class="change">${label ? `<p class="change-label">${escape(label)}</p>` : ""}<div class="grid-2">${colorChoice(change.before, "Attuale")}${colorChoice(change.after, "Suggerito", true)}</div>
 <p class="margin-note">${summary ? `${summary}. Variazioni OKLCH, non misure di contrasto.` : "Differenze non disponibili: colore non valido."}</p></div>`;
   }).join("")}
 ${sideEffectsHtml(proposal.sideEffects)}
 <dl class="destination"><div><dt>File</dt><dd><code>${escape(destination.file)}</code></dd></div><div><dt>Percorso nella configurazione</dt><dd><code>${escape(destination.path)}</code></dd></div></dl>
+${structuralLines(proposal)}
 <pre tabindex="0" aria-label="Snippet della proposta"><code>${escape(destination.snippet)}</code></pre>
 <p class="margin-note">Applicazione manuale: questa anteprima non modifica file. Dopo la modifica, rigenera il report.</p>
 </article>`;
@@ -309,7 +344,7 @@ ${textSafe.length ? overlapList(textSafe.slice(0, 3), [4.5]) : "<p>Nessuna coppi
 /** Render the compact preview of a supplied snapshot only: no I/O, no new measurements. */
 export function formatContrastPreviewHtml(value) {
   const { report, scenarios, entries, problems, iso, digest, issues, errors, verified, proposals,
-    complete, groups, overlaps, variantShifts, outcome } = prepareContrastReport(value);
+    complete, groups, overlaps, variantShifts, rejectedSources, outcome } = prepareContrastReport(value);
   const generated = iso
     ? `<time datetime="${escape(report.generatedAt)}">${escape(report.generatedAt)}</time>`
     : escape(report.generatedAt);
@@ -334,7 +369,7 @@ export function formatContrastPreviewHtml(value) {
 <main id="contenuto">
 ${verified ? "" : `<div class="notice"><p class="status">Nessuna conclusione positiva: dati assenti, non validi, incoerenti o errori impediscono di verificare lo snapshot.</p><ul>${[...problems, ...errors].map((item) => `<li>${escape(item)}</li>`).join("")}</ul></div>`}
 <section id="azione" aria-labelledby="azione-titolo"><h2 id="azione-titolo">Cosa fare adesso</h2>
-${actionHtml(complete, verified, issues)}</section>
+${actionHtml(complete, verified, issues)}${rejectedSourcesHtml(rejectedSources)}</section>
 <section id="problemi" aria-labelledby="problemi-titolo"><h2 id="problemi-titolo">Problemi e misure</h2>
 ${problemsHtml(groups, proposals, verified)}</section>
 <section id="palette" aria-labelledby="palette-titolo"><h2 id="palette-titolo">Palette: famiglie nei componenti</h2>

@@ -130,6 +130,104 @@ test("verified proposals appear in #azione with the exact snippet, samples and t
   assert.match(html, /id="proposal-1"/);
 });
 
+test("multi-change proposals caption every pair before the figures in published order", () => {
+  const changes = [
+    { label: "--color-text-muted", before: color(0.6, 0.02, 250), after: color(0.55, 0.02, 250) },
+    { label: "--color-tertiary-text", before: color(0.62, 0.03, 250), after: color(0.57, 0.03, 250) },
+    { label: "--color-text-soft", before: color(0.64, 0.02, 250), after: color(0.59, 0.02, 250) },
+    { label: "--color-text-faint", before: color(0.66, 0.02, 250), after: color(0.61, 0.02, 250) },
+  ];
+  const input = report({ scenarios: [scenario({ diagnostics: [diagnostic({ ratio: 4.2 })] })], proposals: [proposal({ changes })] });
+  const action = section(preview(input), "azione");
+  const blocks = action.split('<div class="change">').slice(1);
+  assert.equal(blocks.length, changes.length);
+  const labels = [...action.matchAll(/<p class="change-label">([^<]*)<\/p>/g)].map(([, label]) => label);
+  assert.deepEqual(labels, changes.map(({ label }) => label), "Labels keep the published change order");
+  changes.forEach(({ label }, index) => {
+    const block = blocks[index];
+    assert.ok(block.startsWith(`<p class="change-label">${label}</p><div class="grid-2">`), `Change ${index} starts with its label`);
+    assert.ok(block.indexOf("change-label") < block.indexOf('<figure class="color-choice"'), `Change ${index} names the pair before the swatches`);
+    assert.match(block, /<figcaption><strong>Attuale<\/strong>/);
+    assert.match(block, /<figcaption><strong>Suggerito<\/strong>/);
+  });
+});
+
+test("changes without a valid label add no empty caption", () => {
+  for (const label of [undefined, 42, "   "]) {
+    const change = { before: color(), after: color(0.4), ...(label === undefined ? {} : { label }) };
+    const action = section(preview(report({
+      scenarios: [scenario({ diagnostics: [diagnostic({ ratio: 4.2 })] })],
+      proposals: [proposal({ changes: [change] })],
+    })), "azione");
+    assert.doesNotMatch(action, /change-label/, `Label ${String(label)} must not add a caption`);
+    assert.doesNotMatch(action, /class="change-label"><\/p>/);
+  }
+});
+
+test("tuning actions keep the build-time home and runtime caveat next to the destination", () => {
+  const tuning = (restoresConfig) => proposal({
+    kind: "tuning",
+    destination: { file: "tokens/colors-tuning.css", path: "--color-tune-surface-lightness-shift", snippet: "--color-tune-surface-lightness-shift: 0.02;" },
+    configKey: "derivation.surface.lightShift",
+    configValue: -0.018,
+    restoresConfig,
+  });
+  const input = report({ scenarios: [scenario({ diagnostics: [diagnostic({ ratio: 4.2 })] })], proposals: [tuning(true)] });
+  const action = section(preview(input), "azione");
+  assert.match(action, /Build: <code>derivation\.surface\.lightShift = -0,018<\/code> in <code>smart-colors\.config\.mjs<\/code>\./);
+  assert.match(action, /colors-tuning\.css lo sovrascrive solo a runtime; il valore proposto è già in <code>smart-colors\.config\.mjs<\/code>: allineare o rimuovere l’override lo ripristina\./);
+  assert.ok(action.indexOf('<dl class="destination"') < action.indexOf("Build:"));
+  assert.ok(action.indexOf("Build:") < action.indexOf("<pre"));
+
+  const alternative = section(preview(report({ scenarios: [scenario({ diagnostics: [diagnostic({ ratio: 4.2 })] })], proposals: [tuning(false)] })), "azione");
+  assert.match(alternative, /colors-tuning\.css lo sovrascrive solo a runtime; l’alternativa strutturale è cambiare <code>derivation\.surface\.lightShift<\/code> in <code>smart-colors\.config\.mjs<\/code>\./);
+  assert.doesNotMatch(alternative, /il valore proposto è già/);
+});
+
+test("config actions summarize the structural definition and regenerated tokens near the destination", () => {
+  const input = report({ scenarios: [scenario({ diagnostics: [diagnostic({ ratio: 4.2 })] })], proposals: [proposal({
+    kind: "config",
+    destination: { file: "smart-colors.config.mjs", path: "derivation.surface.lightShift", snippet: "derivation: { surface: { lightShift: -0.016 } }," },
+    configKey: "derivation.surface.lightShift",
+    configValue: -0.018,
+    promotedValue: -0.016,
+    configToken: "--color-tune-surface-lightness-shift",
+  })] });
+  const action = section(preview(input), "azione");
+  assert.match(action, /<h3>Modifiche in smart-colors\.config\.mjs<\/h3>/);
+  assert.match(action, /Struttura: <code>derivation\.surface\.lightShift = -0,016<\/code> in <code>smart-colors\.config\.mjs<\/code>\./);
+  assert.match(action, /La build rigenera i token di testo derivati; la dichiarazione <code>--color-tune-surface-lightness-shift<\/code> in <code>colors-tuning\.css<\/code> diventa ridondante: rimuovila o allineala\./);
+});
+
+test("rejected palette sources appear in #azione after the file groups only when valid", () => {
+  const input = report({ scenarios: [scenario({ diagnostics: [diagnostic({ ratio: 4.2 })] })], proposals: [proposal()], rejectedSources: [
+    { id: "surface-hover", file: "tokens/palette.css", reason: "non raggiunge il minimo" },
+    { id: 7, file: "tokens/palette.css", reason: "id non valido" },
+    { id: "missing-file", reason: "file assente" },
+  ] });
+  const action = section(preview(input), "azione");
+  assert.match(action, /Nessuna alternativa verificata in palette\.css/);
+  assert.match(action, /<code>surface-hover<\/code> — non raggiunge il minimo/);
+  assert.doesNotMatch(action, /missing-file|<code>7<\/code>/);
+  assert.ok(action.indexOf("Modifiche in palette.css") < action.indexOf("Nessuna alternativa verificata"));
+
+  const withoutActions = section(preview(report({ rejectedSources: [{ id: "surface-hover", file: "tokens/palette.css", reason: "non raggiunge il minimo" }] })), "azione");
+  assert.match(withoutActions, /Nessuna alternativa verificata in palette\.css/);
+  assert.match(withoutActions, /<code>surface-hover<\/code> — non raggiunge il minimo/);
+  assert.doesNotMatch(preview(report({ rejectedSources: [{ id: "", file: "tokens/palette.css", reason: "x" }, "testo"] })), /Nessuna alternativa verificata/);
+});
+
+test("invalid structural fields add no lines to preview actions", () => {
+  const base = (overrides) => report({ scenarios: [scenario({ diagnostics: [diagnostic({ ratio: 4.2 })] })], proposals: [proposal(overrides)] });
+  const noKey = section(preview(base({ kind: "tuning", configKey: 42, configValue: -0.018, restoresConfig: true })), "azione");
+  assert.doesNotMatch(noKey, /Build:|Il valore di build|<code>42<\/code>/);
+  const badValue = section(preview(base({ kind: "tuning", configKey: "derivation.surface.lightShift", configValue: Number.NaN, restoresConfig: true })), "azione");
+  assert.match(badValue, /Build: <code>derivation\.surface\.lightShift<\/code> in <code>smart-colors\.config\.mjs<\/code>\./);
+  assert.doesNotMatch(badValue, /NaN|Infinity/);
+  const badConfig = section(preview(base({ kind: "config", configKey: "derivation.surface.lightShift", promotedValue: "14", configToken: 5 })), "azione");
+  assert.doesNotMatch(badConfig, /Struttura:|La dichiarazione/);
+});
+
 test("unverified snapshots get no positive verdict, no suggested color and a dashed state badge", () => {
   const input = report({ auditErrors: ["Audit incompleto per timeout"], proposals: [proposal()] });
   const html = preview(input);

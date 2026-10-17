@@ -3,7 +3,7 @@ import test from "node:test";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { assertReportInputsUnchanged, captureReportInputs, darkFillTuningIdentity, mergeSideEffect, proposalImproves, publishedProposal, readPaletteDarkBlend, replacePaletteDarkBlend, replacePaletteSource, replaceTuningDeclaration, reportCandidates, reportOverlapScenario, reportScenario, reportSideEffect, reportSnapshot, worstSideEffect } from "../../../scripts/smart-colors-report.mjs";
+import { assertReportInputsUnchanged, captureReportInputs, darkFillTuningIdentity, formatReportSummary, mergeSideEffect, proposalImproves, publishedProposal, readPaletteDarkBlend, replacePaletteDarkBlend, replacePaletteSource, replaceTuningDeclaration, reportCandidates, reportOverlapScenario, reportScenario, reportSideEffect, reportSnapshot, worstSideEffect } from "../../../scripts/smart-colors-report.mjs";
 
 import { analyzeColorTokens } from "../src/generate-colors.mjs";
 import { nearestLightness, resolvedColor, sourceColorValue } from "../src/contrast-advice.mjs";
@@ -13,6 +13,65 @@ const color = { l: 0.5, c: 0.02, h: 32 };
 const row = (label, status = "pass", ratio = 7.2) => ({
   label, status, ratio, foreground: "--color-text", background: "--color-bg",
   foregroundColor: color, backgroundColor: { l: 0.95, c: 0.01, h: 88 }, target: 7, minimum: 4.5, kind: "text",
+});
+
+function summarySnapshot(rows, baseline = rows) {
+  return {
+    generatedAt: "2026-10-17T12:00:00.000Z", inputDigest: "a".repeat(64),
+    files: { palette: "palette.css", config: "smart-colors.config.mjs", tuning: "colors-tuning.css", output: "colors.css" },
+    scenarios: [reportScenario("chromium", "light", "light", rows, baseline)],
+    palette: [], notes: [], proposals: [], generationErrors: [], auditErrors: [],
+  };
+}
+
+test("CLI report summary groups repeats, prioritizes minimums and preserves threshold precision", () => {
+  const input = summarySnapshot([
+    row("target", "below-target", 6.8), row("minimum", "below-minimum", 4.4999999),
+  ], [row("target"), row("minimum")]);
+  input.scenarios.push(reportScenario("webkit", "light", "light", [
+    row("target", "below-target", 6.9), row("minimum", "below-minimum", 4.49999999),
+  ], [row("target"), row("minimum")]));
+  const before = structuredClone(input);
+  const summary = formatReportSummary(input);
+  assert.match(summary, /^2 problemi distinti: 1 sotto il minimo · 1 sotto il target\./);
+  assert.match(summary, /4 misure in 2 scenari · 0 correzioni verificate/);
+  assert.equal((summary.match(/SOTTO MINIMO/g) ?? []).length, 1);
+  assert.equal((summary.match(/SOTTO TARGET/g) ?? []).length, 1);
+  assert.ok(summary.indexOf("SOTTO MINIMO") < summary.indexOf("SOTTO TARGET"));
+  assert.match(summary, /< 4,5:1/);
+  assert.doesNotMatch(summary, /&lt;|4\.499999/);
+  assert.match(summary, /Per 2 problemi la baseline rispettava le soglie/);
+  assert.match(summary, /Nessun candidato verificato disponibile/);
+  assert.match(summary, /non il valore estetico/);
+  assert.deepEqual(input, before);
+});
+
+test("CLI report summary never promotes incomplete data or attributes existing shortfalls to tuning", () => {
+  const passing = summarySnapshot([row("text")]);
+  assert.match(formatReportSummary(passing), /Nessun problema nelle coppie misurate/);
+  assert.match(formatReportSummary(passing), /Non è una certificazione/);
+  const existing = summarySnapshot([row("text", "below-target", 6.8)], [row("text", "below-target", 6.9)]);
+  assert.doesNotMatch(formatReportSummary(existing), /baseline rispettava/);
+  for (const invalid of [null, {}, { ...passing, auditErrors: ["browser unavailable"] }, { ...passing, generationErrors: ["invalid palette"] }, { ...passing, scenarios: [] }]) {
+    const summary = formatReportSummary(invalid);
+    assert.match(summary, /Esito non verificato o incompleto/);
+    assert.doesNotMatch(summary, /Nessun problema|correzione verificata|correzioni verificate/);
+  }
+});
+
+test("CLI report summary counts only proposals covering every original control", () => {
+  const input = summarySnapshot([row("issue", "below-target", 6.8), row("passing control")]);
+  const checks = reportScenario("chromium", "light", "light", [row("issue"), row("passing control")]).diagnostics;
+  input.proposals.push({
+    id: "trial", title: "Manual option", kind: "tuning", verified: true,
+    destination: { file: "colors-tuning.css", path: "--knob", snippet: "--knob: 1;" },
+    impact: "surface only", search: "local", issueLabels: ["issue"], checks,
+    changes: [{ label: "surface", before: color, after: { ...color, l: 0.6 } }],
+  });
+  assert.match(formatReportSummary(input), /1 correzione verificata/);
+  input.proposals[0].checks = checks.slice(0, 1);
+  assert.match(formatReportSummary(input), /0 correzioni verificate/);
+  assert.doesNotMatch(formatReportSummary(input), /Le correzioni sono opzioni/);
 });
 
 test("report facts preserve full precision and distinguish boundary usage from text", () => {

@@ -8,6 +8,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
+        with:
+          # The action refuses to run without a version and this package declares no
+          # packageManager field, so the version is pinned here on purpose: it keeps
+          # the repository self-contained instead of imposing a field on consumers.
+          version: 12.11.2
       - uses: actions/setup-node@v4
         with:
           node-version: 22

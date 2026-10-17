@@ -83,6 +83,103 @@ function runCli(root, ...args) {
   return execFileAsync(process.execPath, [CLI_PATH, ...args, "--root", root], { timeout: 30_000 });
 }
 
+function assertDesignerScope(stdout) {
+  assert.match(stdout, /config\.palette \(src\/styles\/tokens\/palette\.css\) è la sorgente del designer/);
+  assert.match(stdout, /build\/check verificano solo i default generati, NON il tuning nel browser né i componenti reali/);
+}
+
+function assertReportHint(stdout) {
+  assert.match(stdout, /esegui pnpm colors:report, poi apri reports\/smart-colors-preview\.html/);
+  assert.match(stdout, /esempi realmente misurati e proposte manuali/);
+  assert.match(stdout, /Un'anteprima già presente potrebbe essere obsoleta/);
+}
+
+const REPORT_PACKAGE = JSON.stringify({ scripts: { "colors:report": "node report.mjs" } });
+
+test("scripted project gets designer guidance even on a warning-free current check", async (t) => {
+  const root = await createProject(t, PALETTE.replace("0.62 0.16 32", "0.6238 0.16 32") + INFO_PROPERTY);
+  await writeFile(path.join(root, "package.json"), REPORT_PACKAGE, "utf8");
+  const before = await snapshotProject(root);
+  const built = await runCli(root, "build");
+  assertDesignerScope(built.stdout);
+  assertReportHint(built.stdout);
+  assert.equal(built.stderr, "");
+  const afterBuild = await snapshotProject(root);
+  assert.deepEqual(Object.keys(afterBuild), Object.keys(before));
+  for (const relativePath of Object.keys(before)) {
+    if (relativePath !== "src/styles/tokens/colors.css") assert.deepEqual(afterBuild[relativePath], before[relativePath]);
+  }
+
+  const checked = await runCli(root, "check");
+  assert.match(checked.stdout, /is up to date/);
+  assertDesignerScope(checked.stdout);
+  assertReportHint(checked.stdout);
+  assert.equal(checked.stderr, built.stderr);
+  assert.deepEqual(await snapshotProject(root), afterBuild);
+});
+
+test("stale check includes designer guidance without writing or claiming success", async (t) => {
+  const root = await createProject(t);
+  await writeFile(path.join(root, "package.json"), REPORT_PACKAGE, "utf8");
+  await mkdir(path.join(root, "reports"));
+  await writeFile(path.join(root, "reports/smart-colors-preview.html"), "old preview", "utf8");
+  const before = await snapshotProject(root);
+  await assert.rejects(runCli(root, "check"), (error) => {
+    assert.equal(error.code, 1);
+    assertDesignerScope(error.stdout);
+    assertReportHint(error.stdout);
+    assert.doesNotMatch(error.stdout, /generated\.|up to date/);
+    assert.match(error.stderr, /out of date/);
+    return true;
+  });
+  assert.deepEqual(await snapshotProject(root), before);
+});
+
+test("portable projects without a usable report script get scope guidance only", async (t) => {
+  for (const [name, packageText] of [
+    ["absent package", undefined],
+    ["missing script", '{"scripts":{}}'],
+    ["empty script", '{"scripts":{"colors:report":""}}'],
+    ["whitespace script", '{"scripts":{"colors:report":"  "}}'],
+    ["non-string script", '{"scripts":{"colors:report":true}}'],
+    ["malformed package", '{"scripts":'],
+    ["null package", 'null'],
+  ]) {
+    await t.test(name, async (t) => {
+      const root = await createProject(t);
+      if (packageText !== undefined) await writeFile(path.join(root, "package.json"), packageText, "utf8");
+      const built = await runCli(root, "build");
+      const afterBuild = await snapshotProject(root);
+      const checked = await runCli(root, "check");
+      for (const result of [built, checked]) {
+        assertDesignerScope(result.stdout);
+        assert.doesNotMatch(result.stdout + result.stderr, /pnpm colors:report|reports\/smart-colors-preview\.html/);
+      }
+      assert.equal(checked.stderr, built.stderr);
+      assert.deepEqual(await snapshotProject(root), afterBuild);
+    });
+  }
+});
+
+test("validation failure stays focused on the main error even with optional report metadata", async (t) => {
+  for (const packageText of [REPORT_PACKAGE, '{"scripts":']) {
+    const root = await createProject(t);
+    await writeFile(path.join(root, "package.json"), packageText, "utf8");
+    await writeFile(path.join(root, "smart-colors.config.mjs"), "export default { onSolid: { missing: { light: 'oklch(0.99 0 0)' } } };\n", "utf8");
+    const before = await snapshotProject(root);
+    for (const command of ["build", "check"]) {
+      await assert.rejects(runCli(root, command), (error) => {
+        assert.equal(error.code, 1);
+        assert.equal(error.stdout, "");
+        assert.match(error.stderr, /Smart Colors validation failed/);
+        assert.doesNotMatch(error.stderr, /pnpm colors:report|generated|up to date/);
+        return true;
+      });
+    }
+    assert.deepEqual(await snapshotProject(root), before);
+  }
+});
+
 test("check command reports stale output once with an actionable message", async (t) => {
   const root = await createProject(t);
 
@@ -224,8 +321,11 @@ test("custom --config is loaded and its actual path appears in manual onSolid ad
   await writeFile(path.join(root, configFile), configText, "utf8");
   // If --config is ignored, this default config must fail instead of silently passing.
   await writeFile(path.join(root, "smart-colors.config.mjs"), "export default { onSolid: { missing: { light: 'oklch(0.99 0 0)' } } };\n", "utf8");
+  await writeFile(path.join(root, "package.json"), REPORT_PACKAGE, "utf8");
   const before = await snapshotProject(root);
   const built = await runCli(root, "build", "--config", configFile);
+  assertDesignerScope(built.stdout);
+  assert.doesNotMatch(built.stdout + built.stderr, /pnpm colors:report|reports\/smart-colors-preview\.html/);
 
   assert.match(built.stdout, /src\/styles\/tokens\/personal-colors\.css generated/);
   assert.match(built.stderr, /In config\/personal-colors\.mjs, set onSolid\.info\.light/);
@@ -236,8 +336,12 @@ test("custom --config is loaded and its actual path appears in manual onSolid ad
   for (const relativePath of Object.keys(before)) assert.deepEqual(afterBuild[relativePath], before[relativePath]);
   assert.deepEqual(Object.keys(afterBuild).filter((relativePath) => !Object.hasOwn(before, relativePath)), ["src/styles/tokens/personal-colors.css"]);
 
-  const checked = await runCli(root, "check", "--config", configFile);
-  assert.match(checked.stdout, /src\/styles\/tokens\/personal-colors\.css is up to date/);
-  assert.equal(checked.stderr, built.stderr);
-  assert.deepEqual(await snapshotProject(root), afterBuild);
+  for (const args of [["--config", configFile], [`--config=${configFile}`], ["-c", configFile]]) {
+    const checked = await runCli(root, "check", ...args);
+    assert.match(checked.stdout, /src\/styles\/tokens\/personal-colors\.css is up to date/);
+    assertDesignerScope(checked.stdout);
+    assert.doesNotMatch(checked.stdout + checked.stderr, /pnpm colors:report|reports\/smart-colors-preview\.html/);
+    assert.equal(checked.stderr, built.stderr);
+    assert.deepEqual(await snapshotProject(root), afterBuild);
+  }
 });

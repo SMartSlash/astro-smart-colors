@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { generateColorTokens } from "./generate-colors.mjs";
 import { DEFAULT_CONFIG_FILE } from "./load-config.mjs";
 
@@ -55,9 +57,27 @@ try {
     for (const error of report.errors) console.error(`[smart-colors] ${error}`);
     process.exitCode = 1;
   }
+
+  console.log(`[smart-colors] config.palette (${report.config.palette}) è la sorgente del designer. build/check verificano solo i default generati, NON il tuning nel browser né i componenti reali.`);
+  if (await hasProjectReportScript(parsed)) {
+    console.log("[smart-colors] Dalla root del progetto, esegui pnpm colors:report, poi apri reports/smart-colors-preview.html per esempi realmente misurati e proposte manuali. Un'anteprima già presente potrebbe essere obsoleta.");
+  }
 } catch (error) {
   console.error(`[smart-colors] ${error instanceof Error ? error.message : String(error)}`);
   process.exitCode = 1;
+}
+
+async function hasProjectReportScript({ root, configFile }) {
+  if (configFile !== undefined && path.resolve(root, configFile) !== path.resolve(root, DEFAULT_CONFIG_FILE)) return false;
+
+  try {
+    const projectPackage = JSON.parse(await readFile(path.resolve(root, "package.json"), "utf8"));
+    const script = projectPackage?.scripts?.["colors:report"];
+    return typeof script === "string" && script.trim().length > 0;
+  } catch {
+    // Optional project guidance must not affect generation diagnostics or exit status.
+    return false;
+  }
 }
 
 function parseArgs(args) {

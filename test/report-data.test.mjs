@@ -463,7 +463,7 @@ test("dark bg depth search proposes the nearest percentage that clears the measu
     darkPair("dark neutral text / canvas", "--color-text", "--color-bg", { l: 0.66, c: 0, h: 88 }, canvas),
     darkPair("dark control active border / canvas", "--color-control-border-active", "--color-bg", { l: 0.5, c: 0.02, h: 88 }, canvas, "below-minimum", 3, 3),
   ];
-  const tuningCss = ":root {\n  --color-tune-dark-bg-depth: 30%;\n}";
+  const tuningCss = ":root {\n  --color-tune-dark-bg-mix: 30%;\n}";
   const scaled = (value) => ({ l: canvas.l * (value / 30), c: canvas.c * (value / 30), h: canvas.h });
   const expected = knobGrid(30).find((value) => tuned.every((pair) => contrast(pair.foregroundColor, scaled(value)) >= margin(pair)));
   assert.ok(Number.isFinite(expected) && expected !== 30, "fixture needs a reachable darker canvas");
@@ -472,13 +472,13 @@ test("dark bg depth search proposes the nearest percentage that clears the measu
   assert.ok(candidate, "expected a dark canvas tuning proposal");
   assert.equal(candidate.kind, "tuning");
   assert.deepEqual(candidate.destination, {
-    file: "src/styles/tokens/colors-tuning.css", path: "--color-tune-dark-bg-depth",
-    snippet: `--color-tune-dark-bg-depth: ${percent(expected)};`,
+    file: "src/styles/tokens/colors-tuning.css", path: "--color-tune-dark-bg-mix",
+    snippet: `--color-tune-dark-bg-mix: ${percent(expected)};`,
   });
   assert.deepEqual(candidate.issueLabels, ["dark neutral text / canvas", "dark control active border / canvas"]);
   assert.deepEqual(candidate.changes, [{ label: "--color-bg (dark)", before: canvas, after: scaled(expected) }]);
   assert.equal(candidate.css, analysis.css);
-  assert.equal(candidate.tuningCss, replaceTuningDeclaration(tuningCss, "--color-tune-dark-bg-depth", percent(expected)));
+  assert.equal(candidate.tuningCss, replaceTuningDeclaration(tuningCss, "--color-tune-dark-bg-mix", percent(expected)));
   assert.equal(candidates.some((item) => ["browser-neutral-surface-dark", "browser-neutral-muted-dark"].includes(item.id)), false);
 });
 
@@ -487,16 +487,16 @@ test("dark surface depth is searched on the surface rows and skipped without a r
   const analysis = await analyzeColorTokens({ root, suggest: false });
   const surface = { l: 0.36, c: 0.012, h: 88 };
   const tuned = [darkPair("dark muted text / surface", "--color-text-muted", "--color-surface", { l: 0.6, c: 0, h: 88 }, surface)];
-  const tuningCss = ":root { --color-tune-dark-surface-depth: 36%; }";
+  const tuningCss = ":root { --color-tune-dark-surface-mix: 36%; }";
   const scaled = (value) => ({ l: surface.l * (value / 36), c: surface.c * (value / 36), h: surface.h });
   const expected = knobGrid(36).find((value) => contrast(tuned[0].foregroundColor, scaled(value)) >= margin(tuned[0]));
   assert.ok(Number.isFinite(expected), "fixture needs a reachable darker surface");
   const candidates = await reportCandidates(root, analysis, tuningCss, [{ scheme: "dark", tuned }]);
   const candidate = candidates.find((item) => item.id === "browser-neutral-surface-dark");
   assert.ok(candidate, "expected a dark surface tuning proposal");
-  assert.equal(candidate.destination.path, "--color-tune-dark-surface-depth");
+  assert.equal(candidate.destination.path, "--color-tune-dark-surface-mix");
   assert.deepEqual(candidate.changes, [{ label: "--color-surface (dark)", before: surface, after: scaled(expected) }]);
-  assert.equal(candidate.tuningCss, replaceTuningDeclaration(tuningCss, "--color-tune-dark-surface-depth", percent(expected)));
+  assert.equal(candidate.tuningCss, replaceTuningDeclaration(tuningCss, "--color-tune-dark-surface-mix", percent(expected)));
   // Static dark derivations do not consume the knobs: no proposal is invented.
   const staticDark = await analyzeColorTokens({ root, suggest: false, inlineConfig: { derivation: { dark: { mode: "static" } } } });
   assert.deepEqual(staticDark.errors, []);
@@ -514,7 +514,7 @@ test("dark muted depth search uses resolved text and canvas and skips unverifiab
     darkPair("dark muted text / canvas", "--color-text-muted", "--color-bg", muted, canvas),
     darkPair("dark muted text / surface", "--color-text-muted", "--color-surface", muted, surface, "pass"),
   ];
-  const tuningCss = ":root { --color-tune-dark-muted-depth: 72%; }";
+  const tuningCss = ":root { --color-tune-dark-muted-mix: 72%; }";
   const expected = knobGrid(72).find((value) => tuned.every((pair) => contrast(mixOklch(text, canvas, value / 100), pair.backgroundColor) >= margin(pair)));
   assert.ok(Number.isFinite(expected) && expected > 72, "fixture needs a lighter muted mix");
   const computed = { tokens: new Map([["--color-text", text], ["--color-bg", canvas]]) };
@@ -522,11 +522,11 @@ test("dark muted depth search uses resolved text and canvas and skips unverifiab
   const candidate = candidates.find((item) => item.id === "browser-neutral-muted-dark");
   assert.ok(candidate, "expected a dark muted tuning proposal");
   assert.deepEqual(candidate.destination, {
-    file: "src/styles/tokens/colors-tuning.css", path: "--color-tune-dark-muted-depth",
-    snippet: `--color-tune-dark-muted-depth: ${percent(expected)};`,
+    file: "src/styles/tokens/colors-tuning.css", path: "--color-tune-dark-muted-mix",
+    snippet: `--color-tune-dark-muted-mix: ${percent(expected)};`,
   });
   assert.deepEqual(candidate.changes, [{ label: "--color-text-muted (dark)", before: muted, after: mixOklch(text, canvas, expected / 100) }]);
-  assert.equal(candidate.tuningCss, replaceTuningDeclaration(tuningCss, "--color-tune-dark-muted-depth", percent(expected)));
+  assert.equal(candidate.tuningCss, replaceTuningDeclaration(tuningCss, "--color-tune-dark-muted-mix", percent(expected)));
   assert.deepEqual(candidate.issueLabels, ["dark muted text / canvas"]);
   // Without browser-resolved internal colors the mix is not measurable: stay silent.
   const blind = await reportCandidates(root, analysis, tuningCss, [{ scheme: "dark", tuned }]);
@@ -559,7 +559,7 @@ test("dark bg depth search re-models muted constraints with the active muted mix
     return contrast(foreground, background) >= margin(pair);
   }));
   const constant = knobGrid(30).find((value) => tuned.every((pair) => contrast(pair.foregroundColor, scaled(value)) >= margin(pair)));
-  const tuningCss = ":root { --color-tune-dark-bg-depth: 30%; --color-tune-dark-muted-depth: 76%; }";
+  const tuningCss = ":root { --color-tune-dark-bg-mix: 30%; --color-tune-dark-muted-mix: 76%; }";
   const expected = search(76 / 100, tuned);
   assert.ok(Number.isFinite(expected) && expected !== 30, "fixture needs a reachable darker canvas");
   assert.notEqual(expected, constant, "fixture must distinguish the re-modelled muted text from the constant one");
@@ -568,20 +568,20 @@ test("dark bg depth search re-models muted constraints with the active muted mix
   const candidate = candidates.find((item) => item.id === "browser-neutral-bg-dark");
   assert.ok(candidate, "expected a dark canvas tuning proposal");
   assert.deepEqual(candidate.destination, {
-    file: "src/styles/tokens/colors-tuning.css", path: "--color-tune-dark-bg-depth",
-    snippet: `--color-tune-dark-bg-depth: ${percent(expected)};`,
+    file: "src/styles/tokens/colors-tuning.css", path: "--color-tune-dark-bg-mix",
+    snippet: `--color-tune-dark-bg-mix: ${percent(expected)};`,
   });
   assert.deepEqual(candidate.issueLabels, ["dark muted text / canvas", "dark neutral text / canvas"]);
   assert.deepEqual(candidate.changes, [{ label: "--color-bg (dark)", before: canvas, after: scaled(expected) }]);
-  assert.equal(candidate.tuningCss, replaceTuningDeclaration(tuningCss, "--color-tune-dark-bg-depth", percent(expected)));
+  assert.equal(candidate.tuningCss, replaceTuningDeclaration(tuningCss, "--color-tune-dark-bg-mix", percent(expected)));
   // Without the active knob the muted depth falls back to the generated contract value.
-  const generated = Number(/--color-tune-dark-muted-depth:\s*([\d.]+)%/.exec(analysis.css)[1]);
-  const fallbackTuning = ":root { --color-tune-dark-bg-depth: 30%; }";
+  const generated = Number(/--color-tune-dark-muted-mix:\s*([\d.]+)%/.exec(analysis.css)[1]);
+  const fallbackTuning = ":root { --color-tune-dark-bg-mix: 30%; }";
   const fallbackRows = rowsFor(mutedGenerated);
   const fallback = await reportCandidates(root, analysis, fallbackTuning, [{ scheme: "dark", tuned: fallbackRows, computed }]);
   const fallbackCandidate = fallback.find((item) => item.id === "browser-neutral-bg-dark");
   assert.ok(fallbackCandidate, "expected the generated muted depth to stay measurable");
-  assert.equal(fallbackCandidate.destination.snippet, `--color-tune-dark-bg-depth: ${percent(search(generated / 100, fallbackRows))};`);
+  assert.equal(fallbackCandidate.destination.snippet, `--color-tune-dark-bg-mix: ${percent(search(generated / 100, fallbackRows))};`);
   assert.notEqual(percent(search(generated / 100, fallbackRows)), percent(expected), "fixture must distinguish the active and generated muted depths");
   // Without the resolved dark text the muted interaction is not measurable: no proposal.
   const blind = await reportCandidates(root, analysis, tuningCss, [{ scheme: "dark", tuned }]);
@@ -593,8 +593,8 @@ test("dark fill escape hatch serializes one concrete tune declaration and refuse
   const analysis = await analyzeColorTokens({ root, suggest: false });
   const fill = { l: 0.62, c: 0.16, h: 32.41 };
   const tuned = [
-    darkPair("dark on-primary / primary", "--color-on-primary", "--color-primary", { l: 0.97, c: 0, h: 0 }, fill),
-    darkPair("dark primary-on-solid / solid", "--color-primary-on-solid", "--color-primary-solid", { l: 0.9, c: 0, h: 0 }, fill),
+    darkPair("dark on-primary / primary", "--color-primary-ink", "--color-primary", { l: 0.97, c: 0, h: 0 }, fill),
+    darkPair("dark primary-on-solid / solid", "--color-primary-solid-text", "--color-primary-solid", { l: 0.9, c: 0, h: 0 }, fill),
   ];
   const tuningCss = ":root {\n  /* --color-tune-primary-dark: color-mix(in oklch, var(--_color-primary-source) 80%, oklch(1 0 none)); */\n}";
   const requirement = (pair, candidate) => contrast(pair.foregroundColor, resolvedColor(candidate)) >= margin(pair);
@@ -629,7 +629,7 @@ test("dark fill escape hatch optimizes the text on the new fill, not the distanc
   // color that satisfies that wrong measurement and then fails with this text.
   const fill = { l: 0.35, c: 0.12, h: 32.41 };
   const text = { l: 0.05, c: 0, h: 0 };
-  const tuned = [darkPair("dark on-primary / primary", "--color-on-primary", "--color-primary", text, fill)];
+  const tuned = [darkPair("dark on-primary / primary", "--color-primary-ink", "--color-primary", text, fill)];
   const tuningCss = ":root {\n  /* --color-tune-primary-dark: oklch(0.6 0.12 32.41); */\n}";
   const requirement = (candidate) => contrast(text, resolvedColor(candidate)) >= margin(tuned[0]);
   const expected = nearestLightness(fill, requirement);
@@ -658,8 +658,8 @@ test("dark fill impact names the control consumers only for the focus identity",
   const analysis = await analyzeColorTokens({ root, suggest: false });
   assert.equal(analysis.config.roles.focus, "primary", "fixture must resolve the first ui identity as focus");
   const tuned = [
-    darkPair("dark on-primary / primary", "--color-on-primary", "--color-primary", { l: 0.97, c: 0, h: 0 }, { l: 0.62, c: 0.16, h: 32.41 }),
-    darkPair("dark on-secondary / secondary", "--color-on-secondary", "--color-secondary", { l: 0.97, c: 0, h: 0 }, { l: 0.54, c: 0.16, h: 198 }),
+    darkPair("dark on-primary / primary", "--color-primary-ink", "--color-primary", { l: 0.97, c: 0, h: 0 }, { l: 0.62, c: 0.16, h: 32.41 }),
+    darkPair("dark on-secondary / secondary", "--color-secondary-ink", "--color-secondary", { l: 0.97, c: 0, h: 0 }, { l: 0.54, c: 0.16, h: 198 }),
   ];
   const candidates = await reportCandidates(root, analysis, ":root {}", [{ scheme: "dark", tuned }]);
   const focus = candidates.find((item) => item.id === "browser-dark-fill:primary");
@@ -690,7 +690,7 @@ test("palette-source verification also names the direct on-color companion", asy
     target: original.target, minimum: original.minimum, ratio: 4, status: "below-minimum", kind: "on-color",
   };
   const direct = {
-    label: "light on-primary / primary", foreground: "--color-on-primary", background: "--color-primary",
+    label: "light on-primary / primary", foreground: "--color-primary-ink", background: "--color-primary",
     foregroundColor: { l: 0.97, c: 0, h: 0 }, backgroundColor: { l: 0.62, c: 0.16, h: 32.41 },
     target: 4.6, minimum: 4.5, ratio: 3.1, status: "below-minimum", kind: "on-color",
   };
@@ -726,7 +726,7 @@ test("dark fill side effects are gated to --color-tune-<id>-dark destinations", 
   assert.equal(darkFillTuningIdentity({ path: "--color-tune-surface-strong-dark" }), "surface-strong");
   for (const destination of [
     undefined, null, {}, { path: undefined }, { path: 42 },
-    { path: "--color-tune-dark-bg-depth" }, { path: "--color-tune-surface-lightness-shift" },
+    { path: "--color-tune-dark-bg-mix" }, { path: "--color-tune-surface-lightness-shift" },
     { path: "--color-tune-primary-light" }, { path: "--color-tune-primary-dark-extra" },
     { path: "--color-primary-border" }, { path: "onSolid.primary.dark" },
   ]) {
@@ -800,7 +800,7 @@ test("dark fill side effects keep the worst case and never alter published verif
   // Absent for other kinds/paths even when side-effect data is present.
   const foreground = { ...candidate, kind: "foreground", destination: { ...candidate.destination, path: "onSolid.primary.dark" } };
   assert.equal("sideEffects" in publishedProposal(foreground, result), false);
-  const depth = { ...candidate, id: "browser-neutral-bg-dark", destination: { ...candidate.destination, path: "--color-tune-dark-bg-depth" } };
+  const depth = { ...candidate, id: "browser-neutral-bg-dark", destination: { ...candidate.destination, path: "--color-tune-dark-bg-mix" } };
   assert.equal("sideEffects" in publishedProposal(depth, result), false);
   // Absent when measurements are unavailable, empty or malformed.
   assert.equal("sideEffects" in publishedProposal(candidate, { valid: true, checks }), false);
@@ -1017,7 +1017,7 @@ test("palette-dark-blend replaces the declared descriptor and is offered before 
   assert.equal(analysis.model.identities.primary.darkBlend, 30, "fixture must declare the descriptor");
   const light = serializedColor(fitToSrgb(analysis.authoredTokens["palette-primary"]));
   const fill = blendFill(light, 30);
-  const tuned = [measuredRow("dark on-primary / primary", "--color-on-primary", "--color-primary", { l: 0.3, c: 0, h: 0 }, fill)];
+  const tuned = [measuredRow("dark on-primary / primary", "--color-primary-ink", "--color-primary", { l: 0.3, c: 0, h: 0 }, fill)];
   assert.equal(tuned[0].status, "below-minimum", "fixture needs a dark fill shortfall");
   const candidates = await reportCandidates(root, analysis, ":root {}", [{ scheme: "dark", preference: "dark", tuned }]);
   const candidate = candidates.find((item) => item.id === "palette-dark-blend:primary");
@@ -1044,7 +1044,7 @@ test("palette-dark-blend inserts the missing descriptor next to role and regener
   // Without the descriptor the effective blend is the adaptive fallback (0.5 + L/2).
   const reference = ((1 - Number(((0.5 + light.l * 0.5) * 100).toFixed(4)) / 100) / 0.28) * 100;
   const fill = blendFill(light, reference);
-  const tuned = [measuredRow("dark on-primary / primary", "--color-on-primary", "--color-primary", { l: 0.85, c: 0, h: 0 }, fill)];
+  const tuned = [measuredRow("dark on-primary / primary", "--color-primary-ink", "--color-primary", { l: 0.85, c: 0, h: 0 }, fill)];
   assert.equal(tuned[0].status, "below-minimum", "fixture needs a dark fill shortfall");
   const candidates = await reportCandidates(root, analysis, ":root {}", [{ scheme: "dark", preference: "dark", tuned }]);
   const candidate = candidates.find((item) => item.id === "palette-dark-blend:primary");
@@ -1067,7 +1067,7 @@ test("palette-dark-blend inserts the missing descriptor next to role and regener
 test("palette-dark-blend stays silent for decorative roles, unreachable searches and unwritable palettes", async (t) => {
   const root = await paletteFixture(t, DECORATIVE_PALETTE);
   const analysis = await analyzeColorTokens({ root, suggest: false });
-  const decorative = [measuredRow("dark on-spark / spark", "--color-on-spark", "--color-spark", { l: 0.5, c: 0, h: 0 }, { l: 0.55, c: 0.12, h: 280 })];
+  const decorative = [measuredRow("dark on-spark / spark", "--color-spark-ink", "--color-spark", { l: 0.5, c: 0, h: 0 }, { l: 0.55, c: 0.12, h: 280 })];
   assert.equal(decorative[0].status, "below-minimum");
   const decorativeCandidates = await reportCandidates(root, analysis, ":root {}", [{ scheme: "dark", preference: "dark", tuned: decorative }]);
   assert.equal(decorativeCandidates.some((item) => item.id.startsWith("palette-dark-blend:")), false, "dark-blend exists only for ui/feedback roles");
@@ -1076,12 +1076,12 @@ test("palette-dark-blend stays silent for decorative roles, unreachable searches
   const light = serializedColor(fitToSrgb(declaredAnalysis.authoredTokens["palette-primary"]));
   const fill = blendFill(light, 30);
   // No integer blend reaches a light companion on this mid-tone source.
-  const unreachable = [measuredRow("dark on-primary / primary", "--color-on-primary", "--color-primary", { l: 0.97, c: 0, h: 0 }, fill)];
+  const unreachable = [measuredRow("dark on-primary / primary", "--color-primary-ink", "--color-primary", { l: 0.97, c: 0, h: 0 }, fill)];
   assert.equal(unreachable[0].status, "below-minimum");
   const searched = await reportCandidates(declaredRoot, declaredAnalysis, ":root {}", [{ scheme: "dark", preference: "dark", tuned: unreachable }]);
   assert.equal(searched.some((item) => item.id === "palette-dark-blend:primary"), false);
   // Writable search, but no safe rewrite target: no speculative write.
-  const reachable = [measuredRow("dark on-primary / primary", "--color-on-primary", "--color-primary", { l: 0.3, c: 0, h: 0 }, fill)];
+  const reachable = [measuredRow("dark on-primary / primary", "--color-primary-ink", "--color-primary", { l: 0.3, c: 0, h: 0 }, fill)];
   assert.equal(reachable[0].status, "below-minimum");
   for (const paletteCss of [
     `${DECLARED_BLEND_PALETTE}\n${DECLARED_BLEND_PALETTE}`,

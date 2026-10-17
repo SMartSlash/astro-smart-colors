@@ -363,12 +363,12 @@ const BIG_SCENARIOS = [
 const BIG_PAIRS = [
   { kind: "text", tokens: (name) => [`--color-${name}-text`, `--color-${name}-surface`], foreground: (index) => color(0.3 + index * 0.01, 0.08, 30 + index * 20) },
   { kind: "non-text", tokens: (name) => [`--color-${name}-border-strong`, `--color-${name}-surface`], foreground: (index) => color(0.55, 0.09, 30 + index * 20) },
-  { kind: "text", tokens: (name) => [`--color-${name}-on-solid`, `--color-${name}-solid`], foreground: () => color(0.99, 0, 0) },
-  { kind: "text", tokens: (name) => [`--color-${name}-on-solid`, `--color-${name}-solid-hover`], foreground: () => color(0.99, 0, 0) },
-  { kind: "text", tokens: (name) => [`--color-on-${name}`, `--color-${name}`], foreground: () => color(0.99, 0, 0) },
+  { kind: "text", tokens: (name) => [`--color-${name}-solid-text`, `--color-${name}-solid`], foreground: () => color(0.99, 0, 0) },
+  { kind: "text", tokens: (name) => [`--color-${name}-solid-text`, `--color-${name}-solid-hover`], foreground: () => color(0.99, 0, 0) },
+  { kind: "text", tokens: (name) => [`--color-${name}-ink`, `--color-${name}`], foreground: () => color(0.99, 0, 0) },
   { kind: "text", tokens: (name) => [`--color-${name}-text`, "--color-bg"], foreground: (index) => color(0.3 + index * 0.01, 0.08, 30 + index * 20) },
   { kind: "text", tokens: (name) => [`--color-${name}-text`, "--color-surface"], foreground: (index) => color(0.3 + index * 0.01, 0.08, 30 + index * 20) },
-  { kind: "text", tokens: (name) => [`--color-on-${name}`, "--color-surface"], foreground: () => color(0.99, 0, 0) },
+  { kind: "text", tokens: (name) => [`--color-${name}-ink`, "--color-surface"], foreground: () => color(0.99, 0, 0) },
   { kind: "non-text", tokens: (name) => [`--color-${name}-border`, "--color-surface"], foreground: (index) => color(0.6, 0.07, 30 + index * 20) },
   { kind: "text", tokens: () => ["--color-text-muted", "--color-surface"], foreground: () => color(0.45, 0.01, 260) },
 ];

@@ -400,13 +400,13 @@ function buildContrastSuggestions(model, palette, authoredTokens, config, darkBl
         };
         const trial = buildColorModel(palette, trialConfig, darkBlends);
         const snippet = `onSolid: { ${JSON.stringify(name)}: { ${scheme}: ${JSON.stringify(value)} } }`;
-        const impact = `Changes only --color-${name}-on-solid (${scheme}), shared by solid/hover; not --color-on-${name} or either fill.`;
+        const impact = `Changes only --color-${name}-solid-text (${scheme}), shared by solid/hover; not --color-${name}-ink or either fill.`;
         const search = "nearest L on a 4-decimal grid with C/H fixed, checked after gamut mapping and serialization; not a global perceptual nearest-color claim";
         proposals.push({
           id: `on-solid:${name}:${scheme}:foreground`, identity: name, scheme, kind: "foreground",
           destination: { file: configFile, path: `onSolid.${name}.${scheme}`, snippet },
           impact, search,
-          changes: [{ label: `--color-${name}-on-solid (${scheme})`, before: { ...family.onSolid }, after: { ...trial.identities[name].family[scheme].onSolid } }],
+          changes: [{ label: `--color-${name}-solid-text (${scheme})`, before: { ...family.onSolid }, after: { ...trial.identities[name].family[scheme].onSolid } }],
           checks: trial.diagnostics,
         });
         suggestions.push(`${name} (${scheme}): preserve the palette. In ${configFile}, set onSolid.${name}.${scheme}:\n  ${snippet}\n  Verified ${contrastSummary(solidContrasts(trial.identities[name].family[scheme].onSolid, family))}. Fill source: ${config.palette}, ${sourceLocation}, authored ${sourceColorValue(source)}; resolved ${oklch(identity.source)}. ${impact} Search: ${search}. Merge into existing onSolid settings; no changes applied.`);
@@ -642,11 +642,11 @@ function validateGeneratedContrast(model, config) {
         fail(`${scheme} ${name}-border-strong / ${label}`, `--color-${name}-border-strong`, family.borderStrong, token, color, uiTarget, 3, "WCAG non-text reference for a necessary boundary");
       }
       const direct = isLight ? identity.light : identity.dark;
-      warn(`${scheme} on-${name} / ${name}`, `--color-on-${name}`, parseOklch(model.onColors[name][scheme]).source, `--color-${name}`, direct, onSolidTextTarget);
+      warn(`${scheme} on-${name} / ${name}`, `--color-${name}-ink`, parseOklch(model.onColors[name][scheme]).source, `--color-${name}`, direct, onSolidTextTarget);
       // Solid and border preserve the designer's source; contrast against canvas is opt-in.
       // On-colour failures are warnings, not errors — the designer owns the trade-off.
-      warn(`${scheme} ${name}-on-solid / solid`, `--color-${name}-on-solid`, family.onSolid, `--color-${name}-solid`, family.solid, onSolidTextTarget);
-      warn(`${scheme} ${name}-on-solid / solid-hover`, `--color-${name}-on-solid`, family.onSolid, `--color-${name}-solid-hover`, family.solidHover, onSolidTextTarget);
+      warn(`${scheme} ${name}-on-solid / solid`, `--color-${name}-solid-text`, family.onSolid, `--color-${name}-solid`, family.solid, onSolidTextTarget);
+      warn(`${scheme} ${name}-on-solid / solid-hover`, `--color-${name}-solid-text`, family.onSolid, `--color-${name}-solid-hover`, family.solidHover, onSolidTextTarget);
     }
 
     // Controls are source-derived states, not independently corrected fills.
@@ -665,7 +665,7 @@ function validateGeneratedContrast(model, config) {
     for (const [name, decorative] of Object.entries(model.decoratives)) {
       const decorativeColor = decorative[scheme];
       const onColor = parseOklch(model.onColors[name][scheme]).source;
-      warn(`${scheme} on-${name} / ${name}`, `--color-on-${name}`, onColor, `--color-${name}`, decorativeColor, onSolidTextTarget);
+      warn(`${scheme} on-${name} / ${name}`, `--color-${name}-ink`, onColor, `--color-${name}`, decorativeColor, onSolidTextTarget);
     }
   }
 

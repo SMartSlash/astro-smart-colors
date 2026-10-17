@@ -284,9 +284,9 @@ function familyCard(name, find) {
     const samples = [
       ["Testo su callout", find(scheme, "text", `--color-${name}-text`, `--color-${name}-surface`)],
       ["Bordo forte sul callout", find(scheme, "non-text", `--color-${name}-border-strong`, `--color-${name}-surface`)],
-      ["Bottone (solid)", find(scheme, "text", `--color-${name}-on-solid`, `--color-${name}-solid`)],
-      ["Bottone (hover)", find(scheme, "text", `--color-${name}-on-solid`, `--color-${name}-solid-hover`)],
-      ["Chip o badge", find(scheme, "text", `--color-on-${name}`, `--color-${name}`)],
+      ["Bottone (solid)", find(scheme, "text", `--color-${name}-solid-text`, `--color-${name}-solid`)],
+      ["Bottone (hover)", find(scheme, "text", `--color-${name}-solid-text`, `--color-${name}-solid-hover`)],
+      ["Chip o badge", find(scheme, "text", `--color-${name}-ink`, `--color-${name}`)],
     ].filter(([, item]) => item && colorCss(item.foreground) && colorCss(item.background));
     if (!samples.length) return "";
     return `<div class="family-theme"><p class="eyebrow">Tema ${scheme === "light" ? "chiaro" : "scuro"}</p>

@@ -3,18 +3,19 @@ import { access, readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { arrow, badge, check, file, title } from "./cli-style.mjs";
 import { contrast } from "./color-math.mjs";
 import { analyzeColorTokens, generateColorTokens } from "./generate-colors.mjs";
 import { loadSmartColorsConfig } from "./load-config.mjs";
 import { parseOklch } from "./parse-palette.mjs";
 import { writeContrastReport } from "./report-artifact.mjs";
-import { assertReportInputsUnchanged, captureReportInputs, darkFillTuningIdentity, formatReportSummary, mergeSideEffect, paletteOverrideNote, proposalImproves, publishedProposal, reportCandidates, reportOverlapScenario, reportScenario, reportSideEffect, reportSnapshot, structuralChanges, REPORT_FILES } from "./report-data.mjs";
+import { assertReportInputsUnchanged, captureReportInputs, darkFillTuningIdentity, formatReportSummary, mergeSideEffect, paletteOverrideNote, proposalImproves, publishedProposal, reportCandidates, reportOverlapScenario, reportScenario, reportSideEffect, reportSnapshot, resolveTuningFile, structuralChanges, REPORT_FILES } from "./report-data.mjs";
 
 export const SUPPORTED_BROWSERS = ["chromium", "firefox", "webkit"];
 
 const TOLERANCE = 0.0001;
 const DEFAULT_IDENTITIES = ["primary", "secondary", "info"];
-const FAMILY = ["surface", "surface-strong", "border", "border-strong", "solid", "solid-hover", "on-solid", "text", "text-strong"];
+const FAMILY = ["surface", "surface-strong", "border", "border-strong", "solid", "solid-hover", "solid-text", "text", "text-strong"];
 // Only opaque control consumers are in scope; translucent borders/icons are not.
 const CONTROLS = ["bg", "bg-active", "border-active", "active-text", "focus-bg"];
 
@@ -54,13 +55,13 @@ export function pairsFor(scheme, identities = DEFAULT_IDENTITIES, decoratives = 
         add(`${name}-${suffix} / ${label}`, `--color-${name}-${suffix}`, background, border ? "family-ui" : "text", border ? "borderColor" : "color");
       }
     }
-    add(`on-${name} / ${name}`, `--color-on-${name}`, `--color-${name}`, "on-color", "color", true);
+    add(`on-${name} / ${name}`, `--color-${name}-ink`, `--color-${name}`, "on-color", "color", true);
     for (const state of ["solid", "solid-hover"]) {
-      add(`${name}-on-solid / ${state}`, `--color-${name}-on-solid`, `--color-${name}-${state}`, "on-color", "color", true);
+      add(`${name}-on-solid / ${state}`, `--color-${name}-solid-text`, `--color-${name}-${state}`, "on-color", "color", true);
     }
   }
   for (const name of decoratives) {
-    add(`on-${name} / ${name}`, `--color-on-${name}`, `--color-${name}`, "on-color", "color", true);
+    add(`on-${name} / ${name}`, `--color-${name}-ink`, `--color-${name}`, "on-color", "color", true);
   }
   add("control active text / active background", "--color-control-active-text", "--color-control-bg-active", "text", "color", true);
   add("control text / focus background", "--color-text", "--color-control-focus-bg", "text", "color", true);
@@ -86,8 +87,8 @@ export async function computedTheme(page, report, scheme, withScales, options = 
   assert.ok(!/@import\b/i.test(tuningCss.replace(/\/\*[\s\S]*?\*\//g, "")), "Tuning @import is unsupported by this inline offline audit; imported overrides must not be silently omitted.");
   const tokens = ["--color-bg", "--color-surface", "--color-text", "--color-text-muted", "--color-focus-ring",
     ...CONTROLS.map((suffix) => `--color-control-${suffix}`),
-    ...identities.flatMap((name) => [`--color-${name}`, `--color-on-${name}`, ...FAMILY.map((suffix) => `--color-${name}-${suffix}`), ...(withScales ? [`--color-${name}-500`] : [])]),
-    ...decoratives.flatMap((name) => [`--color-${name}`, `--color-on-${name}`])];
+    ...identities.flatMap((name) => [`--color-${name}`, `--color-${name}-ink`, ...FAMILY.map((suffix) => `--color-${name}-${suffix}`), ...(withScales ? [`--color-${name}-500`] : [])]),
+    ...decoratives.flatMap((name) => [`--color-${name}`, `--color-${name}-ink`])];
   const pairs = pairsFor(scheme, identities, decoratives);
   await page.emulateMedia({ colorScheme: options.preference ?? scheme });
   await page.setContent('<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Smart Colors regression fixture</title></head><body><main></main></body></html>', { timeout: 15000 });
@@ -268,7 +269,6 @@ export async function launch(name, root = process.cwd()) {
 }
 
 export async function projectAudit(names = ["chromium"], { root = process.cwd(), configFile, emitReport = false } = {}) {
-  const tuningPath = "src/styles/tokens/colors-tuning.css";
   let analysis;
   let loadedConfig;
   let capturedInputs;
@@ -283,6 +283,7 @@ export async function projectAudit(names = ["chromium"], { root = process.cwd(),
     const report = emitReport
       ? (analysis = await analyzeColorTokens({ root, config: loadedConfig }, capturedInputs.inputs.find(([name]) => name === "palette")[2]))
       : await generateColorTokens({ root, configFile, check: true, suggest: false });
+    const tuningPath = await resolveTuningFile(root, report.config);
     if (emitReport) snapshot = await reportSnapshot(root, analysis, capturedInputs);
     let diskCss = null;
     if (emitReport) {
@@ -436,12 +437,23 @@ export async function projectAudit(names = ["chromium"], { root = process.cwd(),
     await assertReportInputsUnchanged(root, capturedInputs);
     // One snapshot, one write pass: the compact preview is published with the full report.
     const output = await writeContrastReport({ root, report: snapshot, config: analysis?.config ?? loadedConfig, preview: true });
-    console.log(`[smart-colors] HTML report: ${output.reportPath}`);
-    console.log(`[smart-colors] HTML preview: ${output.previewPath}`);
-    for (const line of formatReportSummary(snapshot).split("\n")) console.log(`[smart-colors] ${line}`);
-    console.log(`[smart-colors] Apri l’anteprima appena generata per vedere campioni e modifiche proposte: ${pathToFileURL(output.previewPath).href}`);
-    console.log("[smart-colors] Snapshot statico: dopo ogni modifica rigenera con pnpm colors:report. Palette, config, tuning e token generati non modificati.");
+    const summary = formatReportSummary(snapshot).split("\n").map((line) => `    ${line}`);
+    console.log([
+      `${badge()} Report contrasto generato`,
+      "",
+      `  ${title("Artefatti scritti")}`,
+      `    ${check()} HTML preview: ${file(output.previewPath)}`,
+      `    ${check()} HTML report:  ${file(output.reportPath)}`,
+      "",
+      `  ${title("Riepilogo")}`,
+      ...summary,
+      "",
+      `  ${title("Prossimo passo")}`,
+      `    ${arrow()} Apri l’anteprima appena generata per vedere campioni e modifiche proposte: ${file(pathToFileURL(output.previewPath).href)}`,
+      "      Snapshot statico: dopo ogni modifica rigenera con pnpm colors:report. Palette, config, tuning e token generati non modificati.",
+      "",
+    ].join("\n"));
   } else {
-    console.log("[smart-colors] Per vedere gli abbinamenti e le proposte: esegui pnpm colors:report, poi apri reports/smart-colors-preview.html. Un report precedente potrebbe essere obsoleto.");
+    console.log(`${badge()} Per vedere gli abbinamenti e le proposte: esegui pnpm colors:report, poi apri reports/smart-colors-preview.html. Un report precedente potrebbe essere obsoleto.\n`);
   }
 }

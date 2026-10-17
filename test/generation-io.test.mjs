@@ -107,10 +107,10 @@ test("optional motion output is separate and follows configured identities", asy
   assert.equal(report.motionCss, await readFile(path.join(root, motionOutput), "utf8"));
   assert.doesNotMatch(report.css, /@property/);
   assert.match(report.motionCss, /@property --color-status /);
-  assert.match(report.motionCss, /@property --color-on-status /);
+  assert.match(report.motionCss, /@property --color-status-ink /);
   assert.match(report.motionCss, /--color-status,/);
-  assert.match(report.motionCss, /--color-on-status,/);
-  assert.match(report.motionCss, /@property --color-status-on-solid /);
+  assert.match(report.motionCss, /--color-status-ink,/);
+  assert.match(report.motionCss, /@property --color-status-solid-text /);
   assert.match(report.motionCss, /--color-status-text-strong;/);
 
   const transitionSection = report.motionCss.slice(report.motionCss.indexOf(":root"));

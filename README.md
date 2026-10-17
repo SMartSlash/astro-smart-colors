@@ -290,16 +290,27 @@ Suggestions honor the selected `--config` path rather than assuming `smart-color
 pnpm colors:report chromium webkit
 ```
 
-This explicit, project-local command writes **`reports/smart-colors.html`**, not a page in the website. It runs the browser audit and creates an autonomous, offline HTML snapshot, with no JavaScript or external assets. Chromium is the default if no browser is specified. Normal `colors:check`, `colors:audit` and the dev watcher do not create reports or apply corrections.
+This explicit, project-local command writes **`reports/smart-colors-preview.html`** (designer overview, ≤120 KB) and **`reports/smart-colors.html`** (full audit), from the same snapshot through the same ownership-checked writer. They are autonomous offline HTML files, not website pages, with no JavaScript or external assets. Chromium is the default if no browser is specified. Normal `colors:check`, `colors:audit` and the dev watcher do not create reports or apply corrections.
 
-The page starts with the correction, not the audit log:
+#### Designer workflow
+
+1. Choose colors, roles and optional `dark-blend` in **`palette.css`**. This remains the initial source of creative choices; do not edit generated `colors.css`.
+2. Run `pnpm colors:build`, then `pnpm colors:report chromium webkit` to measure the generated pairs with project tuning in the installed browsers. A successful build/check alone does not verify runtime tuning or real components.
+3. Read the CLI's grouped summary: **below minimum**, **below target**, or **incomplete verification**. It uses the same validation and grouping as both HTML renderers. It identifies measured baseline/tuning differences without blaming the palette for a pre-existing problem. Raw repeated browser diagnostics stay in the full report; the audit-only command retains its detailed console output.
+4. Follow the printed `file:` URL to the newly written preview. Compare current/suggested swatches, use-specific combinations, source/variant differences and the exact destination snippet. Decide whether to change a source color, its use, or a separate tuning/config setting. Suggestions are independent manual alternatives, not a combined patch; regenerate and remeasure after choosing one.
+
+The tool evaluates **color combinations for a stated use**, not aesthetic quality. Intentional brand-to-functional shifts and exploratory combinations are information, not palette-validation warnings. No global “optimal palette” is claimed, and no source choice is changed automatically. Unverified snapshots never receive a positive verdict or a suggested color; proposals missing even a previously passing control cannot be recommended.
+
+The preview puts five sections within reach: action, problems, measured family atlas, the five largest brand/variant lightness shifts, and free-pairing counts with the best three normal-text combinations per theme. Full precision, complete measurements and provenance remain in the full report. Both are static: a prior file may be stale, and the CLI advertises a newly generated file **only after publication succeeds**, including diagnostic previews for incomplete runs.
+
+The full page starts with the correction, not the audit log:
 
 - verified corrections show large **current / suggested** color swatches, their OKLCH values, and the exact destination file and manually selectable snippet, without opening any disclosure;
 - affected pairs are grouped by problem and theme rather than repeated for each browser/preference; before/after samples and compact ratios show the expected improvement;
-- when a pair fails only because of the project tuning layer, the problem card says so with the measured numbers (**"without project tuning this pair measured X; with tuning active Y"**), and the section counts how many problems are of that kind. The note appears only when a baseline exists, really differs and used to meet its target; it never blames tuning for a pre-existing shortfall;
-- proposal channel deltas (ΔL, ΔC, ΔH, ΔEOK) sit next to the suggested swatch; the **full check table** lives in its own nested disclosure and repeated before/after cards collapse to one per distinct measurement with an explicit scenario count;
+- when a pair fails only because of the project tuning layer, the problem card says so with the measured numbers (**"without project tuning this pair measured X; with tuning active Y"**), and the section counts how many problems are of that kind. When the baseline already missed its thresholds, the note explicitly says the problem existed without tuning; it never attributes that pre-existing shortfall to tuning;
+- proposal channel deltas (ΔL, ΔC, ΔH, ΔEOK) sit next to the suggested swatch; problem and changed-check rows live in a dedicated disclosure, with unchanged controls counted and linked back to the original scenario measurements; repeated before/after cards collapse to one per distinct measurement with an explicit scenario count;
 - the minimum ratio is reported **separately for text and UI/borders** so a UI threshold cannot look like a text failure;
-- a dark-fill tuning proposal also shows the **border side effect** it causes (`--color-<id>-border` on the canvas, before → after, measured in the browser in dark). This is explicitly **informational**: that border stays outside the verified pair set by design, so it never blocks or promotes a proposal — the card says when the border falls below the 3:1 non-text reference so the decision stays explicit.
+- a dark-fill tuning proposal also shows the **border side effect** it causes (`--color-<id>-border` on both canvas and neutral surface, before → after, measured in the browser in dark). This is explicitly **informational**: that border stays outside the verified pair set by design, so it never blocks or promotes a proposal — the card says when the border falls below the 3:1 non-text reference so the decision stays explicit.
 - grouping never combines different usages, thresholds or outcomes; differing ratios/colors remain explicit in per-problem details, with the lowest-contrast scenario used for the preview;
 - compact ratios never round a shortfall onto its minimum or target; classification and verification always use the original numbers;
 - full-precision measurements, proposal coverage, provenance and OKLab details stay in initially closed native disclosures;
@@ -323,7 +334,7 @@ The report command preserves palette, config, tuning and generated color files. 
 
 The HTML is a **static snapshot**, not a live validity badge. It is refreshed even after a successful or incomplete run, so a previous failure is not left as the apparent latest result. It cannot detect later edits by itself: regenerate and compare its timestamp/fingerprint before using its recommendations. Scope and exit policy match the browser audit: `below-target` alone is advisory, `below-minimum` or an incomplete/contrast-error analysis exits `1` even if a report was created. Report creation does not make a failed check pass.
 
-Only an existing report bearing the generator's ownership marker may be replaced. The writer protects configured/default input and output paths, refuses symlink/hardlink report targets, and writes atomically. These protections are conservative guards, not a filesystem security sandbox against hostile concurrent changes. The artifact is gitignored and is never opened automatically.
+Only an existing report bearing the generator's ownership marker may be replaced. The writer protects configured/default input and output paths, refuses symlink/hardlink report targets, and writes atomically. These protections are conservative guards, not a filesystem security sandbox against hostile concurrent changes. Both artifacts are gitignored and are never opened automatically.
 
 Report end-to-end checks, separate from the unit suite:
 
@@ -786,6 +797,8 @@ Options can be placed before or after the command. Supported flags are `--config
 Diagnostic statuses do **not** change exit policy: a successful warning-only run exits `0`, including `below-minimum` warnings. Stale output in `check` mode, generation/validation errors or config/I/O failures exit non-zero. Treat warnings separately if your CI needs a stricter policy; the package introduces no new CI gate.
 
 Both commands print warnings and read-only contrast suggestions from `report.suggestions` when available. `check` does not write generated outputs; `build` performs normal output generation but never applies suggested config or palette edits. Advice uses the config path selected with `--config` (relative to `--root`), and its fragments are meant to be merged into existing settings, not used as replacement config files. There is no autofix step and no recommendation to edit generated `colors.css`.
+
+After a returned build/check result (including a stale-output check), the CLI also identifies the configured palette source and reminds the designer that browser tuning and real components have not been measured. If the selected project defines a nonempty `colors:report` package script and uses the default config path, it suggests running that command **before** opening the preview; it does not assume a report already exists or is current. Custom config paths, absent/malformed package metadata, and projects without that script do not get an inapplicable report command. Thrown validation/config/I/O failures retain their focused error output. This optional guidance performs no writes, launches no browser, and never changes warning strings or exit policy.
 
 Useful package scripts:
 

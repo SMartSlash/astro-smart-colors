@@ -3,61 +3,81 @@ import { lstat, mkdir, open, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defaultSmartColorsConfig } from "./defaults.mjs";
-import { formatContrastReportHtml } from "./format-report-html.mjs";
+import { MARKER, formatContrastReportHtml } from "./format-report-html.mjs";
+import { formatContrastPreviewHtml } from "./format-report-preview.mjs";
 import { DEFAULT_CONFIG_FILE, resolveProjectUrl } from "./load-config.mjs";
 import { validateOutputPaths } from "./output-paths.mjs";
 
-const REPORT_PATH = "reports/smart-colors.html";
-const MARKER = "<!-- smart-colors-report:v1 -->";
+const ARTIFACTS = [
+  { name: "report", relativePath: "reports/smart-colors.html", render: formatContrastReportHtml },
+  { name: "preview", relativePath: "reports/smart-colors-preview.html", render: formatContrastPreviewHtml },
+];
+const REPORT_ARTIFACT = ARTIFACTS[0];
 const DEFAULT_TUNING_PATH = "src/styles/tokens/colors-tuning.css";
 
-export async function writeContrastReport({ root = process.cwd(), report, config, configFile = DEFAULT_CONFIG_FILE, tuningPath = DEFAULT_TUNING_PATH }) {
-  const reportPath = fileURLToPath(resolveProjectUrl(root, REPORT_PATH));
-  const directory = path.dirname(reportPath);
-  const html = formatContrastReportHtml(report);
-  if (typeof html !== "string" || !html.startsWith(MARKER)) {
-    throw new Error("Smart Colors report renderer did not return a marked HTML document.");
+/**
+ * Write the fixed Smart Colors artifacts for one snapshot.
+ *
+ * The full report is always written and keeps its historical return value: the absolute
+ * report path. With `preview: true` the compact preview of the same snapshot is written in
+ * the same call and both absolute paths are returned as `{ reportPath, previewPath }`.
+ * Every requested artifact goes through one channel: ownership marker, protection of the
+ * configured paths, symbolic/hard link refusal and an atomic rename over a fresh temporary
+ * file. Nothing is written until every requested document has rendered and validated.
+ */
+export async function writeContrastReport({ root = process.cwd(), report, config, configFile = DEFAULT_CONFIG_FILE, tuningPath = DEFAULT_TUNING_PATH, preview = false }) {
+  const artifacts = preview ? ARTIFACTS : [REPORT_ARTIFACT];
+  const rendered = artifacts.map((artifact) => ({ ...artifact, html: artifact.render(report) }));
+  for (const artifact of rendered) {
+    if (typeof artifact.html !== "string" || !artifact.html.startsWith(MARKER)) {
+      throw new Error(`Smart Colors ${artifact.name} renderer did not return a marked HTML document.`);
+    }
   }
 
-  await validateDestination(reportPath);
   const protectedPaths = [
     { label: "config.palette", value: config?.palette ?? defaultSmartColorsConfig.palette },
     { label: "config.output", value: config?.output ?? defaultSmartColorsConfig.output },
     { label: "config.motion.output", value: config?.motion?.output ?? defaultSmartColorsConfig.motion.output },
     { label: "tuningPath", value: tuningPath },
   ];
-  for (const source of protectedPaths) {
-    try {
-      // Treat each protected path as a source and the report as the only output.
-      // Invalid inputs may alias each other; that must not prevent an error report.
-      // Motion is protected even when disabled, including without a loaded config.
-      await validateOutputPaths({ root, configFile, config: { palette: source.value, output: REPORT_PATH } });
-    } catch (cause) {
-      throw new Error(`Smart Colors report path validation failed against ${source.label} (${source.value}) or configFile (${configFile}): ${cause.message}`, { cause });
+  const targets = [];
+  for (const artifact of rendered) {
+    const target = fileURLToPath(resolveProjectUrl(root, artifact.relativePath));
+    targets.push(target);
+    await validateDestination(target);
+    for (const source of protectedPaths) {
+      try {
+        // Treat each protected path as a source and the artifact as the only output.
+        // Invalid inputs may alias each other; that must not prevent an error report.
+        // Motion is protected even when disabled, including without a loaded config.
+        await validateOutputPaths({ root, configFile, config: { palette: source.value, output: artifact.relativePath } });
+      } catch (cause) {
+        throw new Error(`Smart Colors report path validation failed against ${source.label} (${source.value}) or configFile (${configFile}): ${cause.message}`, { cause });
+      }
     }
   }
 
-  const temporaryPath = path.join(directory, `.smart-colors-report-${randomUUID()}.tmp`);
-  await mkdir(directory, { recursive: true });
-  let temporaryFile;
-  let created = false;
+  // Stage every document first, then rename: a failure before the renames leaves all
+  // pre-existing artifacts untouched, and only temporaries created here are removed.
+  const temporaryPaths = [];
   try {
-    temporaryFile = await open(temporaryPath, "wx");
-    created = true;
-    await temporaryFile.writeFile(html, "utf8");
-    await temporaryFile.close();
-    temporaryFile = undefined;
-    await rename(temporaryPath, reportPath);
-    created = false;
-  } finally {
-    try {
-      await temporaryFile?.close();
-    } finally {
-      // Never remove a pre-existing file if exclusive creation failed.
-      if (created) await rm(temporaryPath, { force: true });
+    for (const [index, target] of targets.entries()) {
+      const directory = path.dirname(target);
+      await mkdir(directory, { recursive: true });
+      const temporaryPath = path.join(directory, `.smart-colors-${rendered[index].name}-${randomUUID()}.tmp`);
+      const temporaryFile = await open(temporaryPath, "wx");
+      temporaryPaths.push(temporaryPath);
+      try {
+        await temporaryFile.writeFile(rendered[index].html, "utf8");
+      } finally {
+        await temporaryFile.close();
+      }
     }
+    for (const [index, target] of targets.entries()) await rename(temporaryPaths[index], target);
+  } finally {
+    for (const temporaryPath of temporaryPaths) await rm(temporaryPath, { force: true });
   }
-  return reportPath;
+  return preview ? { reportPath: targets[0], previewPath: targets[1] } : targets[0];
 }
 
 async function entryIfPresent(filePath) {

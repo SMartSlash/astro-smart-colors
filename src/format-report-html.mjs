@@ -1,11 +1,11 @@
-const MARKER = "<!-- smart-colors-report:v1 -->";
+export const MARKER = "<!-- smart-colors-report:v1 -->";
 const FILE_KEYS = ["palette", "config", "tuning", "output"];
 const STATUSES = {
   pass: "Target e minimo raggiunti",
   "below-target": "Sotto il target",
   "below-minimum": "Sotto il minimo",
 };
-const CSP = "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; font-src 'none'; media-src 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'";
+export const CSP = "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; font-src 'none'; media-src 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'";
 
 const CSS = `
 @layer reset, tokens, base, components, pages, animations, layout, utilities, capabilities, preferences, overrides;
@@ -194,8 +194,10 @@ const CSS = `
 }
 `;
 
-const record = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
-const list = (value) => Array.isArray(value) ? value : [];
+export const record = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+export const list = (value) => Array.isArray(value) ? value : [];
+// Italian copy agrees with the number printed next to it: "1 problema" but "2 problemi".
+export const agree = (count, one, many) => count === 1 ? one : many;
 const text = (value) => typeof value === "string" && value.trim().length > 0;
 const finite = (value) => typeof value === "number" && Number.isFinite(value);
 const ratioValid = (value) => finite(value) && value >= 1 && value <= 21;
@@ -210,7 +212,7 @@ function printable(value) {
   catch { return "Dato non serializzabile"; }
 }
 
-function escape(value) {
+export function escape(value) {
   return printable(value).replace(/[&<>"']/g, (character) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   })[character]);
@@ -222,7 +224,7 @@ function colorValid(color) {
 }
 
 // Only validated primitive numbers may enter CSS; names, paths and snippets never do.
-function colorCss(color) {
+export function colorCss(color) {
   return colorValid(color) ? `oklch(${color.l} ${color.c} ${color.h})` : null;
 }
 
@@ -248,7 +250,7 @@ function diagnosticValid(item) {
     && (item.baselineRatio === undefined || ratioValid(item.baselineRatio));
 }
 
-function status(item, valid = diagnosticValid(item)) {
+export function status(item, valid = diagnosticValid(item)) {
   return valid ? STATUSES[item.status] : "Non verificato: dati mancanti, non validi o incoerenti";
 }
 
@@ -277,21 +279,21 @@ function colorSwatch(color, label) {
 <figcaption><strong>${escape(label)}</strong> — ${colorCode(color)}. Campione cromatico, non indicazione di leggibilità.</figcaption></figure>`;
 }
 
-function colorChoice(color, label, suggested = false) {
+export function colorChoice(color, label, suggested = false) {
   const css = colorCss(color);
   return `<figure class="color-choice${suggested ? " color-choice--suggested" : ""}">${css ? `<div class="swatch" aria-hidden="true" style="--sample-color:${css}"></div>` : "<p>Campione non disponibile: colore non valido.</p>"}
 <figcaption><strong>${escape(label)}</strong> ${colorCode(color)}</figcaption></figure>`;
 }
 
 // Compact human reading of a metric. Full precision stays in the technical disclosures.
-function it(value, digits = 2) {
+export function it(value, digits = 2) {
   if (!finite(value)) return "non disponibile";
   const rounded = Number(Math.abs(value).toFixed(digits));
   return `${value < 0 ? "-" : ""}${String(rounded).replace(".", ",")}`;
 }
 
 // Real-scale sample: a title (3:1), body text (4.5:1) and a small label, or borders at 1, 2 and 3 px.
-function sampleVisual(item) {
+export function sampleVisual(item) {
   return item.kind === "non-text"
     ? '<span class="pair-border"></span><span class="pair-border pair-border--2"></span><span class="pair-border pair-border--3"></span>'
     : '<span class="pair-title">Titolo grande</span><span class="pair-text">Corpo del testo di esempio</span><span class="pair-label">Etichetta piccola</span>';
@@ -340,14 +342,14 @@ function deltas(before, after) {
   return `ΔL ${show(values[0])}; ΔC ${show(values[1])}; ΔH ${show(values[2])}° (arco più breve); ΔEOK ${show(values[3])} (distanza euclidea OKLab, scala 0–1, non ×100).`;
 }
 
-function deltaSummary(before, after) {
+export function deltaSummary(before, after) {
   if (!colorValid(before) || !colorValid(after)) return "";
   const [dl, dc, dh, distance] = deltaValues(before, after);
   return `ΔL ${it(dl, 4)} · ΔC ${it(dc, 4)} · ΔH ${it(dh, 3)}° · ΔEOK ${it(distance, 4)}`;
 }
 
 // Measured without the project tuning layer. The wording never blames tuning for a pre-existing shortfall.
-function baselineNote(item, group) {
+export function baselineNote(item, group) {
   const measured = group.filter((entry) => ratioValid(entry.item.baselineRatio));
   if (!measured.length || !ratioValid(item.baselineRatio)) return "";
   const delta = item.ratio - item.baselineRatio;
@@ -377,7 +379,7 @@ function scenarioValid(scenario) {
     && text(scenario.preference) && provenanceValid(scenario.provenance) && Array.isArray(scenario.diagnostics);
 }
 
-function entriesFor(scenarios) {
+export function entriesFor(scenarios) {
   return scenarios.flatMap((value, scenarioIndex) => {
     const scenario = record(value) ? value : {};
     return list(scenario.diagnostics).map((value, index) => {
@@ -396,7 +398,7 @@ function samePair(before, after) {
     && (after.preference === undefined || before.scenario.preference === after.preference);
 }
 
-function proposalView(proposal, index, entries) {
+export function proposalView(proposal, index, entries) {
   const labels = list(proposal.issueLabels);
   const checks = list(proposal.checks).map((value) => {
     const item = record(value) ? value : {};
@@ -423,7 +425,7 @@ function proposalView(proposal, index, entries) {
 
 // Group only the presentation: every original measurement remains in the audit.
 // Different themes, uses, thresholds or outcomes must never share a problem card.
-function issueGroups(entries) {
+export function issueGroups(entries) {
   const groups = new Map();
   for (const entry of entries.filter(({ valid, item }) => valid && item.status !== "pass")) {
     const item = entry.item;
@@ -434,7 +436,7 @@ function issueGroups(entries) {
   return [...groups.values()];
 }
 
-function compactRatio(value, thresholds = []) {
+export function compactRatio(value, thresholds = []) {
   if (!ratioValid(value)) return ratio(value);
   const rounded = Number(value.toFixed(2));
   // A compact value must not visually promote a shortfall onto its threshold.
@@ -486,7 +488,7 @@ ${["light", "dark"].map((scheme) => {
 <p>${advice}</p></article>`).join("")}</div>`;
 }
 
-function overlapView(overlaps, scenarios, verified) {
+export function overlapView(overlaps, scenarios, verified) {
   const sources = list(overlaps);
   const entries = entriesFor(sources);
   const identity = (scenario) => JSON.stringify([scenario.browser, scenario.scheme, scenario.preference]);
@@ -514,7 +516,7 @@ function overlapView(overlaps, scenarios, verified) {
   return { complete, sources, entries, groups: [...groups.values()] };
 }
 
-function overlapList(items, thresholds) {
+export function overlapList(items, thresholds) {
   if (!items.length) return "<p>Nessuno.</p>";
   return `<ul class="pair-list">${items.map(({ item }) => {
     const foreground = colorCss(item.foreground), background = colorCss(item.background);
@@ -583,22 +585,28 @@ ${themes.map((scheme) => {
   }).join("")}</details>`;
 }
 
-// Visual catalog of the generated families: only pairs that were actually measured,
-// each shown with its worst measurement across browser/preference scenarios.
-function familyAtlas(entries, verified) {
+// Data half of the family atlas: the measured families and the worst measurement per pair.
+// The compact preview reads the same structure so both artifacts agree on what was measured.
+export function familyAtlasData(entries) {
   const valid = entries.filter(({ valid }) => valid);
   const names = [...new Set([
     ...valid.map(({ item }) => /^--color-(.+)-text$/.exec(item.foregroundToken)?.[1]),
     ...valid.map(({ item }) => /^--color-on-(.+)$/.exec(item.foregroundToken)?.[1]),
   ].filter(Boolean))];
-  if (!names.length) return "";
   const worst = new Map();
   for (const { item } of valid) {
     const key = `${item.scheme}|${item.kind}|${item.foregroundToken}|${item.backgroundToken}`;
     const current = worst.get(key);
     if (!current || item.ratio < current.ratio) worst.set(key, item);
   }
-  const find = (scheme, kind, foreground, background) => worst.get(`${scheme}|${kind}|${foreground}|${background}`);
+  return { names, find: (scheme, kind, foreground, background) => worst.get(`${scheme}|${kind}|${foreground}|${background}`) };
+}
+
+// Visual catalog of the generated families: only pairs that were actually measured,
+// each shown with its worst measurement across browser/preference scenarios.
+function familyAtlas(entries, verified) {
+  const { names, find } = familyAtlasData(entries);
+  if (!names.length) return "";
   const meta = (item) => item && diagnosticValid(item)
     ? `<li><code>${escape(item.foregroundToken)}</code> su <code>${escape(item.backgroundToken)}</code>: <span class="contrast-value">${compactRatio(item.ratio, [item.minimum, item.target])}</span> ${escape(status(item))} (${escape(marginText(item))})</li>` : "";
   const sample = (title, item, extra = [], border = null) => {
@@ -638,9 +646,9 @@ ${dark ? `<p class="eyebrow">Tema scuro</p><div class="family-list">${dark}</div
 
 // A functional variant normally shifts away from its brand source; only large shifts are reported,
 // using the same ΔL threshold the generator historically used before that check was removed.
-const VARIANT_SHIFT_THRESHOLD = 0.04;
+export const VARIANT_SHIFT_THRESHOLD = 0.04;
 
-function variantShiftView(entries, palette, roles) {
+export function variantShiftView(entries, palette, roles) {
   const identities = list(roles?.identities).filter((item) => record(item) && text(item.name) && text(item.paletteName));
   if (!identities.length) return null;
   const sources = new Map(list(palette).filter((item) => record(item) && text(item.name) && colorValid(item.resolved)).map((item) => [item.name, item.resolved]));
@@ -689,7 +697,7 @@ function variantShiftsHtml(shifts) {
 
 // Verified corrections grouped by the file the designer has to touch, palette first:
 // palette.css is the single source of the initial choices.
-function fileRole(file) {
+export function fileRole(file) {
   if (/palette\.css$/i.test(file)) return "Fonte iniziale delle scelte del designer: qui si cambiano i colori di marca.";
   if (/colors-tuning\.css$/i.test(file)) return "Regolazioni di progetto: cambiano la resa senza toccare la palette.";
   if (/smart-colors\.config\.mjs$/i.test(file)) return "Configurazione: override puntuali, ad esempio i companion on-solid.";
@@ -754,7 +762,7 @@ function dedupeChecks(checks) {
 
 // Public one-liner per proposal kind. Knob wording stays specific only when it is exactly true:
 // a dark knob must never be described as a light-surface adjustment.
-function proposalSentence(proposal) {
+export function proposalSentence(proposal) {
   const destination = record(proposal.destination) ? proposal.destination : {};
   const path = text(destination.path) ? destination.path : "";
   if (proposal.kind === "tuning") {
@@ -768,7 +776,7 @@ function proposalSentence(proposal) {
 }
 
 // Informational only: these measurements never enter the proposal verification or its outcome.
-function sideEffectsHtml(value) {
+export function sideEffectsHtml(value) {
   const declared = list(value);
   if (!declared.length) return "";
   const entries = declared.filter((item) => {
@@ -863,7 +871,7 @@ ${pairSample(entry.item, "Coppia dello snapshot", entry.valid)}
   }).join("");
 }
 
-function validation(report, scenarios, entries) {
+export function validation(report, scenarios, entries) {
   const problems = [];
   const iso = typeof report.generatedAt === "string" && report.generatedAt === report.generatedAt.trim() && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(report.generatedAt)
     && Number.isFinite(Date.parse(report.generatedAt))
@@ -916,7 +924,7 @@ export function formatContrastReportHtml(value) {
 <style>${CSS}</style></head><body><div class="shell">
 <a class="skip" href="#contenuto">Vai al contenuto</a>
 <header><h1>Rapporto di contrasto</h1><p class="status overview">${outcome}</p>
-<ul class="summary-facts"><li><strong>${groups.length}</strong> problemi distinti</li><li><strong>${complete.length}</strong> correzioni verificate</li><li><strong>${entries.length}</strong> coppie misurate</li><li><strong>${variantShifts === null ? "n.d." : variantShifts.length}</strong> varianti da rivedere</li><li><strong>${scenarios.length}</strong> scenari</li></ul>
+<ul class="summary-facts"><li><strong>${groups.length}</strong> ${agree(groups.length, "problema distinto", "problemi distinti")}</li><li><strong>${complete.length}</strong> ${agree(complete.length, "correzione verificata", "correzioni verificate")}</li><li><strong>${entries.length}</strong> ${agree(entries.length, "coppia misurata", "coppie misurate")}</li><li><strong>${variantShifts === null ? "n.d." : variantShifts.length}</strong> ${agree(variantShifts?.length ?? 0, "variante da rivedere", "varianti da rivedere")}</li><li><strong>${scenarios.length}</strong> ${agree(scenarios.length, "scenario", "scenari")}</li></ul>
 <p>Generato il ${iso ? `<time datetime="${escape(report.generatedAt)}">${escape(report.generatedAt)}</time>` : escape(report.generatedAt)}.</p>
 <p><strong>Snapshot statico, non stato attuale del progetto.</strong> Rigenera il report dopo ogni modifica ai colori. Data, file e impronta sono nei dettagli tecnici.</p>
 <nav aria-label="Sezioni del rapporto"><ul><li><a href="#proposte">Correzione consigliata</a></li><li><a href="#problemi">Problemi e risultato atteso</a></li><li><a href="#usi">Colpo d’occhio sugli usi</a></li><li><a href="#tecnici">Dettagli tecnici</a></li></ul></nav></header>
@@ -946,7 +954,7 @@ ${variantShiftsHtml(variantShifts)}
 <section aria-labelledby="palette"><h2 id="palette">Palette originale e colori risolti</h2><p>I campioni possono essere alterati dal gamut del display, dal browser o dai colori forzati. I valori OKLCH restano disponibili sulla UI neutra.</p>${paletteHtml(list(report.palette))}</section></details>
 <details><summary>File, impronta dello snapshot ed errori</summary>
 <section aria-labelledby="esito"><h2 id="esito">Esito e integrità dello snapshot</h2>
-<p>${verified ? `${entries.length} coppie misurate; ${issues.length} rilevazioni sotto minimo o target, raggruppate in ${groups.length} problemi distinti. Esito limitato a questi scenari e alla provenienza dichiarata.` : "Nessuna conclusione positiva: dati assenti, non validi, incoerenti o errori impediscono di verificare lo snapshot."}</p>
+<p>${verified ? `${entries.length} ${agree(entries.length, "coppia misurata", "coppie misurate")}; ${issues.length} ${agree(issues.length, "rilevazione", "rilevazioni")} sotto minimo o target, raggruppate in ${groups.length} ${agree(groups.length, "problema distinto", "problemi distinti")}. Esito limitato a questi scenari e alla provenienza dichiarata.` : "Nessuna conclusione positiva: dati assenti, non validi, incoerenti o errori impediscono di verificare lo snapshot."}</p>
 <p>Questo report non legge i file attuali, non ne ricalcola l’impronta e non si aggiorna. Confrontare data e SHA-256 con l’ultima esecuzione prima di applicare proposte.</p>
 <dl><dt>Generato il (dato dichiarato)</dt><dd>${escape(report.generatedAt)}</dd><dt>SHA-256 degli input (dichiarato, non ricalcolato)</dt><dd><code>${escape(report.inputDigest)}</code>${digest ? "" : " — non valido"}</dd></dl>
 ${table("File dello snapshot", ["Ruolo", "Percorso dichiarato"], FILE_KEYS.map((key) => `<tr><th scope="row">${key}</th><td><code>${escape(files[key] === null ? "Non fornito" : files[key])}</code></td></tr>`))}

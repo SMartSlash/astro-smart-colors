@@ -432,8 +432,13 @@ function deepFreeze(value) {
   return value;
 }
 
-test("exports only the requested renderer and returns a complete marked static Italian document", () => {
-  assert.deepEqual(Object.keys(renderer), ["formatContrastReportHtml"]);
+test("exports the renderer with its internal helpers and returns a complete marked static Italian document", () => {
+  assert.deepEqual(Object.keys(renderer).sort(), [
+    "CSP", "MARKER", "VARIANT_SHIFT_THRESHOLD", "agree", "baselineNote", "colorChoice", "colorCss", "compactRatio",
+    "deltaSummary", "entriesFor", "escape", "familyAtlasData", "fileRole", "formatContrastReportHtml",
+    "issueGroups", "it", "list", "overlapList", "overlapView", "proposalSentence", "proposalView", "record",
+    "sampleVisual", "sideEffectsHtml", "status", "validation", "variantShiftView",
+  ]);
   const html = render(issueReport());
   assert.equal(html.split("\n")[0], "<!-- smart-colors-report:v1 -->");
   assert.match(html, /<!doctype html>\s*<html lang="it">/);

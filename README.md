@@ -83,6 +83,8 @@ export default defineConfig({
 });
 ```
 
+A complete starter you can open in a browser lives in [`examples/minimal/`](./examples/minimal/): one palette, one plain HTML page, no framework and no config file.
+
 ## Project config
 
 Create `smart-colors.config.mjs` in the project root:
@@ -735,7 +737,11 @@ The supported public entry points are:
 import smartColors from "@smartslash/astro-smart-colors";
 import { defineSmartColorsConfig } from "@smartslash/astro-smart-colors/config";
 import { generateColorTokens } from "@smartslash/astro-smart-colors/generate";
+import * as reportData from "@smartslash/astro-smart-colors/report";
+import { projectAudit } from "@smartslash/astro-smart-colors/audit";
 ```
+
+The `./report` entry exposes the snapshot builder and read-only proposal solver used by the report artifacts. The `./audit` entry exposes `projectAudit(names, { root, configFile, emitReport })`; it resolves `playwright` or `@playwright/test` at call time only, so importing it never requires Playwright.
 
 `generateColorTokens()` accepts `root`, `configFile`, `inlineConfig`, an already resolved `config`, `check`, and `suggest`. It returns the color CSS, optional motion CSS, resolved config, per-output state, warnings, read-only suggestions, errors and whether any output changed:
 
@@ -789,14 +795,25 @@ Astro/Vite shutdown cancels the debounce, removes watcher listeners, skips queue
 ## CLI
 
 ```sh
+smart-colors init
+smart-colors init --palette colors/personal.css --tuning colors/colors-tuning.css
+smart-colors init --yes
 smart-colors build
 smart-colors check
 smart-colors check --config smart-colors.config.mjs --root .
 smart-colors --config=smart-colors.config.mjs check
+smart-colors audit
+smart-colors audit webkit
+smart-colors report
+smart-colors report chromium firefox
 smart-colors --help
 ```
 
-Options can be placed before or after the command. Supported flags are `--config`/`-c`, `--root`/`-r`, and `--help`/`-h`.
+Options can be placed before or after the command. Supported flags are `--config`/`-c`, `--root`/`-r`, `--palette`, `--tuning`, `--yes`/`-y`, and `--help`/`-h`. For `audit` and `report`, positional arguments after the command select browsers (`chromium`, `firefox`, `webkit`); the default is `chromium`.
+
+`audit` measures the generated tokens and `colors-tuning.css` in a real browser across four theme/preference scenarios and reports the shortfalls; it never writes. `report` runs the same measurement plus the read-only proposal solver and publishes `reports/smart-colors.html` and `reports/smart-colors-preview.html`. Playwright is an **optional** peer dependency: install `playwright` or `@playwright/test` (`>=1.40`) in the project and its browser binaries with `pnpm exec playwright install chromium` (or `firefox`/`webkit`). Without Playwright the command exits with a clear error and writes nothing; `build`, `check` and `init` never load it and never need it.
+
+`init` creates the two authored files a project starts from: a palette with neutral example values and a `colors-tuning.css` panel whose values are all commented out. The palette path comes from `config.palette` unless `--palette` is given; the tuning path defaults to `colors-tuning.css` in the palette directory unless `--tuning` is given. Both parents are created as needed, and backslash separators in explicit paths are normalized to `/`. On an interactive terminal and with no path flags, it prints the resolved paths and asks for confirmation first. `--yes` skips the question, and a run without a terminal (CI) uses the resolved paths without ever prompting. Only an empty answer, `y` or `yes` proceeds; any other answer leaves the project untouched. If either target already exists, `init` exits non-zero, names the existing file and writes nothing. It also refuses a target that would overwrite `config.output` or an enabled `config.motion.output`. `build` and `check` never prompt and never create a palette.
 
 Diagnostic statuses do **not** change exit policy: a successful warning-only run exits `0`, including `below-minimum` warnings. Stale output in `check` mode, generation/validation errors or config/I/O failures exit non-zero. Treat warnings separately if your CI needs a stricter policy; the package introduces no new CI gate.
 
@@ -810,10 +827,14 @@ Useful package scripts:
 {
   "scripts": {
     "colors:build": "smart-colors build",
-    "colors:check": "smart-colors check"
+    "colors:check": "smart-colors check",
+    "colors:audit": "smart-colors audit",
+    "colors:report": "smart-colors report"
   }
 }
 ```
+
+`colors:audit` and `colors:report` only work when `playwright` or `@playwright/test` is installed in the project; `colors:build` and `colors:check` never need it.
 
 ## Browser regression checks
 
@@ -823,7 +844,7 @@ From this repository's root, using the existing `@playwright/test` dependency:
 node scripts/test-smart-colors-browser.mjs chromium webkit
 ```
 
-The requested browser binaries must already be installed; the script does not download them automatically. It checks independent mix oracles, generated light/dark pairs with and without scales, solid/hover warning correspondence, and a capped dark target of `7.5` with strict ratio comparisons. Fixture files live in a temporary directory and generation uses `check: true`; no application outputs, real palette or real config are written. This is a color-model regression check, not a full accessibility audit.
+The requested browser binaries must already be installed; the script does not download them automatically. It checks independent mix oracles, generated light/dark pairs with and without scales, solid/hover warning correspondence, and a capped dark target of `7.5` with strict ratio comparisons. Fixture files live in a temporary directory and generation uses `check: true`; no application outputs, real palette or real config are written. This is a color-model regression check, not a full accessibility audit. Consumer projects run the same measurement surface through `smart-colors audit` and `smart-colors report`.
 
 ## Astro behavior
 

@@ -4,11 +4,15 @@ import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { initSmartColors } from "../src/init.mjs";
 
 const execFileAsync = promisify(execFile);
 const CLI_PATH = fileURLToPath(new URL("../src/cli.mjs", import.meta.url));
+const PALETTE_TEMPLATE = await readFile(new URL("../src/templates/palette.css", import.meta.url), "utf8");
+const TUNING_TEMPLATE = await readFile(new URL("../src/templates/colors-tuning.css", import.meta.url), "utf8");
 const PALETTE = `@property --palette-canvas {
   syntax: "<color>";
   inherits: true;
@@ -59,6 +63,22 @@ async function createProject(t, paletteCss = PALETTE) {
   await writeFile(path.join(tokenDirectory, "colors.css"), ":root {}\n", "utf8");
   t.after(() => rm(root, { recursive: true, force: true }));
   return root;
+}
+
+async function createEmptyProject(t) {
+  const root = await mkdtemp(path.join(tmpdir(), "smart-colors-init-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  return root;
+}
+
+function interactiveStreams() {
+  const stdin = new PassThrough();
+  const stdout = new PassThrough();
+  stdin.isTTY = true;
+  stdout.isTTY = true;
+  let output = "";
+  stdout.on("data", (chunk) => { output += chunk; });
+  return { stdin, stdout, output: () => output };
 }
 
 async function snapshotProject(root, directory = "") {
@@ -194,20 +214,42 @@ test("check command reports stale output once with an actionable message", async
   );
 });
 
-test("help documents build/check and the default config path without writing project files", async (t) => {
+test("help documents build/check/init/audit/report and the default config path without writing project files", async (t) => {
   const root = await createProject(t, PALETTE + INFO_PROPERTY);
   const before = await snapshotProject(root);
 
   for (const flag of ["--help", "-h"]) {
     const { stdout, stderr } = await runCli(root, flag);
-    assert.match(stdout, /Usage: smart-colors \[build\|check\]/);
+    assert.match(stdout, /Usage: smart-colors \[build\|check\|init\|audit\|report\]/);
     assert.match(stdout, /build\s+Generate semantic color tokens/);
     assert.match(stdout, /check\s+Verify generated color tokens are up to date/);
+    assert.match(stdout, /init\s+Create a starter palette and colors-tuning\.css/);
+    assert.match(stdout, /audit\s+Audit generated tokens and colors-tuning\.css in a browser/);
+    assert.match(stdout, /report\s+Generate reports\/smart-colors\.html and reports\/smart-colors-preview\.html/);
     assert.match(stdout, /--config <file>.*relative to --root.*default: smart-colors\.config\.mjs/);
+    assert.match(stdout, /--palette <file>.*default: config\.palette/);
+    assert.match(stdout, /--tuning <file>.*default: <palette dir>\/colors-tuning\.css/);
+    assert.match(stdout, /-y, --yes\s+Skip the init confirmation prompt/);
     assert.equal(stderr, "");
   }
 
   assert.deepEqual(await snapshotProject(root), before);
+});
+
+test("audit and report reject an unknown browser without touching project files", async (t) => {
+  const root = await createProject(t, PALETTE + INFO_PROPERTY);
+  const before = await snapshotProject(root);
+
+  for (const command of ["audit", "report"]) {
+    await assert.rejects(runCli(root, command, "browser-inesistente"), (error) => {
+      assert.equal(error.code, 1);
+      assert.equal(error.stdout, "");
+      assert.match(error.stderr, /Unknown browser browser-inesistente\. Supported browsers: chromium, firefox, webkit\./);
+      assert.doesNotMatch(error.stderr, /launched|AUDIT |HTML report/);
+      return true;
+    });
+    assert.deepEqual(await snapshotProject(root), before);
+  }
 });
 
 test("build prints manual foreground/source advice but only check is entirely read-only", async (t) => {
@@ -344,4 +386,196 @@ test("custom --config is loaded and its actual path appears in manual onSolid ad
     assert.equal(checked.stderr, built.stderr);
     assert.deepEqual(await snapshotProject(root), afterBuild);
   }
+});
+
+test("init writes both templates byte-for-byte and creates missing parent directories", async (t) => {
+  const root = await createEmptyProject(t);
+  const palettePath = "colors/personal.css";
+  const tuningPath = "colors/tuning/custom.css";
+
+  const { stdout, stderr } = await runCli(root, "init", "--palette", palettePath, "--tuning", tuningPath);
+
+  assert.equal(stderr, "");
+  assert.match(stdout, /\[smart-colors\] Created colors\/personal\.css\./);
+  assert.match(stdout, /\[smart-colors\] Created colors\/tuning\/custom\.css\./);
+  assert.match(stdout, /Next: edit colors\/personal\.css and run smart-colors build/);
+  assert.equal(await readFile(path.join(root, palettePath), "utf8"), PALETTE_TEMPLATE);
+  assert.equal(await readFile(path.join(root, tuningPath), "utf8"), TUNING_TEMPLATE);
+});
+
+test("init without a TTY uses the default paths and never prompts", async (t) => {
+  const root = await createEmptyProject(t);
+
+  const { stdout, stderr } = await runCli(root, "init");
+
+  assert.equal(stderr, "");
+  assert.doesNotMatch(stdout, /Create these files\?/);
+  assert.equal(await readFile(path.join(root, "src/styles/tokens/palette.css"), "utf8"), PALETTE_TEMPLATE);
+  assert.equal(await readFile(path.join(root, "src/styles/tokens/colors-tuning.css"), "utf8"), TUNING_TEMPLATE);
+});
+
+test("the init template builds without warnings", async (t) => {
+  const root = await createEmptyProject(t);
+  await runCli(root, "init");
+
+  const built = await runCli(root, "build");
+
+  assert.match(built.stdout, /src\/styles\/tokens\/colors\.css generated/);
+  assert.equal(built.stderr, "");
+});
+
+test("the tuning template ships no active declarations and no nested comments", () => {
+  assert.equal(TUNING_TEMPLATE.replace(/\/\*[\s\S]*?\*\//g, "").trim(), "");
+});
+
+test("init derives palette and tuning paths from a custom config", async (t) => {
+  const root = await createEmptyProject(t);
+  await mkdir(path.join(root, "config"));
+  await writeFile(path.join(root, "config/colors.mjs"), "export default { palette: 'colors/personal.css' };\n", "utf8");
+
+  const { stdout, stderr } = await runCli(root, "init", "--config", "config/colors.mjs");
+
+  assert.equal(stderr, "");
+  assert.match(stdout, /\[smart-colors\] Created colors\/personal\.css\./);
+  assert.match(stdout, /\[smart-colors\] Created colors\/colors-tuning\.css\./);
+  assert.equal(await readFile(path.join(root, "colors/personal.css"), "utf8"), PALETTE_TEMPLATE);
+  assert.equal(await readFile(path.join(root, "colors/colors-tuning.css"), "utf8"), TUNING_TEMPLATE);
+  await assert.rejects(readFile(path.join(root, "src/styles/tokens/palette.css"), "utf8"), { code: "ENOENT" });
+});
+
+test("init refuses an existing target without writing either file", async (t) => {
+  for (const existing of ["palette", "tuning"]) {
+    await t.test(existing, async (t) => {
+      const root = await createEmptyProject(t);
+      const palettePath = path.join(root, "src/styles/tokens/palette.css");
+      const tuningPath = path.join(root, "src/styles/tokens/colors-tuning.css");
+      const target = existing === "palette" ? palettePath : tuningPath;
+      const other = existing === "palette" ? tuningPath : palettePath;
+      await mkdir(path.dirname(target), { recursive: true });
+      await writeFile(target, "keep me\n", "utf8");
+
+      await assert.rejects(runCli(root, "init"), (error) => {
+        assert.equal(error.code, 1);
+        assert.equal(error.stdout, "");
+        assert.ok(error.stderr.includes(`Refusing to overwrite existing file: ${path.relative(root, target).split(path.sep).join("/")}.`));
+        assert.match(error.stderr, /Nothing was written\./);
+        return true;
+      });
+
+      assert.equal(await readFile(target, "utf8"), "keep me\n");
+      await assert.rejects(readFile(other, "utf8"), { code: "ENOENT" });
+    });
+  }
+});
+
+test("build and check never create a palette or tuning file", async (t) => {
+  const root = await createEmptyProject(t);
+
+  for (const command of ["build", "check"]) {
+    await assert.rejects(runCli(root, command), (error) => {
+      assert.equal(error.code, 1);
+      assert.match(error.stderr, /ENOENT/);
+      return true;
+    });
+    assert.deepEqual(await readdir(root), []);
+  }
+});
+
+test("interactive init accepts only empty, y or yes and declines without writing", async (t) => {
+  for (const [answer, expected] of [
+    ["n\n", false],
+    ["no\n", false],
+    ["cancel\n", false],
+    ["quit\n", false],
+    ["0\n", false],
+    ["y\n", true],
+    ["YES\n", true],
+    ["\n", true],
+  ]) {
+    await t.test(JSON.stringify(answer), async (t) => {
+      const root = await createEmptyProject(t);
+      const streams = interactiveStreams();
+      const pending = initSmartColors({ root, stdin: streams.stdin, stdout: streams.stdout });
+      streams.stdin.end(answer);
+      const result = await pending;
+
+      assert.equal(result.written, expected);
+      assert.match(streams.output(), /Create these files\? \[Y\/n\]/);
+      const palettePath = path.join(root, "src/styles/tokens/palette.css");
+      const tuningPath = path.join(root, "src/styles/tokens/colors-tuning.css");
+      if (expected) {
+        assert.equal(await readFile(palettePath, "utf8"), PALETTE_TEMPLATE);
+        assert.equal(await readFile(tuningPath, "utf8"), TUNING_TEMPLATE);
+      } else {
+        await assert.rejects(readFile(palettePath, "utf8"), { code: "ENOENT" });
+        await assert.rejects(readFile(tuningPath, "utf8"), { code: "ENOENT" });
+      }
+    });
+  }
+});
+
+test("init normalizes Windows separators in explicit paths", async (t) => {
+  await t.test("derived tuning follows a backslash palette directory", async (t) => {
+    const root = await createEmptyProject(t);
+    const { stdout, stderr } = await runCli(root, "init", "--palette", "colors\\personal.css");
+
+    assert.equal(stderr, "");
+    assert.match(stdout, /\[smart-colors\] Created colors\/personal\.css\./);
+    assert.match(stdout, /\[smart-colors\] Created colors\/colors-tuning\.css\./);
+    assert.equal(await readFile(path.join(root, "colors/personal.css"), "utf8"), PALETTE_TEMPLATE);
+    assert.equal(await readFile(path.join(root, "colors/colors-tuning.css"), "utf8"), TUNING_TEMPLATE);
+  });
+
+  await t.test("explicit tuning is normalized too", async (t) => {
+    const root = await createEmptyProject(t);
+    const { stdout, stderr } = await runCli(root, "init", "--palette", "colors\\personal.css", "--tuning", "panels\\colors\\custom.css");
+
+    assert.equal(stderr, "");
+    assert.match(stdout, /\[smart-colors\] Created panels\/colors\/custom\.css\./);
+    assert.equal(await readFile(path.join(root, "panels/colors/custom.css"), "utf8"), TUNING_TEMPLATE);
+  });
+});
+
+test("init refuses targets that collide with generated outputs", async (t) => {
+  await t.test("palette against config.output", async (t) => {
+    const root = await createEmptyProject(t);
+
+    await assert.rejects(runCli(root, "init", "--palette", "src/styles/tokens/colors.css"), (error) => {
+      assert.equal(error.code, 1);
+      assert.match(error.stderr, /Refusing to write palette src\/styles\/tokens\/colors\.css/);
+      assert.match(error.stderr, /collides with the generated config\.output/);
+      return true;
+    });
+
+    assert.deepEqual(await readdir(root), []);
+  });
+
+  await t.test("tuning against config.output", async (t) => {
+    const root = await createEmptyProject(t);
+    const configText = "export default { output: 'src/styles/tokens/colors-tuning.css' };\n";
+    await writeFile(path.join(root, "smart-colors.config.mjs"), configText, "utf8");
+
+    await assert.rejects(runCli(root, "init"), (error) => {
+      assert.equal(error.code, 1);
+      assert.match(error.stderr, /Refusing to write tuning src\/styles\/tokens\/colors-tuning\.css/);
+      assert.match(error.stderr, /collides with the generated config\.output/);
+      return true;
+    });
+
+    assert.deepEqual(await readdir(root), ["smart-colors.config.mjs"]);
+    assert.equal(await readFile(path.join(root, "smart-colors.config.mjs"), "utf8"), configText);
+  });
+
+  await t.test("target against config.motion.output", async (t) => {
+    const root = await createEmptyProject(t);
+    await writeFile(path.join(root, "smart-colors.config.mjs"), "export default { motion: { enabled: true, output: 'colors/motion.css' } };\n", "utf8");
+
+    await assert.rejects(runCli(root, "init", "--tuning", "colors/motion.css"), (error) => {
+      assert.equal(error.code, 1);
+      assert.match(error.stderr, /collides with the generated config\.motion\.output/);
+      return true;
+    });
+
+    assert.deepEqual(await readdir(root), ["smart-colors.config.mjs"]);
+  });
 });

@@ -1,0 +1,67 @@
+/* ==========================================================================
+   PALETTE — the only colors you author.
+
+   Each @property block declares one source color in OKLCH. The `role`
+   descriptor tells Smart Colors how to derive the semantic token API:
+
+     canvas      Neutral foundation of the interface (declare exactly one)
+     ink         Main neutral text color (declare exactly one)
+     ui          Brand or interface color; gets surface/border/solid/text
+     feedback    State or outcome color: success, warning, danger, info
+     decorative  Purely visual detail; never the only carrier of meaning
+
+   To add a color:
+     1. Copy a block below and rename `--palette-<name>`.
+     2. Set `initial-value` to any opaque oklch() color.
+     3. Set `role` to one of the five roles above.
+     4. For ui/feedback, optionally set `dark-blend: 0` … `100` to control
+        how much white is mixed into the dark-mode variant; omit it to use
+        the adaptive mix based on lightness.
+
+   Components never read `--palette-*`. They consume the generated --color-*
+   API. Project-specific deviations that must survive a rebuild belong in
+   colors-tuning.css next to this file, not here.
+   ========================================================================== */
+
+/* — Foundation — */
+
+@property --palette-canvas {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.97 0.005 250);
+  role: canvas;
+}
+
+@property --palette-ink {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.24 0.01 250);
+  role: ink;
+}
+
+/* — Identity — */
+
+@property --palette-brand {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.56 0.14 255);
+  role: ui;
+}
+
+/* — Feedback — */
+
+@property --palette-success {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.6 0.13 150);
+  role: feedback;
+}
+
+/* — Decorative — */
+
+@property --palette-highlight {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.78 0.09 330);
+  role: decorative;
+}

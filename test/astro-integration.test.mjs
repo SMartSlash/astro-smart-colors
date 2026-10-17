@@ -53,6 +53,17 @@ async function createProject(t) {
   return root;
 }
 
+test("package metadata keeps Astro as an optional peer with no runtime dependencies", async () => {
+  const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+
+  assert.equal(packageJson.dependencies, undefined);
+  assert.equal(packageJson.devDependencies, undefined);
+  assert.deepEqual(packageJson.peerDependencies, { astro: ">=5", playwright: ">=1.40", "@playwright/test": ">=1.40" });
+  assert.equal(packageJson.peerDependenciesMeta?.astro?.optional, true);
+  assert.equal(packageJson.peerDependenciesMeta?.playwright?.optional, true);
+  assert.equal(packageJson.peerDependenciesMeta?.["@playwright/test"]?.optional, true);
+});
+
 test("Astro rejects an explicitly selected missing config before writing outputs", async (t) => {
   const root = await createProject(t);
   const integration = smartColors({ configFile: "smart-colors.config.mjs" });
@@ -158,19 +169,39 @@ function captureHandlers(watcher) {
   });
 }
 
+function resolveVite(t) {
+  const require = createRequire(import.meta.url);
+  const attempts = [
+    () => require.resolve("vite"),
+    () => createRequire(require.resolve("astro")).resolve("vite"),
+  ];
+
+  for (const attempt of attempts) {
+    try {
+      return attempt();
+    } catch {
+      // A standalone clone may have neither Vite nor Astro installed.
+    }
+  }
+
+  t.skip("Vite is not installed in this standalone environment");
+  return null;
+}
+
 function emitLateEvents(fixture, handlers) {
   for (const event of WATCH_EVENTS) fixture.server.watcher.emit(event, fixture.palettePath);
   for (const handler of handlers) handler(fixture.palettePath);
 }
 
 test("installed Vite runs configureServer post hooks on setup and awaits closeBundle on close", { timeout: 10000 }, async (t) => {
+  const vitePath = resolveVite(t);
+  if (!vitePath) return;
+
   const fixture = await createIntegration(t, { configure: false });
   const { root, vitePlugin, palettePath, outputPath, websocketMessages, signals, logs } = fixture;
   await writeFile(palettePath, PALETTE.replace("0.62 0.16 32", "0.58 0.15 32"), "utf8");
   const reloaded = once(signals, "reload");
-  const require = createRequire(import.meta.url);
-  const astroRequire = createRequire(require.resolve("astro"));
-  const { createServer } = await import(pathToFileURL(astroRequire.resolve("vite")).href);
+  const { createServer } = await import(pathToFileURL(vitePath).href);
   let postHookRan = false;
   let server;
   t.after(() => server?.close());

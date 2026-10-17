@@ -7,7 +7,7 @@
   "homepage": "https://github.com/SMartSlash/astro-smart-colors#readme",
   "bugs": { "url": "https://github.com/SMartSlash/astro-smart-colors/issues" },
   "keywords": ["astro", "oklch", "design-tokens", "accessibility", "contrast", "wcag"],
-  "files": ["src", "README.md", "LICENSE"],
+  "files": ["src", "examples", "README.md", "LICENSE"],
   "type": "module",
   "main": "./src/astro-integration.mjs",
   "types": "./src/astro-integration.d.ts",
@@ -23,6 +23,12 @@
     "./config": {
       "types": "./src/defaults.d.ts",
       "default": "./src/defaults.mjs"
+    },
+    "./report": {
+      "default": "./src/report-data.mjs"
+    },
+    "./audit": {
+      "default": "./src/browser-audit.mjs"
     }
   },
   "bin": {
@@ -32,10 +38,18 @@
     "test": "node --test test/*.test.mjs"
   },
   "peerDependencies": {
-    "astro": ">=5"
+    "astro": ">=5",
+    "playwright": ">=1.40",
+    "@playwright/test": ">=1.40"
   },
   "peerDependenciesMeta": {
     "astro": {
+      "optional": true
+    },
+    "playwright": {
+      "optional": true
+    },
+    "@playwright/test": {
       "optional": true
     }
   },

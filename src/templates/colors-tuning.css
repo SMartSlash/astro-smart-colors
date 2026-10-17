@@ -1,0 +1,115 @@
+/* ==========================================================================
+   COLORS TUNING — project overrides for generated Smart Colors tokens.
+
+   Import this file after the generated colors.css, in the same cascade layer.
+   Every declaration below is an example and stays commented out: uncomment
+   only what you need. Values here survive `smart-colors build`, which only
+   regenerates colors.css.
+
+   Tune public `--color-tune-*` tokens. Direct overrides of generated
+   `--_color-*` internals are not part of the package contract.
+
+   1. MACRO THEME TUNING — warmth, depth, surfaces
+   2. PER-COLOR DARK TUNING — one identity at a time
+   3. ELEVATION TUNING — alpha and semantic mapping
+   4. LEGACY BRIDGE — temporary aliases for unmigrated components
+   ========================================================================== */
+
+/* ==========================================================================
+   1. MACRO THEME TUNING
+
+   Percentages: 100% keeps the maximum effect, 0% turns it off.
+
+   --color-tune-light-warmth
+     How much of the source hue survives in light mode.
+   --color-tune-dark-warmth
+     How much of the source hue survives in dark mode.
+   --color-tune-dark-bg-depth
+     How much of the light background tint reaches the dark background.
+   --color-tune-dark-surface-depth
+     Same as above for cards and panels.
+   --color-tune-dark-text-depth
+     How much of the light background tint is kept in dark text.
+   --color-tune-dark-muted-depth
+     Blend ratio of muted text against the dark background.
+   --color-tune-surface-lightness-shift
+     Lightness delta of the light surface. Negative means darker than the
+     light background. This is a build-time definition: prefer
+     derivation.surface.lightShift in smart-colors.config.mjs so generated
+     text variants are computed against the same surface. The dark knobs
+     above act only at runtime, through color-mix().
+   ========================================================================== */
+
+/*
+:root {
+  --color-tune-light-warmth: 100%;
+  --color-tune-dark-warmth: 100%;
+
+  --color-tune-dark-bg-depth: 14%;
+  --color-tune-dark-surface-depth: 18%;
+  --color-tune-dark-text-depth: 88%;
+  --color-tune-dark-muted-depth: 72%;
+
+  --color-tune-surface-lightness-shift: -0.018;
+}
+*/
+
+/* ==========================================================================
+   2. PER-COLOR DARK TUNING
+
+   `ui` and `feedback` colors can declare `dark-blend: 0…100` directly in
+   palette.css. Prefer that for stable choices: the generator validates it
+   and derives readable pairs from the result.
+
+   The tokens below are an unvalidated runtime escape hatch for temporary
+   experiments. The percentage is the amount of source color preserved;
+   lower values mix in more white and produce a lighter dark-mode variant.
+   ========================================================================== */
+
+/*
+:root {
+  --color-tune-brand-dark: color-mix(in oklch, var(--_color-brand-source) 78%, oklch(1 0 none));
+  --color-tune-success-dark: color-mix(in oklch, var(--_color-success-source) 81%, oklch(1 0 none));
+}
+*/
+
+/* ==========================================================================
+   3. ELEVATION TUNING
+
+   `--elevation-1/2` and `--elevation-filter-1/2` are generated. The first
+   pair uses box-shadow grammar; the second uses drop-shadow() chains that
+   follow the alpha of shapes, clips and masks.
+
+   The alpha tokens already have generated defaults. The mapping tokens
+   decide which elevation level each semantic role consumes.
+   ========================================================================== */
+
+/*
+:root {
+  --color-tune-elevation-1-shadow-alpha: 10%;
+  --color-tune-elevation-1-border-alpha: 28%;
+  --color-tune-elevation-1-glow-alpha: 14%;
+  --color-tune-elevation-2-shadow-alpha: 13%;
+  --color-tune-elevation-2-border-alpha: 36%;
+  --color-tune-elevation-2-glow-alpha: 20%;
+
+  --elevation-filter-surface: var(--elevation-filter-1);
+  --elevation-filter-control: var(--elevation-filter-1);
+}
+*/
+
+/* ==========================================================================
+   4. LEGACY BRIDGE
+
+   Temporary aliases for components that have not migrated to the current
+   contract yet. New code should use `--color-on-*`, `--ink-*`,
+   `--surface-*` and `--color-*-on-solid`.
+   ========================================================================== */
+
+/*
+:root {
+  --color-on-brand-tinted: var(--color-on-brand);
+  --color-on-success-tinted: var(--color-on-success);
+  --color-border-tinted: color-mix(in oklch, var(--color-text) 14%, transparent);
+}
+*/

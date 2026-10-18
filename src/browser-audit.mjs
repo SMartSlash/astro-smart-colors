@@ -1,15 +1,20 @@
 import assert from "node:assert/strict";
-import { access, readFile } from "node:fs/promises";
-import { createRequire } from "node:module";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { arrow, badge, check, file, title } from "./cli-style.mjs";
-import { contrast } from "./color-math.mjs";
+import { DIAGNOSTIC_PAYLOAD_ID, DIAGNOSTIC_RUNTIME_GLOBAL, DIAGNOSTIC_STATES, createDiagnosticRuntimeSource } from "./diagnostic-runtime.mjs";
 import { analyzeColorTokens, generateColorTokens } from "./generate-colors.mjs";
 import { loadSmartColorsConfig } from "./load-config.mjs";
-import { parseOklch } from "./parse-palette.mjs";
+import { createPlaywrightProvider } from "./playwright-provider.mjs";
 import { writeContrastReport } from "./report-artifact.mjs";
 import { assertReportInputsUnchanged, captureReportInputs, darkFillTuningIdentity, formatReportSummary, mergeSideEffect, paletteOverrideNote, proposalImproves, publishedProposal, reportCandidates, reportOverlapScenario, reportScenario, reportSideEffect, reportSnapshot, resolveTuningFile, structuralChanges, REPORT_FILES } from "./report-data.mjs";
+import { createVerificationCore } from "./verification-core.mjs";
+
+// Single origin of the numeric contract and the pair catalog (plan §5.1.1). The legacy helpers
+// below stay exported with their exact output shape and labels; they only delegate the duplicated
+// parser/catalog/formulas to this core instead of carrying a second implementation.
+const core = createVerificationCore();
 
 export const SUPPORTED_BROWSERS = ["chromium", "firefox", "webkit"];
 
@@ -31,55 +36,25 @@ export function close(actual, expected, label, tolerance = TOLERANCE) {
   }
 }
 
+// Legacy fixture parser: the alpha scope message and the returned coordinates are preserved, but
+// the OKLCH/sRGB math is the shared core parser, not a local copy.
 export function source(value, label) {
-  assert.ok(!value.includes("/"), `${label}: alpha colors are outside this fixture's scope`);
-  const parsed = parseOklch(value);
-  assert.deepEqual(parsed.errors, [], `${label}: invalid computed/emitted OKLCH ${value}`);
-  assert.ok(parsed.source, `${label}: no source coordinates`);
-  // .color gamut-maps; .source preserves native CSS interpolation coordinates.
-  return parsed.source;
+  const serialized = String(value);
+  if (serialized.includes("/")) throw new assert.AssertionError({ message: `${label}: alpha colors are outside this fixture's scope` });
+  return core.parseComputedColor(serialized, label);
 }
 
 export function pairsFor(scheme, identities = DEFAULT_IDENTITIES, decoratives = []) {
-  const pairs = [];
-  const add = (label, foreground, background, kind, property = "color", warning = false) => pairs.push({ label: `${scheme} ${label}`, foreground, background, kind, property, warning });
-  for (const [name, token] of [["neutral text", "text"], ["muted text", "text-muted"], ["focus", "focus-ring"]]) {
-    const focus = name === "focus";
-    add(`${name} / canvas`, `--color-${token}`, "--color-bg", focus ? "ui" : "text", focus ? "outlineColor" : "color");
-    add(`${name} / surface`, `--color-${token}`, "--color-surface", focus ? "ui" : "text", focus ? "outlineColor" : "color");
-  }
-  for (const name of identities) {
-    for (const [label, background] of [["canvas", "--color-bg"], ["neutral surface", "--color-surface"], ["family surface", `--color-${name}-surface`], ["family surface strong", `--color-${name}-surface-strong`]]) {
-      for (const suffix of ["text", "text-strong", "border-strong"]) {
-        const border = suffix === "border-strong";
-        add(`${name}-${suffix} / ${label}`, `--color-${name}-${suffix}`, background, border ? "family-ui" : "text", border ? "borderColor" : "color");
-      }
-    }
-    add(`on-${name} / ${name}`, `--color-${name}-ink`, `--color-${name}`, "on-color", "color", true);
-    for (const state of ["solid", "solid-hover"]) {
-      add(`${name}-on-solid / ${state}`, `--color-${name}-solid-text`, `--color-${name}-${state}`, "on-color", "color", true);
-    }
-  }
-  for (const name of decoratives) {
-    add(`on-${name} / ${name}`, `--color-${name}-ink`, `--color-${name}`, "on-color", "color", true);
-  }
-  add("control active text / active background", "--color-control-active-text", "--color-control-bg-active", "text", "color", true);
-  add("control text / focus background", "--color-text", "--color-control-focus-bg", "text", "color", true);
-  add("control active border / canvas", "--color-control-border-active", "--color-bg", "ui", "borderColor", true);
-  add("control active border / active background", "--color-control-border-active", "--color-control-bg-active", "ui", "borderColor", true);
-  assert.equal(new Set(pairs.map(({ label }) => label)).size, pairs.length, "Consumer pair labels must be unique");
-  return pairs;
+  // The core catalog is the single origin; the legacy shape has no id/theme fields.
+  return core.pairsFor(scheme, identities, decoratives).map(({ id, theme, ...pair }) => pair);
 }
 
 export function pairTarget(config, scheme, kind) {
-  if (kind === "on-color") return config.contrast.onColor;
-  if (kind === "ui") return config.contrast.ui;
-  const base = kind === "family-ui" ? config.contrast.ui : config.contrast.text;
-  return scheme === "light" ? base : Math.min(config.contrast.maxIdentity, base * config.contrast.darkRichness);
+  return core.pairTarget(config, scheme, kind);
 }
 
 export function warningStatus(ratio, target, minimum) {
-  return ratio < minimum ? "below-minimum" : ratio < target ? "below-target" : "pass";
+  return core.warningStatus(ratio, target, minimum);
 }
 
 export async function computedTheme(page, report, scheme, withScales, options = {}) {
@@ -134,70 +109,31 @@ export async function computedTheme(page, report, scheme, withScales, options = 
   };
 }
 
-function hasAlphaChannel(value) {
-  if (value.includes("/")) return true;
-  const rgba = /^rgba\(([^)]*)\)$/i.exec(value);
-  if (!rgba) return false;
-  const alpha = rgba[1].split(/[\s,]+/).filter(Boolean)[3];
-  if (alpha == null) return false;
-  const number = alpha.endsWith("%") ? Number(alpha.slice(0, -1)) / 100 : Number(alpha);
-  return Number.isFinite(number) && number < 1;
-}
-
-function srgbChannels(value, label) {
-  const srgb = value.startsWith("color(srgb ");
-  const body = value.slice(value.indexOf("(") + 1, -1).trim().replace(/^srgb\s+/i, "");
-  const parts = body.split(/[\s,/]+/).filter(Boolean).slice(0, 3);
-  assert.equal(parts.length, 3, `${label}: invalid computed color ${value}`);
-  return parts.map((part) => {
-    const number = Number(part.endsWith("%") ? part.slice(0, -1) / 100 : part);
-    assert.ok(Number.isFinite(number), `${label}: invalid computed color ${value}`);
-    return srgb ? number : number / 255;
-  });
-}
-
-function srgbToLinear(channels) {
-  return channels.map((u) => (u <= 0.04045 ? u / 12.92 : ((u + 0.055) / 1.055) ** 2.4));
-}
-
-// The browser resolves CSS; this parses its serialization without Color.js.
-// Ratios use the same clipped-sRGB WCAG reference as the generator.
+// The browser resolves CSS; this parses its serialization without Color.js. The clipped-sRGB
+// reference math lives in the shared core so the audit cannot drift from the generator. The one
+// legacy-specific behavior kept here is the exact alpha scope message the audit harness asserts.
 export function auditColor(value, label) {
-  const serialized = String(value);
-  assert.ok(!hasAlphaChannel(serialized), `${label}: translucent colors are outside this audit's scope`);
-
-  if (serialized.startsWith("oklch(")) {
-    const parsed = parseOklch(serialized);
-    assert.deepEqual(parsed.errors, [], `${label}: invalid computed color ${serialized}`);
-    assert.ok(parsed.source, `${label}: no source coordinates`);
-    return { l: parsed.source.l, c: parsed.source.c, h: Number.isFinite(parsed.source.h) ? parsed.source.h : 0 };
+  try {
+    return core.parseComputedColor(String(value), label);
+  } catch (error) {
+    const message = String(error && error.message ? error.message : error);
+    if (message.includes("translucent colors are outside")) {
+      throw new assert.AssertionError({ message: `${label}: translucent colors are outside this audit's scope` });
+    }
+    throw error;
   }
-
-  if (serialized.startsWith("rgb(") || serialized.startsWith("rgba(") || serialized.startsWith("color(srgb ")) {
-    const [r, g, b] = srgbToLinear(srgbChannels(serialized, label));
-    const l_ = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
-    const m_ = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
-    const s_ = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
-    const l = 0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_;
-    const a = 1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_;
-    const b_ = 0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_;
-    const c = Math.hypot(a, b_);
-    const rawHue = c <= 1e-10 ? 0 : (Math.atan2(b_, a) * 180) / Math.PI;
-    const hueAngle = rawHue < 0 ? rawHue + 360 : (rawHue === 0 ? 0 : rawHue);
-    assert.ok(Number.isFinite(l) && Number.isFinite(c), `${label}: invalid computed color ${serialized}`);
-    return { l: Math.min(1, Math.max(0, l)), c, h: hueAngle };
-  }
-
-  throw new assert.AssertionError({ message: `${label}: unsupported computed color ${serialized}` });
 }
 
 export function auditPairs(report, computed, scheme) {
+  // Thresholds come from the frozen contract built from the same config, so target/minimum are not
+  // re-derived per pair; the ratio and the classification use the shared core functions.
+  const declared = new Map(core.createContract(report.config).pairs[scheme].map((pair) => [pair.label, pair]));
   return computed.pairs.map((pair) => {
-    const ratio = contrast(pair.foregroundColor, pair.backgroundColor);
-    const target = pairTarget(report.config, scheme, pair.kind);
-    const minimum = ["ui", "family-ui"].includes(pair.kind) ? 3 : 4.5;
+    const spec = declared.get(pair.label);
+    assert.ok(spec, `Undeclared pair ${pair.label}: no contract thresholds for ${scheme}`);
+    const ratio = core.contrast(pair.foregroundColor, pair.backgroundColor);
     assert.ok(Number.isFinite(ratio), `${pair.label}: non-finite contrast`);
-    return { ...pair, ratio, target, minimum, status: warningStatus(ratio, target, minimum) };
+    return { ...pair, ratio, target: spec.target, minimum: spec.minimum, status: core.warningStatus(ratio, spec.target, spec.minimum) };
   });
 }
 
@@ -227,45 +163,344 @@ export function uniqueRejections(entries) {
   });
 }
 
-async function loadPlaywright(name, root) {
-  const bases = [
-    () => createRequire(path.resolve(root, "package.json")),
-    () => createRequire(import.meta.url),
-  ];
-
-  for (const base of bases) {
-    for (const request of ["playwright", "@playwright/test"]) {
-      try {
-        const imported = await import(pathToFileURL(base().resolve(request)).href);
-        // CJS packages may expose the browser types only through module.exports.
-        return imported.chromium ? imported : (imported.default ?? imported);
-      } catch {
-        // Try the next package/base; a standalone clone may have neither installed.
-      }
-    }
-  }
-
-  throw new Error(`Playwright non trovato per avviare ${name}. Installa playwright o @playwright/test nel progetto ed esegui: pnpm exec playwright install ${name}`);
-}
-
+// Legacy public launcher. Resolution is anchored at the effective root only (no global and no
+// checkout fallback); the phase-specific messages are preserved for the existing harnesses.
 export async function launch(name, root = process.cwd()) {
   assert.ok(SUPPORTED_BROWSERS.includes(name), `Unknown browser ${name}. Supported browsers: ${SUPPORTED_BROWSERS.join(", ")}.`);
-  const playwright = await loadPlaywright(name, root);
-  const browserType = playwright[name];
-  assert.ok(browserType, `Unknown browser ${name}. Supported browsers: ${SUPPORTED_BROWSERS.join(", ")}.`);
-  const executable = browserType.executablePath();
-  try {
-    await access(executable);
-  } catch (cause) {
-    throw new Error(`${name}: browser binary unavailable at ${executable}. Install it explicitly with pnpm exec playwright install ${name}, then rerun this script. No automatic download is performed.`, { cause });
+  const provider = createPlaywrightProvider({ root });
+  const opened = await provider.open();
+  if (!opened.ok) {
+    throw new Error(`Playwright non trovato per avviare ${name}. Installa playwright o @playwright/test nel progetto ed esegui: pnpm exec playwright install ${name}`, { cause: opened });
   }
-  try {
-    const browser = await browserType.launch({ headless: true, timeout: 15000 });
-    console.log(`${name}: launched ${browser.version()} (${executable})`);
-    return browser;
-  } catch (cause) {
-    throw new Error(`${name}: binary exists but launch failed at ${executable}. Inspect the cause below for sandbox permissions, system dependencies or a launch timeout; rerun in an environment that permits this browser. No automatic download is performed.`, { cause });
+  const available = await provider.availability(name);
+  if (!available.available) {
+    throw new Error(available.message, { cause: available });
   }
+  const browser = await provider.launch(name);
+  console.log(`${name}: launched ${browser.version()} (${available.executable})`);
+  return browser;
+}
+
+// ---------------------------------------------------------------------------
+// Structured automation adapter (plan §5.1.1, §7 SC-05).
+//
+// `runAutomation(session, options)` returns a serializable VerificationRun and never sets an exit
+// code or logs. It reuses the SC-04 runtime verbatim (same core, same collector, same bytes) inside
+// a controlled page, once per emulated system preference, so each engine covers the four
+// theme/preference crossings for both the baseline and the tuned stylesheet. Environment phases
+// (discovery/import/availability/launch) stay distinct from run phases (payload/setup/measure),
+// and incomplete coverage is reported, never suppressed.
+// ---------------------------------------------------------------------------
+
+const AUTOMATION_MODES = ["auto", "off", "required"];
+const AUTOMATION_RUN_PREFERENCES = ["light", "dark"];
+const AUTOMATION_TERMINAL_STATES = DIAGNOSTIC_STATES.filter((state) => ["complete", "incomplete", "unavailable", "unsupported"].includes(state));
+// Phases that describe the environment rather than a measurement; a run can be complete while one
+// requested engine was simply unavailable.
+const ENVIRONMENT_PHASES = ["discovery", "import", "availability", "launch"];
+const DEFAULT_AUTOMATION_TIMEOUT_MS = 15000;
+
+function usageError(message) {
+  const error = new Error(message);
+  error.code = "SMART_COLORS_USAGE";
+  return error;
+}
+
+function inertJson(value) {
+  return JSON.stringify(value).replace(/</g, "\\u003c");
+}
+
+// The minimum inert page the SC-04 runtime needs: the payload block plus the hashed runtime source.
+function runtimeFixtureHtml(payload, runtimeSource) {
+  return [
+    "<!doctype html>",
+    '<html lang="it"><head><meta charset="utf-8"><title>Smart Colors automation</title></head><body>',
+    '<script type="application/json" id="' + DIAGNOSTIC_PAYLOAD_ID + '">' + inertJson(payload) + "</script>",
+    "<script>" + runtimeSource + "</script>",
+    "</body></html>",
+    "",
+  ].join("\n");
+}
+
+// Only the fields the runtime validates and consumes, derived from the SC-03 session. `analysis`
+// and `captured` are Node-only and never reach the payload.
+function sessionPayload(session) {
+  const css = session && typeof session.css === "object" && session.css !== null ? session.css : {};
+  const tuning = typeof css.tuning === "string" ? css.tuning : null;
+  return {
+    schemaVersion: session && Number.isFinite(session.schemaVersion) ? session.schemaVersion : 1,
+    toolVersion: session && typeof session.toolVersion === "string" ? session.toolVersion : null,
+    snapshotId: session && typeof session.snapshotId === "string" ? session.snapshotId : null,
+    css: {
+      baseline: typeof css.baseline === "string" ? css.baseline : "",
+      tuning,
+      tuningSupport: ["absent", "supported", "unsupported"].includes(css.tuningSupport) ? css.tuningSupport : (tuning === null ? "absent" : "supported"),
+    },
+    config: session && typeof session.config === "object" && session.config !== null ? session.config : null,
+    model: session && typeof session.model === "object" && session.model !== null ? session.model : { diagnostics: [], errors: [], warnings: [] },
+    samples: session && Array.isArray(session.samples) ? session.samples : [],
+    notes: session && Array.isArray(session.notes) ? session.notes : [],
+  };
+}
+
+// Scenario ids are namespaced with the engine, so the same runtime scenario measured in two engines
+// stays two distinct identities and coverage never silently deduplicates them.
+function namespaceScenario(engine, scenarioId) {
+  return engine + "/" + scenarioId;
+}
+
+function namespaceReport(engine, report) {
+  const renamePairs = (pairs) => {
+    const renamed = {};
+    for (const [id, pairIds] of Object.entries(pairs ?? {})) renamed[namespaceScenario(engine, id)] = pairIds;
+    return renamed;
+  };
+  return {
+    engine,
+    status: report.status,
+    preference: report.preference,
+    environment: report.environment,
+    measuredAt: report.measuredAt,
+    expected: {
+      scenarios: (report.expected?.scenarios ?? []).map((id) => namespaceScenario(engine, id)),
+      pairs: renamePairs(report.expected?.pairs),
+    },
+    executed: {
+      scenarios: (report.executed?.scenarios ?? []).map((id) => namespaceScenario(engine, id)),
+      pairs: renamePairs(report.executed?.pairs),
+    },
+    scenarios: (report.scenarios ?? []).map((record) => ({ ...record, id: namespaceScenario(engine, record.id), engine })),
+    measurements: (report.measurements ?? []).map((measurement) => ({ ...measurement, engine, scenarioId: namespaceScenario(engine, measurement.scenarioId) })),
+    unsupported: (report.unsupported ?? []).map((entry) => ({ ...entry, id: namespaceScenario(engine, entry.id), engine })),
+    errors: (report.errors ?? []).map((error) => ({ ...error, engine, scenarioId: error.scenarioId == null ? null : namespaceScenario(engine, error.scenarioId) })),
+  };
+}
+
+function selectEngines(mode, browsers) {
+  if (browsers == null) return mode === "required" ? ["chromium"] : [...SUPPORTED_BROWSERS];
+  if (!Array.isArray(browsers) || browsers.length === 0) throw usageError("An explicit browser list must be a non-empty array of engine names.");
+  const unique = [];
+  for (const name of browsers) {
+    if (!SUPPORTED_BROWSERS.includes(name)) throw usageError(`Unknown browser ${name}. Supported browsers: ${SUPPORTED_BROWSERS.join(", ")}.`);
+    if (!unique.includes(name)) unique.push(name);
+  }
+  return unique;
+}
+
+// Called only for an engine that already launched. A missing report means that emulated preference
+// failed in the run phase (payload/setup/measure): an incomplete verification, never an unavailable
+// environment. Only the environment phases can make a run unavailable.
+function engineStatus(reports, attempted) {
+  if (reports.length === 0 || reports.length < attempted) return "incomplete";
+  if (reports.every((report) => report.status === "complete")) return "complete";
+  if (reports.every((report) => report.status === "unsupported")) return "unsupported";
+  return "incomplete";
+}
+
+function engineReason(reports) {
+  const failed = reports.filter((report) => report.status !== "complete");
+  if (failed.length === 0) return null;
+  const error = failed[0].errors.find((entry) => entry.message);
+  return error ? error.message : `stato ${failed.map((report) => report.status).join(", ")}`;
+}
+
+function buildRun(parts) {
+  return {
+    provenance: "browser-automation",
+    mode: parts.mode,
+    status: parts.status,
+    snapshotId: parts.snapshotId ?? null,
+    engines: parts.engines ?? [],
+    environment: parts.environment ?? null,
+    expected: parts.expected ?? { scenarios: [], pairs: {} },
+    executed: parts.executed ?? { scenarios: [], pairs: {} },
+    scenarios: parts.scenarios ?? [],
+    measurements: parts.measurements ?? [],
+    coverage: parts.coverage ?? null,
+    unsupported: parts.unsupported ?? [],
+    errors: parts.errors ?? [],
+    notes: parts.notes ?? [],
+    partial: Boolean(parts.partial),
+    measuredAt: parts.measuredAt ?? null,
+  };
+}
+
+function unavailableEngines(names, phase, reason) {
+  return names.map((name) => ({ name, launched: false, status: "unavailable", version: null, executable: null, phase, reason }));
+}
+
+function idleRun({ mode, status, snapshotId, engines, errors, notes }) {
+  return buildRun({ mode, status, snapshotId, engines: engines ?? [], errors: errors ?? [], notes: notes ?? [], coverage: core.coverage([], []), environment: null, measuredAt: null });
+}
+
+// One page per emulated preference; the runtime measures both themes under that preference, so two
+// pages per engine cover the four theme/preference crossings (baseline and tuned).
+async function measureEngine(browser, engineName, { payload, runtimeSource, timeoutMs }) {
+  const reports = [];
+  const errors = [];
+  const html = runtimeFixtureHtml(payload, runtimeSource);
+  for (const preference of AUTOMATION_RUN_PREFERENCES) {
+    let context = null;
+    try {
+      context = await browser.newContext({ colorScheme: preference, reducedMotion: "reduce" });
+      // Network is blocked; only http(s) is aborted so the local srcdoc measurement frames still load.
+      await context.route(/^https?:\/\//i, (route) => route.abort());
+      const page = await context.newPage();
+      page.setDefaultTimeout(timeoutMs);
+      await page.setContent(html, { timeout: timeoutMs, waitUntil: "load" });
+      await page.waitForFunction(
+        ({ global, terminal }) => {
+          const controller = window[global];
+          if (!controller) return false;
+          const report = controller.report();
+          return Boolean(report && terminal.indexOf(controller.status().state) !== -1);
+        },
+        { global: DIAGNOSTIC_RUNTIME_GLOBAL, terminal: AUTOMATION_TERMINAL_STATES },
+        { timeout: timeoutMs },
+      );
+      reports.push(await page.evaluate((global) => window[global].report(), DIAGNOSTIC_RUNTIME_GLOBAL));
+    } catch (error) {
+      errors.push({
+        phase: "measure", cause: "runtime-run-failed", engine: engineName, scenarioId: null, pairId: null,
+        message: `preferenza ${preference}: ${error && error.message ? error.message : error}`,
+      });
+    } finally {
+      if (context) { try { await context.close(); } catch { /* best effort */ } }
+    }
+  }
+  return { reports, errors, attempted: AUTOMATION_RUN_PREFERENCES.length };
+}
+
+/**
+ * Run the shared verification runtime through Playwright and return a structured VerificationRun.
+ *
+ * `mode` is `auto|off|required` (plan §4.2): `auto` tries every supported engine and declares the
+ * ones it skips, `required` defaults to Chromium, `off` performs no discovery and no import at all.
+ * `browsers` is an explicit engine list; the CLI validates the flag/browser-list combination later,
+ * so combining a list with `auto`/`off` is rejected here as a usage error too. `provider` allows a
+ * fully injected fake in the tests. The function returns data only: no `process.exitCode`, no log.
+ */
+export async function runAutomation(session, options = {}) {
+  const root = path.resolve(options.root ?? process.cwd());
+  const mode = options.mode ?? "auto";
+  if (!AUTOMATION_MODES.includes(mode)) throw usageError(`Unknown automation mode ${mode}. Expected one of ${AUTOMATION_MODES.join(", ")}.`);
+  const browsers = options.browsers;
+  if (browsers != null && mode === "off") throw usageError("An explicit browser list cannot be combined with automation mode off.");
+  if (browsers != null && mode === "auto") throw usageError("An explicit browser list cannot be combined with automation mode auto; use required.");
+  const selected = selectEngines(mode, browsers);
+  const snapshotId = session && typeof session === "object" && typeof session.snapshotId === "string" ? session.snapshotId : null;
+  const timeoutMs = Number.isFinite(options.timeoutMs) && options.timeoutMs > 0 ? options.timeoutMs : DEFAULT_AUTOMATION_TIMEOUT_MS;
+
+  if (mode === "off") {
+    return idleRun({ mode, status: "disabled", snapshotId, notes: ["Automazione disattivata: Playwright non viene né risolto né importato."] });
+  }
+
+  const provider = options.provider ?? createPlaywrightProvider({ root });
+  const runtimeSource = options.runtimeSource ?? createDiagnosticRuntimeSource();
+  const payload = sessionPayload(session);
+  const engines = [];
+  const errors = [];
+  const reports = [];
+
+  try {
+    const opened = await provider.open();
+    if (!opened.ok) {
+      errors.push({ phase: opened.phase, cause: opened.cause, engine: null, scenarioId: null, pairId: null, message: opened.message });
+      return idleRun({ mode, status: "unavailable", snapshotId, engines: unavailableEngines(selected, opened.phase, opened.message), errors, notes: [`Ambiente non disponibile: ${opened.message}`] });
+    }
+    for (const name of selected) {
+      const availability = await provider.availability(name);
+      if (!availability.available) {
+        engines.push({ name, launched: false, status: "unavailable", version: null, executable: availability.executable ?? null, phase: availability.phase ?? "availability", reason: availability.message });
+        errors.push({ phase: availability.phase ?? "availability", cause: availability.cause ?? "engine-unavailable", engine: name, scenarioId: null, pairId: null, message: availability.message });
+        continue;
+      }
+      let browser;
+      try {
+        browser = await provider.launch(name, { timeout: timeoutMs });
+      } catch (error) {
+        const phase = error.phase ?? "launch";
+        engines.push({ name, launched: false, status: "unavailable", version: null, executable: availability.executable, phase, reason: error.message });
+        errors.push({ phase, cause: error.cause && error.cause.code ? error.cause.code : "launch-failed", engine: name, scenarioId: null, pairId: null, message: error.message });
+        continue;
+      }
+      let version = null;
+      try { version = typeof browser.version === "function" ? browser.version() : null; } catch { version = null; }
+      try {
+        const run = await measureEngine(browser, name, { payload, runtimeSource, timeoutMs });
+        for (const report of run.reports) reports.push(namespaceReport(name, report));
+        errors.push(...run.errors);
+        const status = engineStatus(run.reports, run.attempted);
+        const reason = status === "complete" ? null : (run.errors.length ? run.errors[0].message : engineReason(run.reports));
+        engines.push({ name, launched: true, status, version, executable: availability.executable, phase: status === "complete" ? null : "measure", reason });
+      } catch (error) {
+        const message = error && error.message ? error.message : String(error);
+        errors.push({ phase: "measure", cause: "engine-run-failed", engine: name, scenarioId: null, pairId: null, message });
+        engines.push({ name, launched: true, status: "incomplete", version, executable: availability.executable, phase: "measure", reason: message });
+      } finally {
+        try { await browser.close(); } catch { /* best effort */ }
+      }
+    }
+  } finally {
+    if (typeof provider.close === "function") { try { await provider.close(); } catch { /* best effort */ } }
+  }
+
+  const measurements = [];
+  const scenarioRecords = [];
+  const unsupported = [];
+  const expectedPairs = {};
+  const executedPairs = {};
+  const expectedScenarioIds = [];
+  const executedScenarioIds = [];
+  const environmentsByEngine = new Map();
+  let measuredAt = null;
+  for (const report of reports) {
+    scenarioRecords.push(...report.scenarios);
+    measurements.push(...report.measurements);
+    unsupported.push(...report.unsupported);
+    errors.push(...report.errors);
+    Object.assign(expectedPairs, report.expected.pairs);
+    Object.assign(executedPairs, report.executed.pairs);
+    expectedScenarioIds.push(...report.expected.scenarios);
+    executedScenarioIds.push(...report.executed.scenarios);
+    if (report.environment) {
+      const group = environmentsByEngine.get(report.engine) ?? [];
+      group.push({ ...report.environment, measuredAt: report.measuredAt });
+      environmentsByEngine.set(report.engine, group);
+    }
+    if (report.measuredAt && (measuredAt === null || report.measuredAt > measuredAt)) measuredAt = report.measuredAt;
+  }
+
+  const expectedList = expectedScenarioIds.map((id) => ({ id, pairIds: Array.isArray(expectedPairs[id]) ? expectedPairs[id] : [] }));
+  const coverage = core.coverage(expectedList, measurements);
+
+  // Only the environment phases can make a run unavailable. A launched engine that produced no report
+  // or a failure report is incomplete; an engine whose documents are all unsupported stays unsupported.
+  const launchedEngines = engines.filter((engine) => engine.launched);
+  const measurementErrors = errors.filter((error) => !ENVIRONMENT_PHASES.includes(error.phase));
+  const partial = engines.some((engine) => engine.status !== "complete");
+  let status;
+  if (launchedEngines.length === 0) status = "unavailable";
+  else if (launchedEngines.every((engine) => engine.status === "unsupported") && measurements.length === 0) status = "unsupported";
+  else if (launchedEngines.every((engine) => engine.status === "complete") && measurements.length > 0 && coverage.complete && measurementErrors.length === 0) status = "complete";
+  else status = "incomplete";
+
+  const environment = environmentsByEngine.size === 0 ? null : {
+    engines: [...environmentsByEngine.entries()].map(([name, environments]) => {
+      const engine = engines.find((candidate) => candidate.name === name) ?? {};
+      return { name, version: engine.version ?? null, executable: engine.executable ?? null, environments };
+    }),
+  };
+
+  const notes = ["Automazione: la preferenza di sistema è emulata per ogni tema (matrice tema/preferenza), la rete è bloccata e il motion è ridotto durante le misure."];
+  if (partial) notes.push("Copertura parziale: non tutti i motori richiesti hanno completato la verifica; vedi engines ed errors. Le misure eseguite non coprono i motori mancanti.");
+
+  return buildRun({
+    mode, status, snapshotId, engines, environment,
+    expected: { scenarios: expectedScenarioIds, pairs: expectedPairs },
+    executed: { scenarios: executedScenarioIds, pairs: executedPairs },
+    scenarios: scenarioRecords, measurements, coverage, unsupported, errors, notes, partial, measuredAt,
+  });
 }
 
 export async function projectAudit(names = ["chromium"], { root = process.cwd(), configFile, emitReport = false } = {}) {

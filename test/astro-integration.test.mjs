@@ -58,10 +58,11 @@ test("package metadata keeps Astro as an optional peer with no runtime dependenc
 
   assert.equal(packageJson.dependencies, undefined);
   assert.equal(packageJson.devDependencies, undefined);
-  assert.deepEqual(packageJson.peerDependencies, { astro: ">=5", playwright: ">=1.40", "@playwright/test": ">=1.40" });
+  assert.deepEqual(packageJson.peerDependencies, { astro: ">=5" });
   assert.equal(packageJson.peerDependenciesMeta?.astro?.optional, true);
-  assert.equal(packageJson.peerDependenciesMeta?.playwright?.optional, true);
-  assert.equal(packageJson.peerDependenciesMeta?.["@playwright/test"]?.optional, true);
+  assert.equal(packageJson.peerDependenciesMeta?.playwright, undefined);
+  assert.equal(packageJson.peerDependenciesMeta?.["@playwright/test"], undefined);
+  assert.ok(packageJson.files.includes("src"));
 });
 
 test("Astro rejects an explicitly selected missing config before writing outputs", async (t) => {

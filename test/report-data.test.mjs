@@ -1093,3 +1093,44 @@ test("palette-dark-blend stays silent for decorative roles, unreachable searches
     assert.equal(silent.some((item) => item.id === "palette-dark-blend:primary"), false, `expected silence for ${JSON.stringify(paletteCss.slice(0, 48))}`);
   }
 });
+
+test("capture adopts an effective config file while keeping the legacy default path", async (t) => {
+  const root = await fixture(t);
+  const config = { palette: "src/styles/tokens/palette.css", output: "src/styles/tokens/colors.css" };
+  const legacy = await captureReportInputs(root, config);
+  assert.equal(legacy.files.config, "smart-colors.config.mjs", "the legacy two-argument call keeps the frozen default config name");
+  assert.deepEqual(await captureReportInputs(root, config, {}), legacy, "an empty option bag is byte-for-byte the legacy call");
+
+  await writeFile(path.join(root, "custom.config.mjs"), "export default {};");
+  const adopted = await captureReportInputs(root, config, { configFile: "custom.config.mjs" });
+  assert.equal(adopted.files.config, "custom.config.mjs");
+  const configInput = adopted.inputs.find(([name]) => name === "config");
+  assert.deepEqual(configInput.slice(0, 2), ["config", "custom.config.mjs"]);
+  assert.equal(configInput[3], true);
+  assert.match(configInput[4], /^[a-f\d]{64}$/);
+});
+
+test("capture always records the motion output as a protected input, even when motion is disabled", async (t) => {
+  const root = await fixture(t);
+  const captured = await captureReportInputs(root);
+  assert.equal(captured.files.motion, "src/styles/colors-motion.css");
+  const motion = captured.inputs.find(([name]) => name === "motion");
+  assert.deepEqual(motion.slice(0, 2), ["motion", "src/styles/colors-motion.css"]);
+  assert.equal(motion[3], false);
+  assert.equal(motion[4], null);
+  const configured = await captureReportInputs(root, {
+    palette: "src/styles/tokens/palette.css", output: "src/styles/tokens/colors.css",
+    motion: { enabled: false, output: "src/styles/custom-motion.css" },
+  });
+  assert.equal(configured.files.motion, "src/styles/custom-motion.css");
+});
+
+test("capture reports an existing unreadable input instead of treating it as absent", async (t) => {
+  const root = await fixture(t);
+  await mkdir(path.join(root, "src/styles/tokens/colors-tuning.css"), { recursive: true });
+  await assert.rejects(() => captureReportInputs(root), (error) => {
+    assert.equal(error.code, "SMART_COLORS_INPUT_UNREADABLE");
+    assert.match(error.message, /"tuning"/);
+    return true;
+  });
+});

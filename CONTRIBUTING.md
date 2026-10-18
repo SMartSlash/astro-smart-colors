@@ -35,13 +35,29 @@ network access, so it stays fast enough to run on every save.
   a suggestion is never applied automatically.
 - **No colour is "correct" in isolation.** A change to a threshold, a role or a
   derivation must show which measured pairs it moves.
-- **Report renderers stay static.** No scripts, no external assets, and an
-  unverified snapshot never receives a positive verdict or a suggested colour.
+- **The full report stays static.** `reports/smart-colors.html` keeps
+  `script-src 'none'`, no external assets, and an unverified snapshot never
+  receives a positive verdict or a suggested colour. The preview may embed the
+  isolated diagnostic runtime behind its own SHA-256 CSP and sandboxed frames;
+  that runtime touches only the in-memory DOM and never the project files.
 
 ## Optional peers and browser E2E
 
-`astro` and `playwright` (`@playwright/test`) are optional peer dependencies:
-`init`, `build` and `check` run without either, while `audit` and `report` load
-Playwright on demand to measure computed styles in a real browser. The unit and
-contract suite in `test/` runs entirely in Node (`pnpm test`), without launching
-a browser.
+`astro` is the only declared peer, and it is optional. Playwright is **not** a
+dependency or a peer: when `build`/`report` automation or the strict `audit` asks
+for it, the CLI discovers an already-installed `playwright` or `@playwright/test`
+from the consumer root, checks the existing browser binary and never downloads
+one. `--automation=off` performs no discovery or import.
+
+The unit and contract suite in `test/` runs entirely in Node (`pnpm test`) with
+an injected fake provider where needed, without launching a browser. The
+end-to-end browser harnesses are tools of the reference site repository, not
+files shipped by this package; they use the site's `@playwright/test` and
+pre-installed binaries and must not be presented as package requirements.
+
+## Documentation and examples
+
+Keep consumer commands runnable with `pnpm exec smart-colors` and the effective
+`--root`/`--config` paths. The `scripts/*` harnesses in the site repository are
+not package files and must not be documented as shipped examples. Do not bump
+the version or create a tag as part of a documentation change.

@@ -1,31 +1,33 @@
 #!/usr/bin/env node
-import { readFile } from "node:fs/promises";
-import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { arrow, badge, check, file, note, title, warn } from "./cli-style.mjs";
-import { generateColorTokens } from "./generate-colors.mjs";
+import { compactRatio } from "./format-report-html.mjs";
+import { runDiagnosticWorkflow } from "./diagnostic-workflow.mjs";
 import { initSmartColors } from "./init.mjs";
 import { DEFAULT_CONFIG_FILE } from "./load-config.mjs";
 import { inspectTuningStatus } from "./report-data.mjs";
 
 const VALID_COMMANDS = new Set(["build", "check", "init", "audit", "report"]);
 const BROWSERS = new Set(["chromium", "firefox", "webkit"]);
+const AUTOMATION_MODES = new Set(["auto", "off", "required"]);
 const USAGE = `Usage: smart-colors [build|check|init|audit|report] [options]
 
 Commands:
-  build   Generate semantic color tokens (default)
+  build   Generate semantic color tokens and the two HTML artifacts (default)
   check   Verify generated color tokens are up to date
   init    Create a starter palette and colors-tuning.css
   audit   Audit generated tokens and colors-tuning.css in a browser
   report  Generate reports/smart-colors.html and reports/smart-colors-preview.html
 
 Options:
-  -c, --config <file>   Config file relative to --root (default: ${DEFAULT_CONFIG_FILE})
-  -r, --root <dir>      Project root (default: current working directory)
-      --palette <file>  Palette path for init (default: config.palette)
-      --tuning <file>   Tuning path for init (default: <palette dir>/colors-tuning.css)
-  -d, --dir <dir>       Token directory for init (default: src/styles/tokens)
-  -y, --yes             Skip the init confirmation prompt
-  -h, --help            Show this help message`;
+  -c, --config <file>        Config file relative to --root (default: ${DEFAULT_CONFIG_FILE})
+  -r, --root <dir>           Project root (default: current working directory)
+      --automation <mode>    Playwright automation for build/report: auto|off|required (default: auto)
+      --palette <file>       Palette path for init (default: config.palette)
+      --tuning <file>        Tuning path for init (default: <palette dir>/colors-tuning.css)
+  -d, --dir <dir>            Token directory for init (default: src/styles/tokens)
+  -y, --yes                  Skip the init confirmation prompt
+  -h, --help                 Show this help message`;
 
 const parsed = parseArgs(process.argv.slice(2));
 
@@ -45,10 +47,12 @@ if (parsed.errors.length) {
 try {
   if (parsed.command === "init") {
     await runInit(parsed);
-  } else if (parsed.command === "audit" || parsed.command === "report") {
-    await runAuditOrReport(parsed);
+  } else if (parsed.command === "audit") {
+    await runAudit(parsed);
+  } else if (parsed.command === "check") {
+    await runCheck(parsed);
   } else {
-    await runBuildOrCheck(parsed);
+    await runWorkflow(parsed);
   }
 } catch (error) {
   console.error(`[smart-colors] ${formatCliError(error)}`);
@@ -62,9 +66,10 @@ function formatCliError(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
-async function runAuditOrReport({ command, browsers, root, configFile }) {
+// Legacy strict/read-only audit: a separate writer path, never the new pipeline (§4.1).
+async function runAudit({ browsers, root, configFile }) {
   const { projectAudit } = await import("./browser-audit.mjs");
-  await projectAudit(browsers, { root, configFile, emitReport: command === "report" });
+  await projectAudit(browsers, { root, configFile, emitReport: false });
 }
 
 async function runInit({ root, configFile, dir, palette, tuning, yes }) {
@@ -91,40 +96,50 @@ async function runInit({ root, configFile, dir, palette, tuning, yes }) {
     "",
     `  ${title("Prossimi passi")}`,
     `    1. Modifica la palette in ${file(palettePath)}`,
-    "    2. Genera i token CSS:   smart-colors build",
+    "    2. Genera i token CSS:   pnpm exec smart-colors build",
     '    3. Importa nel tuo CSS:  @import "./colors.css";',
     '                              @import "./colors-tuning.css";',
     "",
   ].join("\n"));
 }
 
-async function runBuildOrCheck({ root, configFile, command }) {
-  const report = await generateColorTokens({
+// Build and report share one pipeline; the exit policy and the summary come from the workflow.
+async function runWorkflow({ command, root, configFile, automation, browsers }) {
+  const mode = automation ?? (command === "report" && browsers ? "required" : "auto");
+  const result = await runDiagnosticWorkflow({
     root,
     configFile,
-    check: command === "check",
+    command,
+    automation: mode,
+    browsers: browsers && browsers.length ? browsers : undefined,
   });
 
-  for (const warning of report.warnings) {
-    console.warn(`[smart-colors] ${warning}`);
-  }
-  for (const suggestion of report.suggestions) {
-    console.warn(`[smart-colors] Suggestion: ${suggestion}`);
-  }
+  const lines = command === "build" ? buildOutcome(result) : reportOutcome(result);
+  console.log(`${lines.join("\n")}\n`);
 
-  const generated = report.outputs.filter((output) => output.changed).map((output) => output.path);
+  for (const warning of result.warnings) console.warn(`[smart-colors] ${warning}`);
+  for (const suggestion of result.suggestions) console.warn(`[smart-colors] Suggestion: ${suggestion}`);
+
+  process.exitCode = result.exitCode;
+}
+
+// Legacy read-only check: it never writes, never audits and never presents a previous HTML as current.
+async function runCheck({ root, configFile }) {
+  const { generateColorTokens } = await import("./generate-colors.mjs");
+  const report = await generateColorTokens({ root, configFile, check: true });
+
+  for (const warning of report.warnings) console.warn(`[smart-colors] ${warning}`);
+  for (const suggestion of report.suggestions) console.warn(`[smart-colors] Suggestion: ${suggestion}`);
+
   const outputs = report.outputs.map((output) => output.path);
   const tuning = await inspectTuningStatus(root, report.config);
-  const header = report.changed
-    ? (command === "check" ? "Controllo token" : "Token colore generati")
-    : "Controllo token completato";
-  const lines = [`${badge()} ${header}`, ""];
+  const lines = [`${badge()} Controllo token`, ""];
 
   lines.push(`  ${title("Stato")}`);
-  if (!(report.changed && command === "check")) {
-    const paths = report.changed ? generated.join(", ") : outputs.join(", ");
-    const suffix = report.changed ? " generated." : ` ${outputs.length === 1 ? "is" : "are"} up to date.`;
-    lines.push(`    ${check()} ${file(paths)}${suffix}`);
+  // A stale check reports the failing paths through the error channel only, so "out of date" is
+  // emitted exactly once and never as a success line.
+  if (!report.changed) {
+    lines.push(`    ${check()} ${file(outputs.join(", "))} ${outputs.length === 1 ? "is" : "are"} up to date.`);
   }
   const { warnings, suggestions } = report;
   lines.push(warnings.length === 0 && suggestions.length === 0
@@ -143,20 +158,10 @@ async function runBuildOrCheck({ root, configFile, command }) {
     `  ${title("Sorgenti e ambito")}`,
     `    palette   config.palette (${file(report.config.palette)}) è la sorgente del designer.`,
     `    tuning    ${file(tuning.path)} — ${dimParenthetical(tuning.summary)}.`,
-    "    nota      build/check verificano solo i default generati, NON il tuning nel browser né i componenti reali.",
+    "    nota      check è in sola lettura: non rigenera, non presenta HTML precedenti come correnti, non esegue audit.",
   );
 
-  if (await hasProjectReportScript({ root, configFile })) {
-    lines.push(
-      "",
-      `  ${title("Verifica nel browser")}`,
-      `    ${arrow()} Dalla root del progetto, esegui pnpm colors:report, poi apri ${file("reports/smart-colors-preview.html")}`,
-      "      per esempi realmente misurati e proposte manuali. Un'anteprima già presente potrebbe essere obsoleta.",
-    );
-  }
-
-  lines.push("");
-  console.log(lines.join("\n"));
+  console.log(`${lines.join("\n")}\n`);
 
   if (report.errors.length) {
     for (const error of report.errors) console.error(`[smart-colors] ${error}`);
@@ -169,17 +174,146 @@ function dimParenthetical(summary) {
   return match ? `${match[1]} ${note(match[2])}` : summary;
 }
 
-async function hasProjectReportScript({ root, configFile }) {
-  if (configFile !== undefined && path.resolve(root, configFile) !== path.resolve(root, DEFAULT_CONFIG_FILE)) return false;
+function buildOutcome(result) {
+  const lines = [`${badge()} Build completata`, ""];
+  appendedOutcomeSections(lines, result, { headline: buildHeadline(result) });
+  return lines;
+}
 
-  try {
-    const projectPackage = JSON.parse(await readFile(path.resolve(root, "package.json"), "utf8"));
-    const script = projectPackage?.scripts?.["colors:report"];
-    return typeof script === "string" && script.trim().length > 0;
-  } catch {
-    // Optional project guidance must not affect generation diagnostics or exit status.
-    return false;
+function reportOutcome(result) {
+  const lines = [`${badge()} Report contrasto generato`, ""];
+  appendedOutcomeSections(lines, result, { headline: reportHeadline() });
+  return lines;
+}
+
+function buildHeadline(result) {
+  if (result.strictInvalid) return `Contratto di contrasto non valido: nessun CSS scritto (${agree(result.analysis.errors.length, "errore", "errori")} nel modello).`;
+  const outputs = result.writeOutcome?.outputs ?? [];
+  if (result.writeOutcome?.changed) return `${file(outputs.filter((output) => output.changed).map((output) => output.path).join(", "))} generated.`;
+  const paths = outputs.map((output) => output.path).join(", ");
+  return `${file(paths)} ${outputs.length === 1 ? "is" : "are"} up to date.`;
+}
+
+function reportHeadline() {
+  return "Nessun file CSS, palette, config o tuning è stato modificato.";
+}
+
+// esito -> problemi (grouped per pair/theme) -> copertura -> modello -> due link -> azione.
+function appendedOutcomeSections(lines, result, { headline }) {
+  lines.push(`  ${title("Esito")}`);
+  lines.push(`    ${result.strictInvalid ? warn() : check()} ${headline}`);
+
+  lines.push("", `  ${title("Problemi")}`);
+  if (result.problems.length) {
+    for (const problem of result.problems) lines.push(`    ${warn()} ${problemLine(problem)}`);
+    lines.push(`    ${note("Sotto minimo: evita la coppia per l'uso indicato. Sotto target: minimo rispettato, manca il margine del progetto.")}`);
+  } else if (result.coverage.measuredPairs === 0) {
+    // No browser measurement: surface the model explicitly, never an "all clear" that was not measured.
+    if (result.modelProblems.length) {
+      lines.push(`    ${warn()} Nessuna coppia misurata nel browser: avvisi del modello (advisory), non una misura eseguita.`);
+      for (const problem of result.modelProblems) lines.push(`    ${note("MODELLO")} ${problemLine(problem)}`);
+    } else {
+      lines.push(`    ${check()} Nessuna coppia misurata nel browser e nessun avviso del modello nelle coppie dichiarate.`);
+    }
+  } else {
+    lines.push(`    ${check()} Nessun problema nelle coppie misurate. Non è una certificazione dell'interfaccia completa.`);
   }
+
+  lines.push("", `  ${title("Copertura")}`);
+  for (const line of coverageLines(result)) lines.push(`    ${line}`);
+
+  lines.push("", `  ${title("Modello")}`);
+  for (const line of modelLines(result)) lines.push(`    ${line}`);
+
+  lines.push("", `  ${title("Link")}`);
+  const previewUrl = pathToFileURL(result.publication.previewPath).href;
+  const reportUrl = pathToFileURL(result.publication.reportPath).href;
+  lines.push(`    ${check()} Anteprima: ${file(result.publication.previewPath)}`);
+  lines.push(`    ${check()} Report:    ${file(result.publication.reportPath)}`);
+  lines.push(`    ${arrow()} ${previewUrl}`);
+  lines.push(`    ${arrow()} ${reportUrl}`);
+
+  lines.push("", `  ${title("Prossimo passo")}`);
+  lines.push(`    ${arrow()} ${nextCommand(result)}`);
+  lines.push(`      Snapshot statico: misura i byte incorporati, non i file sul disco. Dopo ogni modifica rigenera.`);
+}
+
+function problemLine(problem) {
+  const status = problem.status === "below-minimum" ? "SOTTO MINIMO" : "SOTTO TARGET";
+  const scheme = problem.scheme === "light" ? "chiaro" : "scuro";
+  return `${status} · ${scheme} · ${problem.foregroundToken} su ${problem.backgroundToken}: ${ratio(problem.ratio, [problem.minimum, problem.target])} (minimo ${ratio(problem.minimum)}, target ${ratio(problem.target)}).`;
+}
+
+// Model facts before the links: strict errors, warnings and suggestions are the baseline advisory
+// and must be visible without opening an artifact. The detailed warning strings stay on stderr.
+function modelLines(result) {
+  const errors = result.analysis.errors.length;
+  const warnings = result.analysis.warnings.length;
+  const suggestions = result.analysis.suggestions.length;
+  const clean = errors === 0 && warnings === 0 && suggestions === 0;
+  const lines = [clean
+    ? `${check()} Contrasto baseline: 0 errori, 0 avvisi, 0 suggerimenti.`
+    : `${warn()} Contrasto baseline: ${errors} ${agree(errors, "errore", "errori")}, ${warnings} ${agree(warnings, "avviso", "avvisi")}, ${suggestions} ${agree(suggestions, "suggerimento", "suggerimenti")} ${note("(vedi dettagli su stderr)")}.`];
+  for (const error of result.analysis.errors) lines.push(`${warn()} ${error.split("\n")[0]}`);
+  return lines;
+}
+
+function coverageLines(result) {
+  const { coverage } = result;
+  const engines = coverage.engines.map((engine) => `${engine.name}${engine.version ? ` ${engine.version}` : ""}${engine.launched ? "" : ` (${engine.status})`}`);
+  const engineText = engines.length ? engines.join(", ") : "nessun motore";
+  if (result.strictInvalid) {
+    const requested = result.requestedAutomation ?? {};
+    return [`Automazione non eseguita: contratto di contrasto del modello non valido (richiesta: modalità ${requested.mode ?? "n/d"}${requested.browsers ? `, browser ${requested.browsers.join(", ")}` : ""}). Gli HTML restano diagnostici e nessun browser è stato risolto.`];
+  }
+  if (coverage.status === "disabled") {
+    return ["Automazione disattivata: nessuna misura browser è inclusa e Playwright non è stato risolto."];
+  }
+  if (coverage.launched === 0) {
+    const reason = result.run.errors?.find((error) => error.message)?.message ?? "motivo non disponibile";
+    return [`Playwright non disponibile: ${reason}`, "Gli HTML sono comunque generati senza misure automatiche."];
+  }
+  const status = coverage.complete ? "completa negli ambienti eseguiti" : "parziale o incompleta";
+  const lines = [
+    `Automazione ${status} · ${gridSummary(coverage)} · motori: ${engineText}.`,
+    `Scenari attesi/eseguiti: ${coverage.expectedScenarios}/${coverage.executedScenarios} · coppie attese/misurate: ${coverage.expectedPairs}/${coverage.measuredPairs} · non misurate: ${coverage.unmeasured} · non supportate: ${coverage.unsupported}.`,
+  ];
+  // After a launch the phase, engine and reason must be visible: a skipped or failed engine is not
+  // a silent gap. Causes come from the structured run, never from a guess.
+  for (const engine of result.run.engines ?? []) {
+    if (engine.launched === true && engine.status === "complete") continue;
+    lines.push(`${warn()} motore ${engine.name}: ${engine.status}${engine.reason ? ` — ${engine.reason}` : ""}${engine.phase ? ` (fase ${engine.phase})` : ""}.`);
+  }
+  for (const error of result.run.errors ?? []) {
+    if (!error.message) continue;
+    lines.push(`${note(`fase ${error.phase ?? "n/d"} · ${error.engine ?? "ambiente"}`)} ${error.message}`);
+  }
+  return lines;
+}
+
+function gridSummary(coverage) {
+  const launched = coverage.engines.filter((engine) => engine.launched);
+  return `${launched.length} di ${coverage.requested} motori eseguiti`;
+}
+
+function nextCommand(result) {
+  const parts = ["pnpm", "exec", "smart-colors", "report", "--root", shellQuote(result.root)];
+  if (result.configFile && result.configFile !== DEFAULT_CONFIG_FILE) parts.push("--config", shellQuote(result.configFile));
+  return parts.join(" ");
+}
+
+function shellQuote(value) {
+  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+// Threshold-aware: a value that only rounds up to a threshold must never be shown as if it met it.
+function ratio(value, thresholds = []) {
+  if (!Number.isFinite(value)) return "non disponibile";
+  return compactRatio(value, thresholds).replace("&lt;", "<");
+}
+
+function agree(count, one, many) {
+  return count === 1 ? one : many;
 }
 
 function parseArgs(args) {
@@ -190,7 +324,8 @@ function parseArgs(args) {
     palette: undefined,
     tuning: undefined,
     dir: undefined,
-    browsers: [],
+    automation: undefined,
+    browsers: undefined,
     yes: false,
     help: false,
     errors: [],
@@ -222,6 +357,27 @@ function parseArgs(args) {
         parsedArgs.errors.push("Missing value for --config.");
       } else {
         parsedArgs.configFile = value;
+      }
+      continue;
+    }
+
+    if (arg === "--automation") {
+      const value = args[index + 1];
+      if (isMissingOptionValue(value)) {
+        parsedArgs.errors.push(`Missing value for ${arg}.`);
+      } else {
+        parsedArgs.automation = value;
+        index += 1;
+      }
+      continue;
+    }
+
+    if (arg.startsWith("--automation=")) {
+      const value = arg.slice("--automation=".length);
+      if (!value) {
+        parsedArgs.errors.push("Missing value for --automation.");
+      } else {
+        parsedArgs.automation = value;
       }
       continue;
     }
@@ -333,6 +489,7 @@ function parseArgs(args) {
     }
   }
 
+  // §4.2: only report and audit accept a browser list; build must not introduce one.
   if (extraPositionals.length) {
     if (parsedArgs.command === "audit" || parsedArgs.command === "report") {
       parsedArgs.browsers = [...new Set(extraPositionals)];
@@ -342,8 +499,27 @@ function parseArgs(args) {
     } else {
       parsedArgs.errors.push(`Unexpected arguments: ${extraPositionals.join(", ")}.`);
     }
-  } else if (parsedArgs.command === "audit" || parsedArgs.command === "report") {
+  } else if (parsedArgs.command === "audit") {
     parsedArgs.browsers = ["chromium"];
+  }
+
+  if (parsedArgs.automation !== undefined) {
+    if (!AUTOMATION_MODES.has(parsedArgs.automation)) {
+      parsedArgs.errors.push(`Unknown automation mode ${parsedArgs.automation}. Expected one of auto, off, required.`);
+    } else if (parsedArgs.command !== "build" && parsedArgs.command !== "report") {
+      parsedArgs.errors.push("Option --automation is only supported by build and report.");
+    }
+  }
+
+  if (parsedArgs.browsers && (parsedArgs.command === "report")) {
+    if (parsedArgs.automation === "off") {
+      parsedArgs.errors.push("An explicit browser list cannot be combined with automation mode off.");
+    } else if (parsedArgs.automation === "auto") {
+      parsedArgs.errors.push("An explicit browser list cannot be combined with automation mode auto; use required.");
+    } else if (parsedArgs.automation === undefined) {
+      // An explicit report browser list implies a deterministic, strict request.
+      parsedArgs.automation = "required";
+    }
   }
 
   if (parsedArgs.command !== "init") {

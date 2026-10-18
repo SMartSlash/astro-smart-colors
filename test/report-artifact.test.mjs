@@ -8,6 +8,7 @@ import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { defaultSmartColorsConfig } from "../src/defaults.mjs";
 import { formatContrastReportHtml } from "../src/format-report-html.mjs";
+import { formatContrastPreviewHtml } from "../src/format-report-preview.mjs";
 import { DEFAULT_CONFIG_FILE } from "../src/load-config.mjs";
 import * as artifact from "../src/report-artifact.mjs";
 
@@ -372,4 +373,33 @@ test("failed atomic rename preserves the old report and cleans up its complete t
   });
   await assertRefusal({ root, config, report: next }, /fixture rename failure/);
   assert.equal(rename.mock.callCount(), 1);
+});
+
+test("publishes the pair file-by-file: a failed second rename keeps the first artifact and leaves no temporaries", async (t) => {
+  const { root, config } = await createProject(t);
+  const first = reportFixture({ notes: ["first"] });
+  const next = reportFixture({ notes: ["next"] });
+  await writeContrastReport({ root, config, report: first, preview: true });
+  const originalRename = fs.rename;
+  let calls = 0;
+  const rename = mockBuiltin(t, fs, "rename", async (source, destination) => {
+    calls += 1;
+    if (calls === 2) throw new Error("fixture second rename failure");
+    return originalRename(source, destination);
+  });
+  await assert.rejects(() => writeContrastReport({ root, config, report: next, preview: true }), /fixture second rename failure/);
+  assert.equal(rename.mock.callCount(), 2);
+  // Atomic per file, never a transaction over the pair: the report is updated, the preview is not.
+  assert.equal(await readFile(path.join(root, REPORT_PATH), "utf8"), formatContrastReportHtml(next));
+  assert.equal(await readFile(path.join(root, "reports/smart-colors-preview.html"), "utf8"), formatContrastPreviewHtml(first));
+  assert.deepEqual((await readdir(path.join(root, "reports"))).sort(), ["smart-colors-preview.html", "smart-colors.html"]);
+  for (const filePath of [path.join(root, REPORT_PATH), path.join(root, "reports/smart-colors-preview.html")]) {
+    assert.equal((await readFile(filePath)).subarray(0, Buffer.byteLength(MARKER)).toString("utf8"), MARKER);
+  }
+});
+
+test("refuses a report path colliding with the motion output even when motion is disabled", async (t) => {
+  const { root } = await createProject(t);
+  const config = { ...structuredClone(defaultSmartColorsConfig), motion: { enabled: false, output: REPORT_PATH } };
+  await assertRefusal({ root, config, report: reportFixture() }, /config\.motion\.output/);
 });

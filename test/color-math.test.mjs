@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { fitToSrgb, mixOklch, oklch, serializedColor } from "../src/color-math.mjs";
+import { clamp, contrast, fitToSrgb, mixOklch, oklch, serializedColor } from "../src/color-math.mjs";
+import { createVerificationCore } from "../src/verification-core.mjs";
 
 function close(actual, expected) {
   for (const channel of ["l", "c", "h"]) {
@@ -59,4 +60,30 @@ test("serializedColor uses the exact emitted precision without a second gamut ma
   assert.equal(oklch(emitted), oklch(original));
   assert.deepEqual(serializedColor(emitted), emitted);
   assert.equal(original.l, 0.985249);
+});
+
+test("color-math re-exports the shared numeric contract with no second implementation", () => {
+  const core = createVerificationCore();
+  const grid = [
+    { l: 0.5, c: 0.02, h: 392 },
+    { l: 0.8, c: 0.4, h: 32.41 },
+    { l: 0.34, c: 0.3, h: 140 },
+    { l: 0.5, c: 0.02, h: -12 },
+    { l: 0.9496, c: 0.0127, h: 86.83 },
+    { l: 0.1, c: 0.02, h: 260 },
+  ];
+  for (const color of grid) {
+    assert.deepEqual(core.fitToSrgb(color), fitToSrgb(color));
+    assert.deepEqual(core.serializedColor(color), serializedColor(color));
+    assert.equal(core.oklch(color), oklch(color));
+  }
+  for (const first of grid) {
+    for (const second of grid) {
+      assert.equal(core.contrast(first, second), contrast(first, second));
+    }
+  }
+  for (const ratio of [0, 0.25, 0.7592, 1]) {
+    close(core.mixOklch(grid[0], grid[1], ratio), mixOklch(grid[0], grid[1], ratio));
+  }
+  assert.equal(core.clamp(-1, 0, 1), clamp(-1, 0, 1));
 });

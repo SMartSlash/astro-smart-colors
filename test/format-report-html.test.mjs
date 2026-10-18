@@ -516,10 +516,10 @@ function deepFreeze(value) {
 
 test("exports the renderer with its internal helpers and returns a complete marked static Italian document", () => {
   assert.deepEqual(Object.keys(renderer).sort(), [
-    "CSP", "MARKER", "VARIANT_SHIFT_THRESHOLD", "agree", "baselineNote", "colorChoice", "colorCss", "compactRatio",
-    "deltaSummary", "entriesFor", "escape", "familyAtlasData", "fileRole", "formatContrastReportHtml",
-    "issueGroups", "it", "list", "overlapList", "overlapView", "prepareContrastReport", "proposalSentence", "proposalView", "record",
-    "sampleVisual", "sideEffectsHtml", "status", "validation", "variantShiftView",
+    "CSP", "MARKER", "VARIANT_SHIFT_THRESHOLD", "agree", "automationHtml", "automationScope", "baselineNote", "colorChoice", "colorCss", "compactRatio",
+    "cssEmbedHtml", "deltaSummary", "entriesFor", "escape", "familyAtlasData", "fileRole", "formatContrastReportHtml",
+    "isDiagnosticSession", "issueGroups", "it", "list", "overlapList", "overlapView", "prepareContrastReport", "prepareDiagnosticReport", "proposalSentence", "proposalView", "record",
+    "sampleVisual", "sessionIdentityHtml", "sessionVerification", "sideEffectsHtml", "status", "validation", "variantShiftView",
   ]);
   const html = render(issueReport());
   assert.equal(html.split("\n")[0], "<!-- smart-colors-report:v1 -->");
@@ -966,4 +966,270 @@ test("rendering is deterministic, has no side effects on inputs and states scope
   assert.deepEqual(input, before);
   assert.equal(render(input), html);
   for (const phrase of ["sRGB con canali clipped", "non sostituisce un audit completo", "Trasparenze, foto, gradienti", "primo piano/sfondo", "né ricalcola i contrasti", "Nessuna garanzia di palette ottimale", "ricerca globale"]) assert.ok(html.includes(phrase), phrase);
+});
+
+// ---------------------------------------------------------------------------
+// SC-03 diagnostic session: the static report presents the model and the
+// automation, never as a local browser measurement, and never gains a script.
+// ---------------------------------------------------------------------------
+
+function diagnosticSession(overrides = {}) {
+  const sample = (scheme) => ({
+    browser: "model", scheme, preference: "no-preference", provenance: "model",
+    diagnostics: [diagnostic({ scheme, foregroundToken: "--color-primary-text", backgroundToken: "--color-primary-surface", ratio: 4.2 })],
+  });
+  return {
+    ...report({ scenarios: [] }),
+    schemaVersion: 1,
+    toolVersion: "0.3.0",
+    snapshotId: "snap-123",
+    config: { contrast: {}, roles: {} },
+    inputs: [{ name: "palette", path: "tokens/palette.css", present: true, sha256: "b".repeat(64) }],
+    css: { baseline: ":root { --color-bg: oklch(1 0 0); }", tuning: null, tuningSupport: "absent" },
+    model: { diagnostics: [], errors: [], warnings: [] },
+    samples: [sample("light")],
+    automation: { provenance: "model", mode: "off", status: "disabled", expected: { scenarios: [], pairs: [] }, executed: { scenarios: [], pairs: [] }, measurements: [], errors: [], environment: null, measuredAt: null },
+    ...overrides,
+  };
+}
+
+test("a diagnostic session renders a static model/automation section and links the preview", () => {
+  const html = render(diagnosticSession());
+  assert.equal(html.split("\n")[0], "<!-- smart-colors-report:v1 -->");
+  assert.doesNotMatch(html, /<script/i);
+  assert.match(html, /href="smart-colors-preview\.html"/);
+  assert.match(html, /Snapshot incorporato: <code>snap-123<\/code> · Versione tool: <code>0\.3\.0<\/code> · Input catturati: 1\/1\./);
+  assert.match(html, /<h2 id="sessione">Campioni dal modello e verifica automatizzata<\/h2>/);
+  assert.match(html, /Campioni calcolati dal modello del generatore, non da misure browser/);
+  assert.match(html, /Campioni dal modello/);
+  assert.match(html, /Verifica automatizzata \(Playwright\)/);
+  assert.match(html, /Automazione disattivata/);
+  assert.match(html, /<h2 id="css">CSS incorporato nello snapshot<\/h2>/);
+  assert.match(html, /<a href="#sessione">Campioni dal modello<\/a>/);
+  assert.doesNotMatch(html, /class="color-choice color-choice--suggested"/);
+});
+
+test("the report keeps a scriptless CSP and adds no script for a diagnostic session", () => {
+  const html = render(diagnosticSession());
+  const csp = html.match(/http-equiv="Content-Security-Policy" content="([^"]+)"/)[1].replaceAll("&#39;", "'");
+  assert.ok(csp.includes("script-src 'none'"));
+  assert.doesNotMatch(html, /<(?:script|iframe|button|input|form)\b|\son\w+=/i);
+});
+
+test("a diagnostic session escapes hostile identity and automation metadata", () => {
+  const attack = '<script>"&\u2028</script>';
+  const html = render(diagnosticSession({
+    snapshotId: attack,
+    toolVersion: attack,
+    automation: { provenance: "model", mode: attack, status: "unavailable", expected: {}, executed: {}, measurements: [], errors: [], environment: { browser: attack, version: attack }, measuredAt: attack },
+  }));
+  assert.doesNotMatch(html, /<script>"&/);
+  assert.ok(!html.includes(attack), "the raw attack string must never reach the markup");
+  assert.match(html, /&lt;script&gt;&quot;&amp;/);
+});
+
+test("diagnostic session rendering is deterministic and never mutates the input", () => {
+  const input = diagnosticSession();
+  const before = structuredClone(input);
+  deepFreeze(input);
+  const html = render(input);
+  assert.deepEqual(input, before);
+  assert.equal(render(input), html);
+});
+
+test("the session detector accepts the SC-03 payload and rejects the legacy snapshot", () => {
+  assert.equal(renderer.isDiagnosticSession(diagnosticSession()), true);
+  assert.equal(renderer.isDiagnosticSession(report()), false);
+  for (const value of [undefined, null, [], {}, { schemaVersion: 1 }, { schemaVersion: 1, css: {}, model: {}, samples: [] }]) {
+    assert.equal(renderer.isDiagnosticSession(value), false);
+  }
+});
+
+// Real VerificationRun shape (SC-05): engines[], environment.engines[], errors[] with
+// phase/cause/message, expected/executed, measurements with threshold and ratio.
+function automationRun(overrides = {}) {
+  return {
+    provenance: "browser-automation", mode: "required", status: "complete", snapshotId: "snap-123",
+    engines: [{ name: "chromium", launched: true, status: "complete", version: "151.0.7922.34", executable: "/opt/chromium", phase: null, reason: null }],
+    environment: { engines: [{ name: "chromium", version: "151.0.7922.34", executable: "/opt/chromium", environments: [{ userAgent: "Mozilla/5.0", language: "it-IT", preference: "light", forcedColors: false, measuredAt: "2026-07-01T12:00:00.000Z" }] }] },
+    expected: { scenarios: ["chromium/baseline-light-light"], pairs: { "chromium/baseline-light-light": ["light|color|--color-primary-text|--color-primary-surface"] } },
+    executed: { scenarios: ["chromium/baseline-light-light"], pairs: { "chromium/baseline-light-light": ["light|color|--color-primary-text|--color-primary-surface"] } },
+    scenarios: [{ id: "chromium/baseline-light-light", theme: "light", variant: "baseline", preference: "light", status: "measured", reason: null, engine: "chromium" }],
+    measurements: [{ pairId: "light|color|--color-primary-text|--color-primary-surface", scenarioId: "chromium/baseline-light-light", engine: "chromium", target: 4.6, minimum: 4.5, ratio: 4.7, status: "pass", error: null }],
+    coverage: { complete: true, expectedCount: 1, measuredCount: 1, scenarios: [], duplicateScenarios: [], missingScenarios: [], unexpectedScenarios: [], duplicates: [], unmeasured: [] },
+    unsupported: [], errors: [], notes: [], partial: false, measuredAt: "2026-07-01T12:00:00.000Z",
+    ...overrides,
+  };
+}
+
+test("automation details list versioned engines, phases, causes, thresholds and measurement groups", () => {
+  const run = automationRun({
+    partial: true,
+    engines: [
+      { name: "chromium", launched: true, status: "complete", version: "151.0.7922.34", executable: "/opt/chromium", phase: null, reason: null },
+      { name: "firefox", launched: false, status: "unavailable", version: null, executable: null, phase: "availability", reason: "browser binary unavailable at /opt/firefox" },
+    ],
+    errors: [
+      { phase: "availability", cause: "binary-missing", engine: "firefox", scenarioId: null, pairId: null, message: "firefox: install it with pnpm exec playwright install firefox" },
+      { phase: "measure", cause: "runtime-run-failed", engine: "chromium", scenarioId: null, pairId: null, message: "preferenza dark: timeout" },
+    ],
+    measurements: [
+      { pairId: "light|color|--color-primary-text|--color-primary-surface", scenarioId: "chromium/baseline-light-light", engine: "chromium", target: 4.6, minimum: 4.5, ratio: 4.2, status: "below-minimum", error: null },
+      { pairId: "light|color|--color-primary-text|--color-primary-surface", scenarioId: "webkit/baseline-light-light", engine: "webkit", target: 4.6, minimum: 4.5, ratio: 4.4, status: "below-target", error: null },
+      { pairId: "dark|color|--color-primary-text|--color-primary-surface", scenarioId: "chromium/baseline-dark-dark", engine: "chromium", target: 4.5, minimum: 4.5, ratio: 3.9, status: "below-minimum", error: null },
+    ],
+  });
+  const html = render(diagnosticSession({ automation: run }));
+  assert.match(html, /Copertura parziale o incompleta/);
+  assert.doesNotMatch(html, /Copertura completa negli ambienti eseguiti \(/);
+  assert.match(html, /<div><dt>Motori eseguiti<\/dt><dd>1 di 2<\/dd><\/div>/);
+  assert.match(html, /<div><dt>Copertura<\/dt><dd>parziale o incompleta<\/dd><\/div>/);
+  assert.match(html, /<div><dt>Errori di misura<\/dt><dd>1<\/dd><\/div>/);
+  assert.match(html, /<div><dt>Errori d&#39;ambiente<\/dt><dd>1<\/dd><\/div>/);
+  assert.match(html, /<code>chromium<\/code> 151\.0\.7922\.34 · Completa · eseguito/);
+  assert.match(html, /<code>firefox<\/code> · Non disponibile · non eseguito · fase <code>availability<\/code> — browser binary unavailable at \/opt\/firefox/);
+  assert.match(html, /<h4>Errori dell'automazione \(2\)<\/h4>/);
+  assert.match(html, /<code>availability<\/code> · <code>binary-missing<\/code> — firefox:/);
+  assert.match(html, /<code>measure<\/code> · <code>runtime-run-failed<\/code> — preferenza dark: timeout/);
+  assert.match(html, /<h4>Misure automatizzate \(3\)<\/h4>/);
+  assert.match(html, /<caption>Misure automatizzate per coppia<\/caption>/);
+  assert.match(html, /<th scope="row"><code>--color-primary-text<\/code> su <code>--color-primary-surface<\/code><\/th><td>Chiaro<\/td><td><code>4\.5:1<\/code><\/td><td><code>4\.6:1<\/code><\/td><td>4,20:1<\/td><td>Sotto il minimo<\/td><td>2<\/td>/);
+  assert.match(html, /<td>Scuro<\/td><td><code>4\.5:1<\/code><\/td><td><code>4\.5:1<\/code><\/td><td>3,90:1<\/td><td>Sotto il minimo<\/td><td>1<\/td>/);
+  assert.match(html, /<strong>Copertura non verificata:<\/strong>/);
+});
+
+test("an incomplete automation run with zero measurements still lists causes and unsupported reasons", () => {
+  const run = automationRun({
+    status: "incomplete", partial: true,
+    coverage: { complete: false, expectedCount: 2, measuredCount: 0, scenarios: [], duplicateScenarios: [], missingScenarios: ["chromium/baseline-light-light"], unexpectedScenarios: [], duplicates: [], unmeasured: [] },
+    engines: [{ name: "chromium", launched: true, status: "incomplete", version: "151.0", executable: "/opt/chromium", phase: "measure", reason: "preferenza light: timeout" }],
+    measurements: [],
+    errors: [{ phase: "measure", cause: "runtime-run-failed", engine: "chromium", scenarioId: null, pairId: null, message: "preferenza light: timeout" }],
+    unsupported: [{ id: "chromium/baseline-dark-dark", reason: "forced-colors is active", engine: "chromium" }],
+    expected: { scenarios: ["chromium/baseline-light-light", "chromium/baseline-dark-dark"], pairs: {} },
+    executed: { scenarios: [], pairs: {} },
+  });
+  const html = render(diagnosticSession({ automation: run }));
+  assert.match(html, /Copertura parziale o incompleta/);
+  assert.doesNotMatch(html, /Copertura completa/);
+  assert.match(html, /<div><dt>Scenari<\/dt><dd>0 di 2 eseguiti<\/dd><\/div>/);
+  assert.match(html, /<h4>Errori dell'automazione \(1\)<\/h4>/);
+  assert.match(html, /<code>measure<\/code> · <code>runtime-run-failed<\/code> — preferenza light: timeout/);
+  assert.match(html, /<h4>Scenari non supportati \(1\)<\/h4>/);
+  assert.match(html, /<code>chromium\/baseline-dark-dark<\/code> — forced-colors is active · motore <code>chromium<\/code>/);
+  assert.doesNotMatch(html, /<h4>Misure automatizzate/);
+  assert.match(html, /<strong>Copertura non verificata:<\/strong>/);
+});
+
+test("a complete automation run scopes the verification sentence to the executed environments", () => {
+  const html = render(diagnosticSession({ automation: automationRun() }));
+  assert.match(html, /<strong>Copertura verificata:<\/strong> le coppie automatizzate sono complete negli ambienti eseguiti/);
+  assert.match(html, /Copertura completa negli ambienti eseguiti \(i motori e gli scenari elencati qui sotto\), non universale/);
+  assert.doesNotMatch(html, /Copertura non verificata/);
+  assert.match(html, /Campioni calcolati dal modello del generatore, non da misure browser/);
+});
+
+test("session verification requires intact identity and complete automation in executed engines", () => {
+  assert.equal(renderer.sessionVerification(diagnosticSession({ automation: automationRun() })).verified, true);
+  assert.equal(renderer.sessionVerification(diagnosticSession({ automation: automationRun({ partial: true }) })).verified, false);
+  assert.equal(renderer.sessionVerification(diagnosticSession({ automation: automationRun({ status: "incomplete" }) })).verified, false);
+  assert.equal(renderer.sessionVerification(diagnosticSession({ automation: automationRun({ coverage: { complete: false, expectedCount: 1, measuredCount: 1 } }) })).verified, false);
+  assert.equal(renderer.sessionVerification(diagnosticSession({ automation: automationRun({ measurements: [] }) })).verified, false);
+  assert.equal(renderer.sessionVerification(diagnosticSession({ automation: automationRun(), inputDigest: "invalid" })).verified, false);
+  assert.equal(renderer.sessionVerification(report()), null);
+  const envScope = renderer.automationScope(automationRun({ errors: [{ phase: "availability", cause: "binary-missing", message: "x" }] }));
+  assert.equal(envScope.measurementErrors.length, 0);
+  assert.equal(envScope.environmentErrors.length, 1);
+  assert.equal(renderer.automationScope(automationRun({ measurements: [] })).complete, false);
+});
+
+// QA finding: a session with externally supplied, structurally valid scenarios must NOT inherit the
+// legacy "0 issue" outcome while its automation run is incomplete, partial, unsupported or absent.
+function sessionAllPass(overrides = {}) {
+  return diagnosticSession({ scenarios: [scenario({ diagnostics: [diagnostic({ ratio: 5 })] })], ...overrides });
+}
+
+function sessionWithIssue(overrides = {}) {
+  return diagnosticSession({
+    scenarios: [scenario({ diagnostics: [diagnostic({ ratio: 4.499999999999999 })] })],
+    proposals: [proposal()],
+    ...overrides,
+  });
+}
+
+const INCOMPLETE_RUN = { status: "incomplete", partial: true, coverage: { complete: false, expectedCount: 1, measuredCount: 0 }, measurements: [] };
+
+const AUTOMATION_GATE_CASES = [
+  ["missing automation", () => { const session = sessionAllPass(); delete session.automation; return session; }],
+  ["disabled automation", () => sessionAllPass({ automation: automationRun({ mode: "off", status: "disabled", partial: false, engines: [], measurements: [], coverage: { complete: false, expectedCount: 0, measuredCount: 0 } }) })],
+  ["incomplete automation", () => sessionAllPass({ automation: automationRun(INCOMPLETE_RUN) })],
+  ["unavailable automation", () => sessionAllPass({ automation: automationRun({ status: "unavailable", partial: true, coverage: { complete: false, expectedCount: 1, measuredCount: 0 }, measurements: [], engines: [{ name: "chromium", launched: false, status: "unavailable", version: null, phase: "discovery", reason: "Playwright non trovato" }] }) })],
+  ["partial automation", () => sessionAllPass({ automation: automationRun({ partial: true }) })],
+  ["unsupported automation", () => sessionAllPass({ automation: automationRun({ status: "unsupported", partial: true, coverage: { complete: false, expectedCount: 1, measuredCount: 0 }, measurements: [] }) })],
+  ["broken identity", () => sessionAllPass({ automation: automationRun(), inputDigest: "invalid" })],
+];
+
+test("a session never inherits a positive outcome while automation is incomplete, partial or missing", () => {
+  for (const [label, build] of AUTOMATION_GATE_CASES) {
+    const prepared = renderer.prepareDiagnosticReport(build());
+    assert.equal(prepared.verified, false, label);
+    assert.equal(prepared.outcome, "Esito non verificato o incompleto", label);
+    const html = render(build());
+    assert.doesNotMatch(html, /Esito positivo dello snapshot: 0 issue/, label);
+    assert.match(html, /Nessuna conclusione positiva/, label);
+    assert.match(html, /<strong>Copertura non verificata:<\/strong>/, label);
+  }
+});
+
+test("a session with valid scenarios and complete automation may conclude positively", () => {
+  assert.match(render(sessionAllPass({ automation: automationRun() })), /Esito positivo dello snapshot: 0 issue/);
+  const withProposal = render(sessionWithIssue({ automation: automationRun() }));
+  assert.match(withProposal, /1 problema di contrasto · 1 correzione verificata/);
+  assert.match(withProposal, /class="color-choice color-choice--suggested"/);
+  assert.equal(renderer.prepareDiagnosticReport(sessionWithIssue({ automation: automationRun() })).complete.length, 1);
+});
+
+test("a verified proposal loses its coverage when the automation run is not complete", () => {
+  const html = render(sessionWithIssue({ automation: automationRun(INCOMPLETE_RUN) }));
+  assert.doesNotMatch(html, /class="color-choice color-choice--suggested"/);
+  assert.match(html, /Non applicare correzioni non verificate/);
+  assert.equal(renderer.prepareDiagnosticReport(sessionWithIssue({ automation: automationRun(INCOMPLETE_RUN) })).complete.length, 0);
+});
+
+test("prepareDiagnosticReport downgrades only, never mutates the session and never consults itself", () => {
+  const input = sessionWithIssue({ automation: automationRun(INCOMPLETE_RUN) });
+  const before = structuredClone(input);
+  deepFreeze(input);
+  const prepared = renderer.prepareDiagnosticReport(input);
+  assert.equal(prepared.verified, false);
+  assert.equal(prepared.verification.verified, false);
+  assert.equal(prepared.outcome, "Esito non verificato o incompleto");
+  assert.deepEqual(input, before);
+  // A legacy snapshot keeps its own prepared view untouched and exposes no session verification.
+  assert.equal(renderer.prepareDiagnosticReport(report()).verification, null);
+  assert.equal(renderer.prepareDiagnosticReport(report()).verified, true);
+  // Both helpers terminate on the same session (no mutual recursion).
+  const session = sessionWithIssue({ automation: automationRun() });
+  assert.doesNotThrow(() => renderer.sessionVerification(session));
+  assert.doesNotThrow(() => renderer.prepareDiagnosticReport(session));
+  assert.equal(renderer.prepareDiagnosticReport(session).verified, true);
+});
+
+test("prepareDiagnosticReport downgrades only, never mutates the session and never consults itself", () => {
+  const input = sessionWithIssue({ automation: automationRun({ status: "incomplete", partial: true, coverage: { complete: false, expectedCount: 1, measuredCount: 0 }, measurements: [] }) });
+  const before = structuredClone(input);
+  deepFreeze(input);
+  const prepared = renderer.prepareDiagnosticReport(input);
+  assert.equal(prepared.verified, false);
+  assert.equal(prepared.verification.verified, false);
+  assert.equal(prepared.outcome, "Esito non verificato o incompleto");
+  assert.deepEqual(input, before);
+  // A legacy snapshot keeps its own prepared view untouched and exposes no session verification.
+  assert.equal(renderer.prepareDiagnosticReport(report()).verification, null);
+  assert.equal(renderer.prepareDiagnosticReport(report()).verified, true);
+  // Both helpers terminate on the same session (no mutual recursion).
+  const session = sessionWithIssue({ automation: automationRun() });
+  assert.doesNotThrow(() => renderer.sessionVerification(session));
+  assert.doesNotThrow(() => renderer.prepareDiagnosticReport(session));
+  assert.equal(renderer.prepareDiagnosticReport(session).verified, true);
 });

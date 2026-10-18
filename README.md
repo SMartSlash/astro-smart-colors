@@ -11,28 +11,33 @@ You author a few `@property` source colors. The package derives the rest at buil
 
 It runs build-time/dev-time only: the browser receives static CSS, **no client JavaScript** is required, and the package has **zero runtime dependencies**. Use it as an Astro integration or through the CLI in any project.
 
-[Quickstart](#quickstart) · [Daily API](#start-here-i-want-x--use-yz) · [Tuning](#runtime-tuning-colorstuningcss) · [CLI](#cli--browser-audit) · [Reference](./docs/REFERENCE.md)
+[Quickstart](#quickstart) · [Daily API](#start-here-i-want-x--use-yz) · [Tuning](#runtime-tuning-colorstuningcss) · [CLI](#cli--browser-audit) · [Reference](./docs/REFERENCE.md) · [Changelog](./CHANGELOG.md)
 
 ## Quickstart
 
-### 1. Create the two authored files
+Works in an Astro project and in a project with no Astro at all: `build` emits plain CSS.
+
+### 1. Requirements and install
+
+- **Node `>=22.12.0`** (the `engines` field). The generator and the CLI run on Node only; no browser is involved unless you ask for `audit` or `report`.
+- **No runtime dependencies and no build step**: the ESM sources ship as they are, so installing from a tag is enough.
+- The package is distributed **from GitHub**; nothing is published to npm.
 
 ```sh
-smart-colors init
+pnpm add -D github:SMartSlash/astro-smart-colors#v0.3.0
 ```
 
-`init` writes a starter `src/styles/tokens/palette.css` and a `src/styles/tokens/colors-tuning.css`. Add `--dir src/tokens` for another folder, or `--yes` to skip the prompts. In Astro you can instead register the integration, which builds and checks the tokens on `dev`, `sync`, `check` and `build`:
+A dev dependency is enough, because the package only runs at build/dev time; with npm the same command is `npm i -D github:SMartSlash/astro-smart-colors#<tag>`. `v0.2.1` stays installable for a project that has not migrated yet: 0.3.0 renames public tokens and [`CHANGELOG.md`](./CHANGELOG.md) carries the rename map and the migration steps.
 
-```js
-import { defineConfig } from "astro/config";
-import smartColors from "@smartslash/astro-smart-colors";
+### 2. Create the two authored files
 
-export default defineConfig({
-  integrations: [smartColors()],
-});
+```sh
+pnpm exec smart-colors init
 ```
 
-### 2. Author the palette
+`init` writes a starter `src/styles/tokens/palette.css` and a `src/styles/tokens/colors-tuning.css`. Add `--dir src/tokens` for another folder, or `--yes` to skip the prompts. `pnpm exec` runs the binary from your project's dependency; with a global install, `smart-colors` works directly.
+
+### 3. Author the palette
 
 One `canvas`, one `ink`, then as many `ui`, `feedback` and `decorative` colors as you need:
 
@@ -76,14 +81,32 @@ One `canvas`, one `ink`, then as many `ui`, `feedback` and `decorative` colors a
 
 `dark-blend: 0…100` is optional on `ui`/`feedback`: it bounds how much white is mixed into the dark variant. Omit it to keep the adaptive lightness-based fallback.
 
-### 3. Import the generated CSS
+### 4. Generate the CSS and import it
+
+```sh
+pnpm exec smart-colors build   # writes src/styles/tokens/colors.css
+pnpm exec smart-colors check   # read-only; exits 1 while the file on disk is stale
+```
 
 ```css
 @import "./colors.css";
 @import "./colors-tuning.css";
 ```
 
-`smart-colors build` generates `colors.css` from the palette; `smart-colors check` fails if the file on disk is stale. Components never read `--palette-*` and never edit the generated file.
+`build` generates `colors.css` from the palette; `check` fails if the file on disk is stale. Components never read `--palette-*` and never edit the generated file. This is the whole non-Astro path: the output is plain CSS you import wherever the project keeps its styles.
+
+### 5. Register the Astro integration (Astro only)
+
+In Astro you register the integration instead of running `build` by hand; it generates and checks the tokens on `dev`, `sync`, `check` and `build`:
+
+```js
+import { defineConfig } from "astro/config";
+import smartColors from "@smartslash/astro-smart-colors";
+
+export default defineConfig({
+  integrations: [smartColors()],
+});
+```
 
 ## Start here: "I want X → use Y/Z"
 
@@ -129,6 +152,8 @@ These overrides act at runtime and are **not** revalidated by `smart-colors chec
 
 ## CLI & Browser Audit
 
+Run the commands from the project root, through the package manager that installed the package — `pnpm exec smart-colors …` — or wrap them in `package.json` scripts (`pnpm colors:build`, `pnpm colors:check`, …).
+
 | Command | What it does |
 |---|---|
 | `smart-colors init` | Writes the starter palette and `colors-tuning.css` (plus a config when `--dir` moves the tokens). |
@@ -139,16 +164,30 @@ These overrides act at runtime and are **not** revalidated by `smart-colors chec
 
 `report` writes `reports/smart-colors.html` (the full report) and `reports/smart-colors-preview.html` (the page to open first: measured samples, worst-case pairs and the manual proposals the solver could verify). A preview is a **static snapshot**: regenerate it after changing the palette, the config or `colors-tuning.css`, and treat a stale one as outdated.
 
-Playwright is an **optional** peer dependency used only by `audit` and `report`:
+Playwright is an **optional** peer dependency, needed only by `audit` and `report`:
 
 ```sh
 pnpm add -D playwright
 pnpm exec playwright install chromium
 ```
 
-Without it those two commands exit with a clear error and write nothing; `init`, `build` and `check` never load it.
+Without it, `audit` exits with a clear error and writes nothing, and `report` exits `1` after publishing the two artifacts as an **incomplete snapshot** (the error is on the page and no correction is proposed). `init`, `build` and `check` never load it, so a project that only generates tokens needs Node and nothing else. `@playwright/test` (`>=1.40`) is accepted in place of `playwright`.
+
+## Upgrading from 0.2.x
+
+0.3.0 renames three public token families; the old names are no longer emitted.
+Rename them in components and in `colors-tuning.css`:
+
+| 0.2.x | 0.3.0 | Applies to |
+|---|---|---|
+| `--color-on-<name>` | `--color-<name>-ink` | identities, decoratives and aliases |
+| `--color-<name>-on-solid` | `--color-<name>-solid-text` | identity families |
+| `--color-tune-dark-*-depth` | `--color-tune-dark-*-mix` | `bg`, `surface`, `text`, `muted` tuning knobs |
+
+Everything else keeps its name, including the configuration keys (`contrast.*`, `onSolid.<identity>.<theme>`, `derivation.*`). A stale tuning name is not an error: it is simply not consumed, so that override stops applying. Then run `pnpm exec smart-colors build` and `pnpm exec smart-colors check`, and re-measure with `audit` or `report` if the project tunes or overrides tokens. The full list, with the migration steps, is in [`CHANGELOG.md`](./CHANGELOG.md).
 
 ## Links
 
 - **Starter HTML, no framework**: [`./examples/minimal/`](./examples/minimal/) — one palette, one plain page, no config file.
+- **Releases and token renames**: [`./CHANGELOG.md`](./CHANGELOG.md) — what each tag changes, and the migration steps between them.
 - **Full technical reference**: [`./docs/REFERENCE.md`](./docs/REFERENCE.md) — configuration, contrast contract and solver, generated API, `--surface-color` substrate, `--ink-*` helpers, motion, programmatic API, validation guarantees and browser regression checks.

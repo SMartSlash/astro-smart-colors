@@ -9,24 +9,30 @@ The palette is the same starter palette that `smart-colors init` writes.
 
 ## Run it
 
-From this directory, in a clone of the package:
+With the package installed in a project (the example ships inside the package; the install line is in the [README](../../README.md)):
 
 ```sh
 # 1. Generate src/styles/tokens/colors.css from the palette.
-node ../../src/cli.mjs build
+pnpm exec smart-colors build
 
 # 2. Verify the generated file is present and current (read-only).
+pnpm exec smart-colors check
+```
+
+In a checkout of the package repository, the same two steps without an install:
+
+```sh
+node ../../src/cli.mjs build
 node ../../src/cli.mjs check
 ```
 
 Then open `index.html` in a browser.
 
-In a new project of your own, with the package installed, start with the same
-command `init`:
+In a new project of your own, start with the same command `init`:
 
 ```sh
 # 3. Create a palette and a colors-tuning.css panel with every value commented out.
-npx smart-colors init
+pnpm exec smart-colors init   # or: npx smart-colors init
 ```
 
 ## What to look at

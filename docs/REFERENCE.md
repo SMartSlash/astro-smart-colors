@@ -39,7 +39,7 @@ Use the same family combinations for `primary`, `secondary`, `tertiary`, `quater
 
 ### Are 230 names too many?
 
-**Too many to memorize; not 230 independent design decisions.** The measured inventory below belongs to **this repository's current `smart-colors.config.mjs` and `src/styles/tokens/colors.css`**, not the package defaults. It counts unique declared public custom-property names, excluding comments, references and every `--_*` internal; a `light-dark()` declaration counts as one name. Categories are disjoint: alias families are counted under aliases, not counted again under functional families.
+**Too many to memorize; not 230 independent design decisions.** The measured inventory below belongs to **the reference site repository's current `smart-colors.config.mjs` and `src/styles/tokens/colors.css`**, not the package defaults. It counts unique declared public custom-property names, excluding comments, references and every `--_*` internal; a `light-dark()` declaration counts as one name. Categories are disjoint: alias families are counted under aliases, not counted again under functional families.
 
 | Current-project category | Public names | How to use it |
 |---|---:|---|
@@ -60,11 +60,17 @@ Use the same family combinations for `primary`, `secondary`, `tertiary`, `quater
 
 The seven numeric scales cover `primary`, `secondary`, `tertiary`, `success`, `warning`, `danger` and `info`; `quaternary` has a functional family but no numeric scale here. Hue variants cover only `primary` and `secondary`. Logo output is disabled. Optional `--color-tune-<identity>-dark` override hooks are accepted through fallbacks but are not declared in this output, so they are not additional names in this count. The separate motion output's registrations do not add names to this inventory.
 
-**Recommended adoption:** start with neutral tokens and functional families. Scales and hue variants default to disabled in the package. If a project needs them, enable them deliberately and keep `scales.applyTo` and `scales.hueVariants.applyTo` focused on identities with real consumers; do not enable all scales just to build a button. Audit existing uses before narrowing those lists or disabling output, because that removes optional names. Functional families do not depend on numeric scales. This advice does not change this repository's config, defaults or public naming.
+**Recommended adoption:** start with neutral tokens and functional families. Scales and hue variants default to disabled in the package. If a project needs them, enable them deliberately and keep `scales.applyTo` and `scales.hueVariants.applyTo` focused on identities with real consumers; do not enable all scales just to build a button. Audit existing uses before narrowing those lists or disabling output, because that removes optional names. Functional families do not depend on numeric scales. This advice does not change that project's config, defaults or public naming.
 
 ## Install
 
-Workspace/local package example:
+The package is distributed from GitHub; nothing is published to npm. Install a released tag — [`CHANGELOG.md`](../CHANGELOG.md) lists the token renames each release carries:
+
+```sh
+pnpm add -D github:SMartSlash/astro-smart-colors#v0.3.0
+```
+
+A dev dependency is enough: the package runs at build/dev time only and has no runtime dependencies. Inside a monorepo, a local workspace reference works the same way:
 
 ```json
 {
@@ -255,16 +261,16 @@ The search prefers preserving the fill:
 2. **Optional source fallback.** If no foreground candidate works, search for the nearest authored palette-source lightness on the same grid, keeping the source's chroma and hue fixed. The parser retains raw authored chroma and hue separately from gamut-mapped colors, so source advice preserves those authored channels even for out-of-sRGB sources. Advice identifies the actual source syntax: the palette `@property` and its `initial-value`, or the legacy `:root` custom-property declaration. The source trial preserves full authored chroma/hue precision. Full generation is rechecked in both light and dark schemes; the affected pair must meet the safety target, and neither new contrast-warning labels nor deterioration of an existing warning to `below-minimum` may appear. A source edit affects the identity in both themes and its derived families/scales; logo sources remain separate. This is an optional palette edit, not a silent fill correction.
 3. **Explicitly unavailable.** If neither search yields a verified candidate, the report says no verified suggestion was found within those constraints. It does not claim that another hue/chroma or a redesigned solid/hover pair could never work, and it never applies an unverified fix.
 
-For this project's current light `info`, generation now selects `oklch(0.9944 0 0)` automatically for **both** `--color-info-solid-text` and `--color-info-ink`, preserving the authored palette/config and fills. The `onSolid.info.light` example remains a valid optional override but is no longer necessary to fix this pair; do not assume its former warning or suggestion still appears. An existing generated file can be stale until regeneration. Advice remains read-only: it never applies a config/palette edit.
+Example from the reference site: generation selected `oklch(0.9944 0 0)` automatically for **both** `--color-info-solid-text` and `--color-info-ink` in its light theme, preserving the authored palette/config and fills. The `onSolid.info.light` entry remains a valid optional override in any project; do not assume a former warning or suggestion still appears after a palette or config change. An existing generated file can be stale until regeneration. Advice remains read-only: it never applies a config/palette edit.
 
 Suggestions reflect the generated model, not runtime overrides in `colors-tuning.css` or other project-level tuning styles. Those overrides are not included in the advisory contrast checks.
 
 ### Project tuning audit (browser, read-only)
 
-This repository has a separate audit for the final root token pairs after `colors-tuning.css`. It is project tooling, **not a new package API or a change to `smart-colors check`**:
+`audit` measures the final root token pairs after the project's `colors-tuning.css`. It is a package command, **not** a change to `smart-colors check`:
 
 ```sh
-pnpm colors:audit chromium webkit
+pnpm exec smart-colors audit chromium webkit
 ```
 
 Without browser arguments it uses Chromium. It requires already installed Playwright browser binaries; it never downloads browsers automatically. All test content is inline and network requests are blocked.
@@ -277,21 +283,20 @@ The audit reads the actual generated file on disk, applies it and `src/styles/to
 
 Measurements use opaque computed CSS colors with the generator's **clipped-sRGB WCAG reference**. They are not screenshot-pixel measurements or a wide-gamut display certification. Scope: neutral text/focus, UI/feedback text/border-strong/direct/solid-hover, decorative companions and opaque control pairs. Excluded: alpha compositing, alias overrides, numeric/hue choices, forced colors, component styles, local themes and arbitrary backgrounds. The audit does not regenerate foregrounds, apply fixes or change existing build/CI behavior.
 
-Browser regression and entrypoint tests remain separate from the package's browser-independent unit suite:
+End-to-end checks over the same measurement surface live in the **reference site repository**, not in this package: `scripts/test-smart-colors-audit.mjs`, `scripts/test-smart-colors-report.mjs` and the model-regression half of `scripts/test-smart-colors-browser.mjs`. This package keeps a browser-independent suite instead:
 
 ```sh
-node scripts/test-smart-colors-browser.mjs chromium webkit
-node scripts/test-smart-colors-audit.mjs chromium webkit
+pnpm test
 ```
 
-The first includes empty, macro, per-color, media/attribute-conditioned, invalid, RGB and alpha tuning probes. The second checks audit exit codes, presentation drift, stale value rejection and byte-for-byte preservation on success and failure.
+The site-level browser scripts include empty, macro, per-color, media/attribute-conditioned, invalid, RGB and alpha tuning probes; the audit and report harnesses check exit codes, presentation drift, stale value rejection and byte-for-byte preservation on success and failure.
 
 Suggestions honor the selected `--config` path rather than assuming `smart-colors.config.mjs`. Merge config snippets into that file while preserving other settings, identities and themes. If you choose the source fallback, edit only the indicated `initial-value` or legacy custom-property declaration, preserving roles and other descriptors. Regenerate and check the output after your chosen edit; do not hand-edit generated `colors.css`.
 
 ### Visual diagnostic report
 
 ```sh
-pnpm colors:report chromium webkit
+pnpm exec smart-colors report chromium webkit
 ```
 
 This explicit, project-local command writes **`reports/smart-colors-preview.html`** (designer overview, ≤120 KB) and **`reports/smart-colors.html`** (full audit), from the same snapshot through the same ownership-checked writer. They are autonomous offline HTML files, not website pages, with no JavaScript or external assets. Chromium is the default if no browser is specified. Normal `colors:check`, `colors:audit` and the dev watcher do not create reports or apply corrections.
@@ -299,7 +304,7 @@ This explicit, project-local command writes **`reports/smart-colors-preview.html
 #### Designer workflow
 
 1. Choose colors, roles and optional `dark-blend` in **`palette.css`**. This remains the initial source of creative choices; do not edit generated `colors.css`.
-2. Run `pnpm colors:build`, then `pnpm colors:report chromium webkit` to measure the generated pairs with project tuning in the installed browsers. A successful build/check alone does not verify runtime tuning or real components.
+2. Run `pnpm exec smart-colors build`, then `pnpm exec smart-colors report chromium webkit` to measure the generated pairs with project tuning in the installed browsers. A successful build/check alone does not verify runtime tuning or real components.
 3. Read the CLI's grouped summary: **below minimum**, **below target**, or **incomplete verification**. It uses the same validation and grouping as both HTML renderers. It identifies measured baseline/tuning differences without blaming the palette for a pre-existing problem. Raw repeated browser diagnostics stay in the full report; the audit-only command retains its detailed console output.
 4. Follow the printed `file:` URL to the newly written preview. Compare current/suggested swatches, use-specific combinations, source/variant differences and the exact destination snippet. Decide whether to change a source color, its use, or a separate tuning/config setting. Suggestions are independent manual alternatives, not a combined patch; regenerate and remeasure after choosing one.
 
@@ -344,11 +349,7 @@ The HTML is a **static snapshot**, not a live validity badge. It is refreshed ev
 
 Only an existing report bearing the generator's ownership marker may be replaced. The writer protects configured/default input and output paths, refuses symlink/hardlink report targets, and writes atomically. These protections are conservative guards, not a filesystem security sandbox against hostile concurrent changes. Both artifacts are gitignored and are never opened automatically.
 
-Report end-to-end checks, separate from the unit suite:
-
-```sh
-node scripts/test-smart-colors-report.mjs chromium webkit
-```
+Report end-to-end checks live in the reference site repository (`scripts/test-smart-colors-report.mjs`) and are not part of this package; run the package suite with `pnpm test`.
 
 ## Generated public API
 
@@ -825,7 +826,7 @@ smart-colors --help
 
 Options can be placed before or after the command. Supported flags are `--config`/`-c`, `--root`/`-r`, `--dir`/`-d`, `--palette`, `--tuning`, `--yes`/`-y`, and `--help`/`-h`. For `audit` and `report`, positional arguments after the command select browsers (`chromium`, `firefox`, `webkit`); the default is `chromium`.
 
-`audit` measures the generated tokens and `colors-tuning.css` in a real browser across four theme/preference scenarios and reports the shortfalls; it never writes. `report` runs the same measurement plus the read-only proposal solver and publishes `reports/smart-colors.html` and `reports/smart-colors-preview.html`. Playwright is an **optional** peer dependency: install `playwright` or `@playwright/test` (`>=1.40`) in the project and its browser binaries with `pnpm exec playwright install chromium` (or `firefox`/`webkit`). Without Playwright the command exits with a clear error and writes nothing; `build`, `check` and `init` never load it and never need it.
+`audit` measures the generated tokens and `colors-tuning.css` in a real browser across four theme/preference scenarios and reports the shortfalls; it never writes. `report` runs the same measurement plus the read-only proposal solver and publishes `reports/smart-colors.html` and `reports/smart-colors-preview.html`. Playwright is an **optional** peer dependency: install `playwright` or `@playwright/test` (`>=1.40`) in the project and its browser binaries with `pnpm exec playwright install chromium` (or `firefox`/`webkit`). Without Playwright, `audit` exits with a clear error and writes nothing, while `report` exits `1` after publishing the two artifacts as an **incomplete snapshot** (the error is on the page and no correction is proposed). `build`, `check` and `init` never load it and never need it.
 
 `init` creates the two authored files a project starts from: a palette with neutral example values and a `colors-tuning.css` panel whose values are all commented out. The palette path comes from `config.palette` unless `--palette` or `--dir` is given; the tuning path defaults to `colors-tuning.css` in the palette directory unless `--tuning` is given. `--dir` picks a token directory (default `src/styles/tokens`) and cannot be combined with `--palette`; choosing a different directory also writes `smart-colors.config.mjs` with the matching `palette` and `output` paths, so `build`, `check`, `audit` and `report` resolve the custom layout. Both parents are created as needed, and backslash separators in explicit paths are normalized to `/`. On an interactive terminal and with no path options, it asks for the token directory first (Enter keeps the default) and then shows the files it will create before asking for confirmation. `--yes` skips the prompts, and a run without a terminal (CI) uses the resolved paths without ever prompting. Only an empty answer, `y` or `yes` proceeds; any other answer leaves the project untouched. If any target already exists, `init` exits non-zero, names the existing file and writes nothing. It also refuses a target that would overwrite `config.output` or an enabled `config.motion.output`. `build` and `check` never prompt and never create a palette.
 
@@ -852,13 +853,13 @@ Useful package scripts:
 
 ## Browser regression checks
 
-From this repository's root, using the existing `@playwright/test` dependency:
+This package's own suite is browser-independent and runs in Node:
 
 ```sh
-node scripts/test-smart-colors-browser.mjs chromium webkit
+pnpm test
 ```
 
-The requested browser binaries must already be installed; the script does not download them automatically. It checks independent mix oracles, generated light/dark pairs with and without scales, solid/hover warning correspondence, and a capped dark target of `7.5` with strict ratio comparisons. Fixture files live in a temporary directory and generation uses `check: true`; no application outputs, real palette or real config are written. This is a color-model regression check, not a full accessibility audit. Consumer projects run the same measurement surface through `smart-colors audit` and `smart-colors report`.
+The browser harnesses that exercise the same measurement surface end to end live in the reference site repository — `scripts/test-smart-colors-browser.mjs` (color model), `scripts/test-smart-colors-audit.mjs` and `scripts/test-smart-colors-report.mjs` — together with the project palette they measure. They are not part of this package. There they use the site's `@playwright/test` dependency, and the requested browser binaries must already be installed: those scripts do not download them automatically. The model harness checks independent mix oracles, generated light/dark pairs with and without scales, solid/hover warning correspondence, and a capped dark target of `7.5` with strict ratio comparisons. Fixture files live in a temporary directory and generation uses `check: true`; no application outputs, real palette or real config are written. This is a color-model regression check, not a full accessibility audit. Consumer projects run the same measurement surface through `smart-colors audit` and `smart-colors report`.
 
 ## Astro behavior
 

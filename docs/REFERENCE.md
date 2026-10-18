@@ -66,14 +66,13 @@ The seven numeric scales cover `primary`, `secondary`, `tertiary`, `success`, `w
 
 ## Install
 
-The package is distributed from GitHub; nothing is published to npm. Install a released tag — [`CHANGELOG.md`](../CHANGELOG.md) lists the token renames each release carries:
+The package is distributed from GitHub; nothing is published to npm. Install the current release tag — [`CHANGELOG.md`](../CHANGELOG.md) lists the token renames each release carries:
 
 ```sh
-# v0.3.0: previous release, without the Unreleased diagnostic workflow.
-pnpm add -D github:SMartSlash/astro-smart-colors#v0.3.0
+pnpm add -D github:SMartSlash/astro-smart-colors#v0.4.0
 ```
 
-**Release status.** The build/report workflow, automation policy and native preview documented below are **Unreleased** worktree changes. They are not part of `v0.3.0` and no new tag or version bump is introduced by this documentation. Use a checkout or workspace reference to try them; do not install `v0.3.0` expecting them.
+**Release status.** `v0.4.0` is the current release. It introduces the build/report diagnostic workflow and the native preview described below; the generated color API is unchanged from 0.3.0.
 
 A dev dependency is enough: the package runs at build/dev time only and has no runtime dependencies. Astro is the only declared peer and it is optional; Playwright is not a dependency or peer. Inside a monorepo, a local workspace reference works the same way:
 
@@ -910,7 +909,9 @@ Measurements taken later in an opened preview cannot change the CLI exit code.
 
 ### `init`
 
-`init` creates the two authored files a project starts from: a palette with neutral example values and a `colors-tuning.css` panel whose values are all commented out. The palette path comes from `config.palette` unless `--palette` or `--dir` is given; the tuning path defaults to `colors-tuning.css` in the palette directory unless `--tuning` is given. `--dir` picks a token directory (default `src/styles/tokens`) and cannot be combined with `--palette`; choosing a different directory also writes `smart-colors.config.mjs` with the matching `palette` and `output` paths, so later commands resolve the custom layout. Both parents are created as needed, and backslash separators in explicit paths are normalized to `/`. On an interactive terminal and with no path options, it asks for the token directory first (Enter keeps the default) and then shows the files it will create before asking for confirmation. `--yes` skips the prompts, and a run without a terminal (CI) uses the resolved paths without ever prompting. Only an empty answer, `y` or `yes` proceeds; any other answer leaves the project untouched. If any target already exists, `init` exits non-zero, names the existing file and writes nothing. It also refuses a target that would overwrite `config.output` or an enabled `config.motion.output`. `build` and `check` never prompt and never create a palette.
+`init` creates the two authored files a project starts from: a palette with neutral example values and a `colors-tuning.css` panel whose values are all commented out. The palette path comes from `config.palette` unless `--palette` or `--dir` is given; the tuning path defaults to `colors-tuning.css` in the palette directory unless `--tuning` is given. `--dir` picks a token directory (default `src/styles/tokens`) and cannot be combined with `--palette`. When no explicit or existing config is present and the effective palette differs from the default `config.palette` — a different directory, or a custom filename in the same directory via `--palette`, for example `src/styles/tokens/brand.css` — `init` also writes a plain `smart-colors.config.mjs` (no package import) with the matching `palette` and `output` paths, so later commands resolve the layout without `defineSmartColorsConfig`. Both parents are created as needed, and backslash separators in explicit paths are normalized to `/`.
+
+On an interactive terminal and with no path options, `init` asks for the token directory first (Enter keeps the default) and then shows the files it will create before asking for confirmation. `--yes` skips the prompts, and a run without a terminal (CI) uses the resolved paths without ever prompting. Only an empty answer, `y` or `yes` proceeds; any other answer leaves the project untouched. If any target already exists, `init` exits non-zero, names the existing file and writes nothing. An existing or explicitly selected config is never rewritten: if the effective palette diverges from its `config.palette`, `init` refuses before any write instead of reporting a false success. It also refuses a target that would overwrite `config.output` or `config.motion.output`, even while motion is disabled, so enabling motion later cannot collide with a file authored now. `build` and `check` never prompt and never create a palette.
 
 ### Advice and writes
 

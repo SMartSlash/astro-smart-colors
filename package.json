@@ -1,6 +1,6 @@
 {
   "name": "@smartslash/astro-smart-colors",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "OKLCH color system for Astro: accessible semantic tokens generated from a small editable palette",
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/SMartSlash/astro-smart-colors.git" },

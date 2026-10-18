@@ -4,15 +4,18 @@ Releases are **git tags** on [`github.com/SMartSlash/astro-smart-colors`](https:
 
 ```sh
 # Install a released tag (adjust the tag after each release):
-pnpm add -D github:SMartSlash/astro-smart-colors#v0.3.0
+pnpm add -D github:SMartSlash/astro-smart-colors#v0.4.0
 ```
 
-## Unreleased — current worktree
+## 0.4.0 — 2026-10-18
 
-> **Not a release.** These changes are in the current worktree. They are **not**
-> part of the `v0.3.0` tag or any other published tag, and there is no version
-> bump or new install target in this documentation change. Do not install
-> `v0.3.0` expecting this workflow.
+A **minor** bump on 0.x, following the same policy as 0.3.0: before 1.0, a new
+documented behavior is a minor release, not a patch. `build` now also publishes
+the diagnostic artifacts, `report` gains the native preview runtime and the CLI
+gains the `auto|off|required` automation policy. The preview runtime and its
+payload schema are embedded only in the generated page behind its own CSP; they
+are not part of the color CSS and add no required dependency or peer. Playwright
+remains a consumer tool, discovered only when automation is requested.
 
 ### Added
 
@@ -116,8 +119,8 @@ pnpm add -D github:SMartSlash/astro-smart-colors#v0.3.0
 
 ### Migration from 0.3.0
 
-1. The Unreleased behavior is not installable from `v0.3.0`; use a checkout or a
-   workspace reference until a new release is tagged.
+1. Point the dependency at the new tag:
+   `pnpm add -D github:SMartSlash/astro-smart-colors#v0.4.0`.
 2. Expect `build` to create `reports/` as well as the CSS output. Use the Astro
    integration or `generateColorTokens()` when you need CSS-only generation.
 3. Playwright is no longer installed as a peer. Add `playwright` or

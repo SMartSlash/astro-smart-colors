@@ -26,14 +26,11 @@ Works in an Astro project and in a project with no Astro at all: `build` emits p
 - **Astro is the only declared peer**, and it is optional. Playwright is **not** a dependency or a peer: when automation is requested, the CLI looks for an already-installed `playwright` or `@playwright/test` in your project, from your project root.
 - The package is distributed **from GitHub**; nothing is published to npm.
 
-**Release status.** The current tag is `v0.3.0`. The build/report workflow, automation policy and native preview described in this worktree are **Unreleased**: they are not part of that tag and are not installable from it. No version bump or new tag is introduced here.
+**Release status.** `v0.4.0` is the current release. It includes the build/report workflow, the automation policy and the native preview described below. `build` writes the CSS and attempts both HTML artifacts; `check` and the Astro integration remain CSS-only. Opening the artifacts needs no server, and Playwright stays an optional consumer tool: with no Playwright installed, a valid `build` still exits `0` and publishes both pages.
 
 ```sh
-# v0.3.0: the previous release, without the Unreleased diagnostic workflow below.
-pnpm add -D github:SMartSlash/astro-smart-colors#v0.3.0
+pnpm add -D github:SMartSlash/astro-smart-colors#v0.4.0
 ```
-
-To try the Unreleased behavior, use a checkout of this worktree or a workspace reference. Do not install `v0.3.0` expecting the new `build`/`report` effects.
 
 ### 2. Create the two authored files
 
@@ -41,7 +38,7 @@ To try the Unreleased behavior, use a checkout of this worktree or a workspace r
 pnpm exec smart-colors init
 ```
 
-`init` writes a starter `src/styles/tokens/palette.css` and a `src/styles/tokens/colors-tuning.css`. Add `--dir src/tokens` for another folder, or `--yes` to skip the prompts. `pnpm exec` runs the binary from your project's dependency; with a global install, `smart-colors` works directly.
+`init` writes a starter `src/styles/tokens/palette.css` and a `src/styles/tokens/colors-tuning.css`. Add `--dir src/tokens` for another folder, or `--yes` to skip the prompts. With a custom `--dir` or `--palette`, `init` also writes a fresh plain `smart-colors.config.mjs` unless a config already exists; existing configs are never rewritten, and a diverging palette override is refused before writing. `pnpm exec` runs the binary from your project's dependency; with a global install, `smart-colors` works directly.
 
 ### 3. Author the palette
 
@@ -103,11 +100,11 @@ pnpm exec smart-colors check   # read-only; exits 1 while the file on disk is st
 
 Components never read `--palette-*` and never edit the generated file. This is the whole non-Astro path: the output is plain CSS you import wherever the project keeps its styles.
 
-This is the Unreleased behavior: `v0.3.0` `build` writes only the CSS output. `build` defaults to `--automation=auto`. On a valid model, a missing Playwright still exits `0`, publishes both HTML files and prints a brief optional-automation note (no install instruction by default). For CI, use `--automation=required` or `audit` when a missing browser must fail the command, including an explicit install action; `--automation=off` never resolves or imports Playwright and still publishes the pages.
+`v0.3.0` `build` wrote only the CSS output; `v0.4.0` `build` also publishes the two diagnostic pages. `build` defaults to `--automation=auto`. On a valid model, a missing Playwright still exits `0`, publishes both HTML files and prints a brief optional-automation note (no install instruction by default). For CI, use `--automation=required` or `audit` when a missing browser must fail the command, including an explicit install action; `--automation=off` never resolves or imports Playwright and still publishes the pages.
 
 The CLI console summary is Italian and single-purpose: `check` shows a stale verdict immediately, `build`/`report` print two clickable `file://` link lines and point to opening the preview first. Model warning/suggestion strings and raw core errors stay verbatim on stderr.
 
-Use `--root <dir>` and `--config <file>` when the project root or config path is not the default; both are relative to the root and are the effective paths used by the command.
+Use `--root <dir>` when the project root is not the current directory (it is resolved from the current working directory) and `--config <file>` when the config file is not `smart-colors.config.mjs` (it is resolved relative to `--root`); these are the effective paths used by the command.
 
 ### 5. Register the Astro integration (Astro only)
 
@@ -177,7 +174,7 @@ pnpm exec smart-colors report --automation=off
 pnpm exec smart-colors audit chromium webkit
 ```
 
-Use `--root <dir>` when the project root is not the current directory, and `--config <file>` when the config file is not `smart-colors.config.mjs`. Both are relative to `--root`. Options can appear before or after the command.
+Use `--root <dir>` when the project root is not the current directory (resolved from the current working directory), and `--config <file>` when the config file is not `smart-colors.config.mjs` (resolved relative to `--root`). Options can appear before or after the command.
 
 | Command | Writes | HTML | Automation |
 |---|---|---|---|
@@ -287,7 +284,11 @@ Everything else keeps its name, including the configuration keys (`contrast.*`, 
 
 ## Migrating from 0.3.0 behavior
 
-These are the Unreleased changes, not a new tag:
+Install the new tag first; the generated token API is unchanged:
+
+```sh
+pnpm add -D github:SMartSlash/astro-smart-colors#v0.4.0
+```
 
 - `build` now also publishes the two HTML artifacts, even when the CSS output is already current. The Astro integration and the generator API still write only the CSS/motion outputs.
 - `report` now publishes the same two artifacts without writing CSS, palette, config or tuning. The full report stays static; the preview gains the isolated local runtime described above.
@@ -297,6 +298,7 @@ These are the Unreleased changes, not a new tag:
 
 ## Links
 
+- **Release 0.4.0**: [tag `v0.4.0`](https://github.com/SMartSlash/astro-smart-colors/releases/tag/v0.4.0) — the install target above.
 - **Starter HTML, no framework**: [`./examples/minimal/`](./examples/minimal/) — one palette, one plain page, no config file.
 - **Releases and token renames**: [`./CHANGELOG.md`](./CHANGELOG.md) — what each tag changes, and the migration steps between them.
 - **Full technical reference**: [`./docs/REFERENCE.md`](./docs/REFERENCE.md) — configuration, contrast contract and solver, generated API, `--surface-color` substrate, `--ink-*` helpers, motion, programmatic API, validation guarantees and the CLI policy.

@@ -879,15 +879,21 @@ With a global install, `smart-colors` works directly. Options can be placed befo
 | `audit` | Nothing | No | Strict; Chromium default; no mode flag |
 | Generator API and Astro integration | Only configured CSS/motion outputs | No implicit HTML | No |
 
-`build` and `report` publish `reports/smart-colors-preview.html` and `reports/smart-colors.html`. `build` performs normal CSS generation first; `report` never writes palette, config, tuning or CSS. `init`, `check` and `audit` reject `--automation`. `build` accepts no browser list. An explicit `report` browser list implies `required`; combining a list with `auto` or `off` is a usage error.
+`build` and `report` publish `reports/smart-colors-preview.html` and `reports/smart-colors.html`. `build` performs normal CSS generation first; `report` never writes palette, config, tuning or CSS. `init`, `check` and `audit` reject `--automation`. `build` accepts no browser list. An explicit `report` browser list implies `required`; combining a list with `auto` or `off` is a usage error. An empty argument (for example an empty positional) is a usage error that exits `1` and writes nothing.
+
+### Console output and next steps
+
+The console summary is Italian and single-purpose. `check` prints an immediate stale verdict (`non è aggiornato`) without a success line and without repeating the whole error list; the actionable detail stays a single structured error on stderr. `build`/`report` print two clickable `file://` lines (`Anteprima:` and `Report:`) and the next step is to open the preview; `report` does not recycle an identical `report` command as its only next action, while `build` keeps a secondary regenerate command that preserves the effective `--root` and `--config`. The model facts are shown once: a grouped problem synthesis and a counts line on stdout, with the raw warning/suggestion strings on stderr only.
+
+`build` and `report` never print a plain success heading on a non-zero exit. A strict-invalid model prints `Build non completata` with the model error count and an explicit note that the two diagnostic HTML files were still published; `report` distinguishes `Report generati · problemi rilevati`, `· verifica incompleta` and `· contratto non valido`. When `report` finds the CSS output absent or stale, it names it on the console as a diagnostic candidate, not accepted production. Under `auto`, an expected absence (Playwright simply not installed) is a brief note and is not echoed as a raw stderr detail, while other environment/measurement failures stay detailed; under `required` (and `audit`) the CLI states the explicit action. Raw engine/run detail is deduplicated on stderr and never printed as a wall on stdout; stdout lines are length-capped and terminal control characters are escaped.
 
 ### `--automation=auto|off|required`
 
-- `auto`, without a list, tries the Chromium, Firefox and WebKit engines available to the consumer and declares skipped ones. It never downloads browsers.
+- `auto`, without a list, tries the Chromium, Firefox and WebKit engines available to the consumer and declares skipped ones. It never downloads browsers and, when Playwright is simply not installed, prints only a brief optional-automation note (no install instruction by default) and no raw stderr detail.
 - `off` does not resolve, import or launch Playwright. Both HTML artifacts and the runtime are still produced.
-- `required`, without a list, requests Chromium. With a report list, requires exactly the listed engines.
+- `required`, without a list, requests Chromium. With a report list, requires exactly the listed engines, and an unavailable environment states the explicit install action and exits non-zero.
 
-Playwright is not a dependency or peer. The consumer installs `playwright` or `@playwright/test` itself and its binary with `pnpm exec playwright install <engine>`; the CLI checks the existing binary and never installs or downloads it. Discovery is anchored at the consumer root and has no global fallback. `audit` remains strict and does not take an automation mode.
+Playwright is not a dependency or peer. The consumer installs `playwright` or `@playwright/test` itself and its binary with `pnpm exec playwright install <engine>`; the CLI checks the existing binary and never installs or downloads it. Discovery is anchored at the consumer root and has no global fallback. Automation is optional: one shared budget of 60 seconds covers the whole run, including proposal trials, so the optional work is bounded rather than mandatory. `audit` remains strict and does not take an automation mode.
 
 ### Exit policy
 

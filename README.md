@@ -103,7 +103,9 @@ pnpm exec smart-colors check   # read-only; exits 1 while the file on disk is st
 
 Components never read `--palette-*` and never edit the generated file. This is the whole non-Astro path: the output is plain CSS you import wherever the project keeps its styles.
 
-This is the Unreleased behavior: `v0.3.0` `build` writes only the CSS output. `build` defaults to `--automation=auto`. On a valid model, a missing Playwright still exits `0`, publishes both HTML files and prints why browser measurement was skipped. For CI, use `--automation=required` or `audit` when a missing browser must fail the command. `--automation=off` never resolves or imports Playwright and still publishes the pages.
+This is the Unreleased behavior: `v0.3.0` `build` writes only the CSS output. `build` defaults to `--automation=auto`. On a valid model, a missing Playwright still exits `0`, publishes both HTML files and prints a brief optional-automation note (no install instruction by default). For CI, use `--automation=required` or `audit` when a missing browser must fail the command, including an explicit install action; `--automation=off` never resolves or imports Playwright and still publishes the pages.
+
+The CLI console summary is Italian and single-purpose: `check` shows a stale verdict immediately, `build`/`report` print two clickable `file://` link lines and point to opening the preview first. Model warning/suggestion strings and raw core errors stay verbatim on stderr.
 
 Use `--root <dir>` and `--config <file>` when the project root or config path is not the default; both are relative to the root and are the effective paths used by the command.
 
@@ -188,7 +190,7 @@ Use `--root <dir>` when the project root is not the current directory, and `--co
 
 `init`, `check` and `audit` reject `--automation`. `build` does not accept a browser list. `report` accepts `chromium`, `firefox` and `webkit` positionals; an explicit list implies `--automation=required`. An explicit list combined with `auto` or `off` is a usage error, not a silent downgrade.
 
-`report` writes `reports/smart-colors-preview.html` (open this first) and `reports/smart-colors.html`. It does not modify the palette, config, tuning or generated CSS. A missing or stale CSS output is shown as a declared diagnostic candidate, never accepted as production.
+`report` writes `reports/smart-colors-preview.html` (open this first) and `reports/smart-colors.html`. It does not modify the palette, config, tuning or generated CSS. A missing or stale CSS output is shown as a declared diagnostic candidate, never accepted as production, and is named on the console. An empty argument is a usage error that writes nothing.
 
 ### Automation modes
 
@@ -198,7 +200,7 @@ Use `--root <dir>` when the project root is not the current directory, and `--co
 - `off`: does not resolve, import or launch Playwright. Both HTML artifacts and the native preview runtime are still produced.
 - `required` (no list): requires Chromium for a deterministic request. With an explicit report list, requires exactly those engines.
 
-`audit` keeps its original strict behavior and has no second automation mode.
+`audit` keeps its original strict behavior and has no second automation mode. Automation is optional: one shared budget of 60 seconds covers the whole run, including proposal trials, so the optional work is bounded rather than gating the command. Under `auto`, an expected absence (Playwright simply not installed) is a brief note and is not echoed as a raw stderr detail, while other environment or measurement failures stay detailed; under `required` (and `audit`) the CLI states the explicit action and exits non-zero. Run details are deduplicated on stderr, and stdout lines are length-capped with terminal control characters escaped.
 
 ### Exit policy
 

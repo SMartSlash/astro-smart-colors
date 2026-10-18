@@ -8,6 +8,7 @@ import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { initSmartColors } from "../src/init.mjs";
+import { buildHeading, reportHeading } from "../src/cli-style.mjs";
 
 const execFileAsync = promisify(execFile);
 const CLI_PATH = fileURLToPath(new URL("../src/cli.mjs", import.meta.url));
@@ -129,17 +130,17 @@ test("help documents the commands, the automation flag and the init options with
 
   for (const flag of ["--help", "-h"]) {
     const { stdout, stderr } = await runCli(root, flag);
-    assert.match(stdout, /Usage: smart-colors \[build\|check\|init\|audit\|report\]/);
-    assert.match(stdout, /build\s+Generate semantic color tokens and the two HTML artifacts/);
-    assert.match(stdout, /check\s+Verify generated color tokens are up to date/);
-    assert.match(stdout, /init\s+Create a starter palette and colors-tuning\.css/);
-    assert.match(stdout, /audit\s+Audit generated tokens and colors-tuning\.css in a browser/);
-    assert.match(stdout, /report\s+Generate reports\/smart-colors\.html and reports\/smart-colors-preview\.html/);
-    assert.match(stdout, /--config <file>.*relative to --root.*default: smart-colors\.config\.mjs/);
+    assert.match(stdout, /Uso: smart-colors \[build\|check\|init\|audit\|report\]/);
+    assert.match(stdout, /build\s+Genera i token colore semantici e i due artefatti HTML \(predefinito\)/);
+    assert.match(stdout, /check\s+Verifica che i token colore generati siano aggiornati/);
+    assert.match(stdout, /init\s+Crea una palette iniziale e colors-tuning\.css/);
+    assert.match(stdout, /audit\s+Analizza in un browser i token generati e colors-tuning\.css/);
+    assert.match(stdout, /report\s+Genera reports\/smart-colors\.html e reports\/smart-colors-preview\.html/);
+    assert.match(stdout, /--config <file>.*relativo a --root.*predefinito: smart-colors\.config\.mjs/);
     assert.match(stdout, /--automation <mode>.*auto\|off\|required/);
-    assert.match(stdout, /--palette <file>.*default: config\.palette/);
-    assert.match(stdout, /-y, --yes\s+Skip the init confirmation prompt/);
-    assert.match(stdout, /-d, --dir <dir>\s+Token directory for init/);
+    assert.match(stdout, /--palette <file>.*predefinito: config\.palette/);
+    assert.match(stdout, /-y, --yes\s+Salta la conferma interattiva di init/);
+    assert.match(stdout, /-d, --dir <dir>\s+Cartella dei token per init/);
     assert.equal(stderr, "");
   }
 
@@ -153,8 +154,8 @@ test("audit, check and init reject the automation flag as a usage error", async 
   for (const command of ["audit", "check", "init"]) {
     await assert.rejects(runCli(root, command, "--automation=off"), (error) => {
       assert.equal(error.code, 1);
-      assert.match(error.stderr, /Option --automation is only supported by build and report\./);
-      assert.match(error.stderr, /Usage: smart-colors/);
+      assert.match(error.stderr, /L'opzione --automation è supportata solo da build e report\./);
+      assert.match(error.stderr, /Uso: smart-colors/);
       return true;
     });
   }
@@ -167,7 +168,7 @@ test("build does not accept a browser list and report rejects an unknown browser
 
   await assert.rejects(runCli(root, "build", "chromium"), (error) => {
     assert.equal(error.code, 1);
-    assert.match(error.stderr, /Unexpected arguments: chromium\./);
+    assert.match(error.stderr, /Argomenti inattesi: "chromium"\./);
     return true;
   });
 
@@ -175,7 +176,7 @@ test("build does not accept a browser list and report rejects an unknown browser
     await assert.rejects(runCli(root, command, "browser-inesistente"), (error) => {
       assert.equal(error.code, 1);
       assert.equal(error.stdout, "");
-      assert.match(error.stderr, /Unknown browser browser-inesistente\. Supported browsers: chromium, firefox, webkit\./);
+      assert.match(error.stderr, /Browser sconosciuto "browser-inesistente"\. Browser supportati: chromium, firefox, webkit\./);
       assert.doesNotMatch(error.stderr, /launched|AUDIT |HTML report/);
       return true;
     });
@@ -184,7 +185,7 @@ test("build does not accept a browser list and report rejects an unknown browser
   for (const mode of ["auto", "off"]) {
     await assert.rejects(runCli(root, "report", "chromium", `--automation=${mode}`), (error) => {
       assert.equal(error.code, 1);
-      assert.match(error.stderr, /An explicit browser list cannot be combined with automation mode/);
+      assert.match(error.stderr, /Un elenco di browser esplicito non può essere combinato con la modalità di automazione/);
       return true;
     });
   }
@@ -197,7 +198,7 @@ test("an unknown command and unknown option remain usage errors", async (t) => {
   for (const args of [["frobnicate"], ["build", "--nope"]]) {
     await assert.rejects(runCli(root, ...args), (error) => {
       assert.equal(error.code, 1);
-      assert.match(error.stderr, /Usage: smart-colors/);
+      assert.match(error.stderr, /Uso: smart-colors/);
       return true;
     });
   }
@@ -216,7 +217,8 @@ test("build without Playwright still publishes both HTML artifacts and exits 0",
 
   assert.match(built.stdout, /Build completata/);
   assertNewBuildSections(built.stdout);
-  assert.match(built.stdout, /Playwright non disponibile/);
+  assert.match(built.stdout, /Automazione opzionale non eseguita/);
+  assert.match(built.stdout, /La verifica nativa è disponibile nell’anteprima/);
   assert.ok(built.stdout.endsWith("\n\n"));
 
   const after = await snapshotProject(root);
@@ -283,7 +285,7 @@ test("build prints manual foreground/source advice but only check is entirely re
   const before = await snapshotProject(root);
   const built = await runCli(root, "build", "--automation=off");
 
-  assert.match(built.stdout, /src\/styles\/tokens\/colors\.css generated\./);
+  assert.match(built.stdout, /src\/styles\/tokens\/colors\.css rigenerato\./);
   assert.match(built.stderr, /\[smart-colors\] light info-on-solid \/ solid is/);
   assert.match(built.stderr, /\[smart-colors\] Suggestion: info \(light\): preserve the palette/);
   assert.match(built.stderr, /In smart-colors\.config\.mjs, set onSolid\.info\.light/);
@@ -303,8 +305,8 @@ test("build prints manual foreground/source advice but only check is entirely re
   assert.ok(Object.hasOwn(afterBuild, REPORT_PATH));
 
   const checked = await runCli(root, "check");
-  assert.match(checked.stdout, /src\/styles\/tokens\/colors\.css is up to date/);
-  assert.doesNotMatch(checked.stdout, /generated\./);
+  assert.match(checked.stdout, /src\/styles\/tokens\/colors\.css è aggiornato/);
+  assert.doesNotMatch(checked.stdout, /rigenerato/);
   assert.equal(checked.stderr, built.stderr);
   assert.deepEqual(await snapshotProject(root), afterBuild);
 });
@@ -345,7 +347,7 @@ test("default-path advice does not create a config or apply suggestions during b
   assert.deepEqual(afterBuild[PALETTE_PATH], before[PALETTE_PATH]);
   assert.notEqual(afterBuild[OUTPUT_PATH].contents, before[OUTPUT_PATH].contents);
   const checked = await runCli(root, "check");
-  assert.match(checked.stdout, /is up to date/);
+  assert.match(checked.stdout, /è aggiornato/);
   assert.deepEqual(await snapshotProject(root), afterBuild);
 });
 
@@ -364,7 +366,7 @@ test("build keeps the model warning strings on stderr and treats target/minimum 
       assert.ok(warning.startsWith(`[smart-colors] light info-on-solid / solid is ${ratioText}`));
       assert.ok(warning.includes(`Status: ${status}; WCAG AA normal-text reference minimum ${minimum}:1.`));
       assert.ok(warning.endsWith("Ratios use generated defaults, before CSS overrides."));
-      assert.match(built.stdout, /colors\.css generated/);
+      assert.match(built.stdout, /colors\.css rigenerato/);
       assert.equal(await readFile(path.join(root, "smart-colors.config.mjs"), "utf8"), configText);
       assert.equal(await readFile(path.join(root, PALETTE_PATH), "utf8"), PALETTE + INFO_PROPERTY);
       // A below-minimum model shortfall stays a warning, never a fatal generation error.
@@ -395,7 +397,7 @@ test("custom --config is loaded and appears in the next-step command and manual 
 
   const built = await runCli(root, "build", "--config", configFile, "--automation=off");
   assert.match(built.stdout, new RegExp(`--config ${configFile.replace("/", "\\/")}`));
-  assert.match(built.stdout, /src\/styles\/tokens\/personal-colors\.css generated\./);
+  assert.match(built.stdout, /src\/styles\/tokens\/personal-colors\.css rigenerato\./);
   assert.match(built.stderr, /In config\/personal-colors\.mjs, set onSolid\.info\.light/);
   assert.doesNotMatch(built.stderr, /In smart-colors\.config\.mjs/);
   assert.ok((await readFile(path.join(root, output), "utf8")).length > 0);
@@ -404,7 +406,7 @@ test("custom --config is loaded and appears in the next-step command and manual 
 
   for (const args of [["--config", configFile], [`--config=${configFile}`], ["-c", configFile]]) {
     const checked = await runCli(root, "check", ...args);
-    assert.match(checked.stdout, /src\/styles\/tokens\/personal-colors\.css is up to date/);
+    assert.match(checked.stdout, /src\/styles\/tokens\/personal-colors\.css è aggiornato/);
     assertReadOnlyCheck(checked.stdout);
   }
 });
@@ -436,7 +438,7 @@ test("explicit missing --config fails before build/check can write project files
     await assert.rejects(runCli(root, command, "--config", "missing-colors.mjs"), (error) => {
       assert.equal(error.code, 1);
       assert.equal(error.stdout, "");
-      assert.match(error.stderr, /\[smart-colors\].*ENOENT/);
+      assert.match(error.stderr, /Configurazione non trovata/);
       assert.ok(error.stderr.includes(path.join(root, "missing-colors.mjs")));
       assert.doesNotMatch(error.stderr, /Suggestion:|out of date|generated\.|up to date/);
       return true;
@@ -506,7 +508,7 @@ test("report is read-only on palette, config, tuning and CSS and publishes both 
 
   const reported = await runCli(root, "report", "--automation=off");
 
-  assert.match(reported.stdout, /Report contrasto generato/);
+  assert.match(reported.stdout, /Report generati/);
   assert.match(reported.stdout, /Nessun file CSS, palette, config o tuning è stato modificato\./);
   assert.match(reported.stdout, /Automazione disattivata/);
   const after = await snapshotProject(root);
@@ -517,7 +519,7 @@ test("report is read-only on palette, config, tuning and CSS and publishes both 
 test("report auto with no Playwright exits 0, while an explicit browser list implies required", async (t) => {
   const auto = await createProject(t);
   const reported = await runCli(auto, "report", "--automation=auto");
-  assert.match(reported.stdout, /Playwright non disponibile/);
+  assert.match(reported.stdout, /Automazione opzionale non eseguita/);
 
   const listed = await createProject(t);
   await assert.rejects(runCli(listed, "report", "chromium"), (error) => {
@@ -574,7 +576,7 @@ test("the init template builds without warnings and publishes both HTML", async 
   await runCli(root, "init");
   const built = await runCli(root, "build", "--automation=off");
   assert.match(built.stdout, /Build completata/);
-  assert.match(built.stdout, /src\/styles\/tokens\/colors\.css generated\./);
+  assert.match(built.stdout, /src\/styles\/tokens\/colors\.css rigenerato\./);
   assert.equal((built.stdout.match(/\[smart-colors\]/g) ?? []).length, 1);
   assert.equal(built.stderr, "");
   assert.match(await readFile(path.join(root, REPORT_PATH), "utf8"), /^<!-- smart-colors-report:v1 -->/);
@@ -747,12 +749,10 @@ test("interactive init accepts a custom token directory and writes the config", 
   assert.match(output, /• config   smart-colors\.config\.mjs/);
   assert.equal(await readFile(path.join(root, "src/tokens/palette.css"), "utf8"), PALETTE_TEMPLATE);
   assert.equal(await readFile(path.join(root, "smart-colors.config.mjs"), "utf8"), [
-    'import { defineSmartColorsConfig } from "@smartslash/astro-smart-colors/config";',
-    "",
-    "export default defineSmartColorsConfig({",
+    "export default {",
     '  palette: "src/tokens/palette.css",',
     '  output: "src/tokens/colors.css",',
-    "});",
+    "};",
     "",
   ].join("\n"));
 });
@@ -769,7 +769,7 @@ test("init --dir writes a custom token directory, its config and generates color
   assert.equal(await readFile(path.join(root, "custom/tokens/palette.css"), "utf8"), PALETTE_TEMPLATE);
 
   const built = await runCli(root, "build", "--automation=off");
-  assert.match(built.stdout, /custom\/tokens\/colors\.css generated\./);
+  assert.match(built.stdout, /custom\/tokens\/colors\.css rigenerato\./);
   assert.equal(built.stderr, "");
   assert.ok((await readFile(path.join(root, "custom/tokens/colors.css"), "utf8")).length > 0);
 });
@@ -840,5 +840,242 @@ test("init refuses targets that collide with generated outputs", async (t) => {
       return true;
     });
     assert.deepEqual(await readdir(root), ["smart-colors.config.mjs"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CLI output coherence: empty arguments, headings, next steps, optional automation.
+// ---------------------------------------------------------------------------
+
+const UNREACHABLE_PALETTE = `@property --palette-canvas { syntax: "<color>"; inherits: true; initial-value: oklch(0.52 0 0); role: canvas; }
+@property --palette-ink { syntax: "<color>"; inherits: true; initial-value: oklch(0.55 0 0); role: ink; }
+@property --palette-primary { syntax: "<color>"; inherits: true; initial-value: oklch(0.62 0.16 32); role: ui; }`;
+
+test("an empty argument is a usage error in any position and writes nothing", async (t) => {
+  const root = await createProject(t);
+  const before = await snapshotProject(root);
+  for (const args of [[""], ["build", ""], ["", "build"]]) {
+    await assert.rejects(runCli(root, ...args), (error) => {
+      assert.equal(error.code, 1);
+      assert.equal(error.stdout, "");
+      assert.match(error.stderr, /Argomento vuoto non consentito: ""\./);
+      assert.match(error.stderr, /Uso: smart-colors/);
+      return true;
+    });
+  }
+  assert.deepEqual(await snapshotProject(root), before);
+});
+
+test("--help keeps precedence over an unknown argument", async (t) => {
+  const root = await createProject(t);
+  const { stdout } = await runCli(root, "--help", "--nope");
+  assert.match(stdout, /Uso: smart-colors/);
+});
+
+test("a strict-invalid build reports its own heading, the model error count and the published HTML", async (t) => {
+  const root = await createProject(t, UNREACHABLE_PALETTE, { colorsCss: null });
+  await writeFile(path.join(root, "smart-colors.config.mjs"), "export default { contrast: { text: 7 } };\n", "utf8");
+  await assert.rejects(runCli(root, "build", "--automation=off"), (error) => {
+    assert.equal(error.code, 1);
+    assert.match(error.stdout, /Build non completata/);
+    assert.doesNotMatch(error.stdout, /Build completata/);
+    assert.match(error.stdout, /Contratto di contrasto non valido: \d+ error[ei] nel modello\./);
+    assert.match(error.stdout, /i due HTML diagnostici sono pubblicati/);
+    return true;
+  });
+  await assert.rejects(readFile(path.join(root, OUTPUT_PATH), "utf8"), { code: "ENOENT" });
+  assert.match(await readFile(path.join(root, PREVIEW_PATH), "utf8"), /^<!-- smart-colors-report:v1 -->/);
+  assert.match(await readFile(path.join(root, REPORT_PATH), "utf8"), /^<!-- smart-colors-report:v1 -->/);
+});
+
+test("check shows a visible stale verdict first, without a success line or a duplicated error list", async (t) => {
+  const root = await createProject(t);
+  await assert.rejects(runCli(root, "check"), (error) => {
+    assert.equal(error.code, 1);
+    const lines = error.stdout.split("\n");
+    const esito = lines.findIndex((line) => line.includes("● Esito"));
+    const stale = lines.findIndex((line) => line.includes("non è aggiornato"));
+    assert.ok(esito >= 0 && stale > esito, "the stale verdict must be inside the Esito section");
+    assert.match(error.stdout, /non è aggiornato: esegui/);
+    assert.doesNotMatch(error.stdout, /è aggiornato\./);
+    assert.equal((`${error.stdout}${error.stderr}`.match(/out of date/g) ?? []).length, 1);
+    return true;
+  });
+});
+
+test("report names a stale or absent CSS as a diagnostic candidate, not production", async (t) => {
+  const stale = await createProject(t);
+  const reported = await runCli(stale, "report", "--automation=off");
+  assert.match(reported.stdout, /Nessun file CSS, palette, config o tuning è stato modificato\./);
+  assert.match(reported.stdout, /candidato diagnostico, non alla produzione/);
+
+  const fresh = await createProject(t, PALETTE, { colorsCss: null });
+  await runCli(fresh, "build", "--automation=off");
+  const clean = await runCli(fresh, "report", "--automation=off");
+  assert.doesNotMatch(clean.stdout, /candidato diagnostico, non alla produzione/);
+});
+
+test("the next step opens the preview; report does not recycle an identical report command", async (t) => {
+  const root = await createProject(t);
+  const built = await runCli(root, "build", "--automation=off");
+  assert.match(built.stdout, /Apri l'anteprima nel browser\./);
+  assert.match(built.stdout, /Dopo una modifica rigenera:/);
+  assert.match(built.stdout, /pnpm exec smart-colors report --root/);
+
+  const reported = await runCli(root, "report", "--automation=off");
+  assert.match(reported.stdout, /Apri l'anteprima nel browser\./);
+  assert.doesNotMatch(reported.stdout, /pnpm exec smart-colors report/);
+});
+
+test("optional automation failure is a brief stdout note with no install nag and no ANSI when piped", async (t) => {
+  const root = await createProject(t);
+  const built = await runCli(root, "build");
+  assert.match(built.stdout, /Automazione opzionale non eseguita/);
+  assert.doesNotMatch(`${built.stdout}${built.stderr}`, /pnpm exec playwright install/);
+  assert.doesNotMatch(built.stdout, /\u001b\[/);
+  assert.doesNotMatch(built.stderr, /\u001b\[/);
+  assert.ok(built.stdout.split("\n").every((line) => line.length <= 200), "stdout lines stay bounded");
+  assert.ok(built.stderr.split("\n").length <= 40, "raw stderr detail stays bounded (no error wall)");
+});
+
+test("a root with shell-special characters is quoted in the next-step command", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "smart colors; $(boom) "));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(path.join(root, "src/styles/tokens"), { recursive: true });
+  await writeFile(path.join(root, PALETTE_PATH), PALETTE, "utf8");
+
+  const built = await runCli(root, "build", "--automation=off");
+  assert.match(built.stdout, /--root '/);
+  assert.match(built.stdout, /file:\/\/.*smart-colors-preview\.html/);
+});
+
+// ---------------------------------------------------------------------------
+// Corrective pass: honest headings, localized absent-input errors, init metadata.
+// ---------------------------------------------------------------------------
+
+async function writeStubPlaywright(root, engines = ["chromium", "firefox", "webkit"]) {
+  const directory = path.join(root, "node_modules/playwright");
+  await mkdir(directory, { recursive: true });
+  await writeFile(path.join(directory, "package.json"), JSON.stringify({ name: "playwright", version: "0.0.0", type: "module", main: "index.js" }), "utf8");
+  const body = engines.map((name) => `export const ${name} = { executablePath: () => ${JSON.stringify(`/nonexistent/${name}-bin`)}, launch: async () => { throw new Error("stub launch"); } };`).join("\n");
+  await writeFile(path.join(directory, "index.js"), `${body}\n`, "utf8");
+}
+
+test("build/report headings reflect the failure class, never a false success", () => {
+  const base = { strictInvalid: false, exitCode: 0, coverage: { launched: 0, status: "disabled" }, problems: [] };
+  assert.equal(buildHeading(base), "Build completata");
+  assert.equal(buildHeading({ ...base, strictInvalid: true }), "Build non completata");
+  assert.equal(buildHeading({ ...base, exitCode: 1, coverage: { launched: 0, status: "unavailable" } }), "Build completata · verifica richiesta non disponibile");
+  assert.equal(buildHeading({ ...base, exitCode: 1, coverage: { launched: 1, status: "incomplete", complete: false } }), "Build completata · verifica incompleta");
+  assert.equal(buildHeading({ ...base, exitCode: 1, coverage: { launched: 1, status: "complete", complete: true, measuredPairs: 5 }, problems: [{ status: "below-minimum" }] }), "Build completata · problemi di contrasto");
+
+  assert.equal(reportHeading(base), "Report generati");
+  assert.equal(reportHeading({ ...base, exitCode: 1, strictInvalid: true }), "Report generati · contratto non valido");
+  assert.equal(reportHeading({ ...base, exitCode: 1, coverage: { launched: 1, status: "incomplete", complete: false } }), "Report generati · verifica incompleta");
+  assert.equal(reportHeading({ ...base, exitCode: 1, coverage: { launched: 1, status: "complete", complete: true, measuredPairs: 5 }, problems: [{ status: "below-minimum" }] }), "Report generati · problemi rilevati");
+});
+
+test("typed absent-input errors are localized and write nothing", async (t) => {
+  const missingPalette = await createEmptyProject(t);
+  for (const command of ["build", "check", "report"]) {
+    await assert.rejects(runCli(missingPalette, command), (error) => {
+      assert.equal(error.code, 1);
+      assert.equal(error.stdout, "");
+      assert.match(error.stderr, /Palette non trovata/);
+      assert.match(error.stderr, /pnpm exec smart-colors init --root/);
+      return true;
+    });
+    assert.deepEqual(await readdir(missingPalette), []);
+  }
+
+  const missingConfig = await createEmptyProject(t);
+  await assert.rejects(runCli(missingConfig, "build", "--config", "missing-colors.mjs"), (error) => {
+    assert.equal(error.code, 1);
+    assert.equal(error.stdout, "");
+    assert.match(error.stderr, /Configurazione non trovata/);
+    assert.match(error.stderr, /Non passare a init un --config inesistente/);
+    return true;
+  });
+  assert.deepEqual(await readdir(missingConfig), []);
+});
+
+test("init with the default layout never presents a config as created", async (t) => {
+  const root = await createEmptyProject(t);
+  const { stdout } = await runCli(root, "init", "--yes");
+  assert.match(stdout, /✔ src\/styles\/tokens\/palette\.css/);
+  assert.doesNotMatch(stdout, /configurazione percorsi token/);
+  await assert.rejects(readFile(path.join(root, "smart-colors.config.mjs"), "utf8"), { code: "ENOENT" });
+});
+
+test("init surfaces the custom tuning guidance instead of a false success", async (t) => {
+  const root = await createEmptyProject(t);
+  const { stdout } = await runCli(root, "init", "--palette", "colors/p.css", "--tuning", "panels/custom.css");
+  assert.match(stdout, /● Avvisi/);
+  assert.match(stdout, /non verrà letto da build/);
+});
+
+test("a required run with an unavailable engine names that engine, never chromium", async (t) => {
+  const root = await createProject(t);
+  await writeStubPlaywright(root, ["webkit"]);
+  await assert.rejects(runCli(root, "report", "webkit"), (error) => {
+    assert.equal(error.code, 1);
+    assert.match(error.stdout, /motori webkit: binario del motore non disponibile nel progetto/);
+    assert.match(error.stdout, /Azione: verifica l’installazione di Playwright/);
+    assert.doesNotMatch(error.stdout, /chromium/);
+    assert.doesNotMatch(error.stdout, /playwright install chromium/);
+    return true;
+  });
+});
+
+test("check suggests regeneration with the effective --root and --config, summary before raw stderr", async (t) => {
+  const root = await createProject(t, PALETTE, { colorsCss: null });
+  const configFile = "config/colors.mjs";
+  await mkdir(path.join(root, "config"));
+  await writeFile(path.join(root, configFile), "export default { output: 'src/styles/tokens/colors.css' };\n", "utf8");
+  await runCli(root, "build", "--config", configFile, "--automation=off");
+  await writeFile(path.join(root, OUTPUT_PATH), ":root {}\n", "utf8");
+
+  await assert.rejects(runCli(root, "check", "--config", configFile), (error) => {
+    assert.equal(error.code, 1);
+    assert.match(error.stdout, /non è aggiornato: esegui/);
+    assert.match(error.stdout, /pnpm exec smart-colors build --root/);
+    assert.match(error.stdout, /--config config\/colors\.mjs/);
+    assert.match(error.stderr, /out of date/);
+    return true;
+  });
+});
+
+test("auto with no Playwright and a clean model keeps stderr empty and points to the preview", async (t) => {
+  const root = await createProject(t, PALETTE.replace("0.62 0.16 32", "0.6238 0.16 32"));
+  const built = await runCli(root, "build");
+  assert.equal(built.stderr, "");
+  assert.match(built.stdout, /Automazione opzionale non eseguita/);
+  assert.match(built.stdout, /misure browser non eseguite/);
+  assert.match(built.stdout, /✔ Contrasto baseline: 0 errori, 0 avvisi, 0 suggerimenti\./);
+  assert.match(built.stdout, /file:\/\/.*smart-colors-preview\.html/);
+  assert.match(built.stdout, /file:\/\/.*smart-colors\.html/);
+  assert.match(await readFile(path.join(root, PREVIEW_PATH), "utf8"), /^<!-- smart-colors-report:v1 -->/);
+  assert.match(await readFile(path.join(root, REPORT_PATH), "utf8"), /^<!-- smart-colors-report:v1 -->/);
+});
+
+test("auto keeps model warnings and suggestions on stderr while suppressing only the expected absence", async (t) => {
+  const root = await createProject(t, PALETTE + INFO_PROPERTY);
+  const built = await runCli(root, "build");
+  assert.match(built.stderr, /\[smart-colors\] light primary-on-solid \/ solid-hover is/);
+  assert.match(built.stderr, /\[smart-colors\] Suggestion: primary \(light\)/);
+  assert.doesNotMatch(built.stderr, /Playwright non trovato nel consumer/);
+  assert.doesNotMatch(built.stderr, /copertura · /);
+  assert.match(built.stdout, /Automazione opzionale non eseguita/);
+});
+
+test("required with no Playwright keeps the technical stderr detail", async (t) => {
+  const root = await createProject(t, PALETTE.replace("0.62 0.16 32", "0.6238 0.16 32"));
+  await assert.rejects(runCli(root, "build", "--automation=required"), (error) => {
+    assert.equal(error.code, 1);
+    assert.notEqual(error.stderr.trim(), "");
+    assert.match(error.stderr, /Playwright non trovato nel consumer/);
+    assert.match(error.stdout, /nessuno dei motori richiesti è stato avviato/);
+    assert.match(error.stdout, /Playwright non installato nel progetto/);
+    return true;
   });
 });

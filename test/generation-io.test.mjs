@@ -245,3 +245,49 @@ test("clearing analysis.errors never bypasses the strict contract", async (t) =>
   await assert.rejects(analysis.applyValidatedOutput());
   await assert.rejects(readFile(path.join(root, "src/styles/tokens/colors.css"), "utf8"), { code: "ENOENT" });
 });
+
+test("a palette path with # and % is read and written as a literal path", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "smart-colors-io-hash-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(path.join(root, "brand #50%"), { recursive: true });
+  await writeFile(path.join(root, "brand #50%/palette.css"), PALETTE, "utf8");
+
+  const report = await generateColorTokens({
+    root,
+    inlineConfig: { palette: "brand #50%/palette.css", output: "out #1%/colors.css" },
+  });
+  assert.ok(report.css.length > 0);
+  assert.equal(await readFile(path.join(root, "out #1%/colors.css"), "utf8"), report.css);
+});
+
+test("a missing palette raises a typed not-found error and writes nothing", async (t) => {
+  const root = await createProject(t);
+  await rm(path.join(root, "src/styles/tokens/palette.css"));
+
+  for (const check of [false, true]) {
+    await assert.rejects(generateColorTokens({ root, check, suggest: false }), (error) => {
+      assert.equal(error.code, "ENOENT");
+      assert.equal(error.smartColorsCode, "SMART_COLORS_PALETTE_NOT_FOUND");
+      assert.equal(error.palettePath, "src/styles/tokens/palette.css");
+      assert.equal(error.root, root);
+      assert.equal(error.configFile, "smart-colors.config.mjs");
+      assert.equal(error.cause.code, "ENOENT");
+      return true;
+    });
+  }
+
+  // A missing palette is never mistaken for an empty one, so no output is produced.
+  assert.deepEqual(await readdir(path.join(root, "src/styles/tokens")), []);
+});
+
+test("a palette path that is a directory stays an unambiguous read error, not a not-found", async (t) => {
+  const root = await createProject(t);
+  await rm(path.join(root, "src/styles/tokens/palette.css"));
+  await mkdir(path.join(root, "src/styles/tokens/palette.css"));
+
+  await assert.rejects(generateColorTokens({ root, suggest: false }), (error) => {
+    assert.equal(error.code, "EISDIR");
+    assert.notEqual(error.smartColorsCode, "SMART_COLORS_PALETTE_NOT_FOUND");
+    return true;
+  });
+});

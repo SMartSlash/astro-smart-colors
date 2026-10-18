@@ -91,8 +91,10 @@ export function createPlaywrightProvider(options = {}) {
       }
     }
     if (request === null) {
+      // Brief, structured, non-imperative: browser measurement is optional, so absence is a cause the
+      // caller can report without nagging. The root stays in the message (the effective consumer).
       return failure(PROVIDER_PHASES.discovery, "playwright-not-found",
-        `Playwright non trovato nel consumer ${root}. Installa playwright o @playwright/test nel progetto ed esegui: pnpm exec playwright install <browser>`,
+        `Playwright non trovato nel consumer ${root}: le misure browser restano opzionali e non bloccanti.`,
         { request: null, resolved: null, detail: discoveryCause ? discoveryCause.message : null });
     }
     let imported;

@@ -13,6 +13,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { runAutomation } from "../src/browser-audit.mjs";
+import { createPlaywrightProvider } from "../src/playwright-provider.mjs";
 import { createVerificationCore } from "../src/verification-core.mjs";
 
 const core = createVerificationCore();
@@ -34,7 +35,7 @@ function syntheticSession() {
     schemaVersion: 1,
     toolVersion: "0.0.0-test",
     snapshotId: "sc05-test-snapshot",
-    css: { baseline: ":root { --color-bg: white; }\n", tuning: null, tuningSupport: "absent" },
+    css: { baseline: ":root { --color-bg: white; }\n", tuning: ":root { --color-text-muted: black; }\n", tuningSupport: "supported" },
     config: SYNTHETIC_CONFIG,
     model: { diagnostics: [], errors: [], warnings: [] },
     samples: [],
@@ -388,6 +389,157 @@ test("the VerificationRun is JSON-serializable and carries no function", async (
   assert.equal(parsed.provenance, "browser-automation");
   assert.equal(typeof parsed.measurements[0].ratio, "number");
   assert.ok(!json.includes("=>"), "no function may leak into the payload");
+});
+
+// ---------------------------------------------------------------------------
+// Reliability: bounded waits, late cleanup and planned coverage.
+// ---------------------------------------------------------------------------
+
+function never() { return new Promise(() => {}); }
+function deferred() { let resolve; const promise = new Promise((resolver) => { resolve = resolver; }); return { promise, resolve }; }
+function delay(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+
+test("off never imports the consumer module for an ESM or a CJS resolution", async () => {
+  for (const request of ["playwright", "@playwright/test"]) {
+    const imported = [];
+    const provider = createPlaywrightProvider({
+      root: WORKSPACE_ROOT,
+      resolve: () => (request === "playwright" ? "/fake/consumer.mjs" : "/fake/consumer.cjs"),
+      importModule: async (url) => { imported.push(url); return { chromium: { executablePath: () => "/fake/c", launch: async () => ({}) } }; },
+    });
+    const run = await runAutomation(syntheticSession(), { mode: "off", provider });
+    assert.equal(run.status, "disabled");
+    assert.equal(imported.length, 0, `${request}: off must not import the consumer module`);
+    assert.equal(run.engines.length, 0);
+  }
+});
+
+test("a hanging discovery/import is bounded by the overall budget and reported unavailable", async () => {
+  const provider = createFakeProvider({ open: () => never() });
+  const started = Date.now();
+  const run = await runAutomation(syntheticSession(), { mode: "auto", provider, overallTimeoutMs: 120 });
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed < 2000, `bounded within the budget guard: ${elapsed}ms`);
+  assert.equal(run.status, "unavailable");
+  assert.equal(run.errors.length, 1);
+  assert.equal(run.errors[0].cause, "timeout");
+  assert.ok(run.engines.every((engine) => engine.launched === false));
+  assert.ok(run.planned.scenarios.length > 0, "requested coverage metadata survives an unavailable run");
+});
+
+test("a hanging launch is bounded and unavailable, never a measurement result", async () => {
+  const provider = createFakeProvider({ launch: () => never() });
+  const started = Date.now();
+  const run = await runAutomation(syntheticSession(), { mode: "required", provider, overallTimeoutMs: 150 });
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed < 2000, `bounded within the budget guard: ${elapsed}ms`);
+  assert.equal(run.status, "unavailable");
+  assert.equal(run.engines[0].launched, false);
+  assert.equal(run.engines[0].phase, "launch");
+  assert.ok(run.errors.some((error) => error.phase === "launch" && error.cause === "timeout"));
+});
+
+test("a hanging context creation is an incomplete verification, not unavailable", async () => {
+  const provider = createFakeProvider({ launch: () => ({ version: () => "0.0.0-fake", async newContext() { return never(); }, async close() {} }) });
+  const started = Date.now();
+  const run = await runAutomation(syntheticSession(), { mode: "required", provider, overallTimeoutMs: 150 });
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed < 3000, `bounded within the budget guard: ${elapsed}ms`);
+  assert.equal(run.status, "incomplete");
+  assert.notEqual(run.status, "unavailable");
+  assert.equal(run.engines[0].launched, true);
+  assert.equal(run.engines[0].status, "incomplete");
+  assert.ok(run.errors.every((error) => error.phase === "measure"));
+  assert.equal(run.measurements.length, 0);
+  assert.equal(run.coverage.complete, false);
+});
+
+test("a browser delivered after the deadline is closed best-effort and never leaks", async () => {
+  const gate = deferred();
+  let closed = 0;
+  const provider = createFakeProvider({ launch: () => gate.promise.then(() => ({ version: () => "late", async newContext() { return never(); }, async close() { closed += 1; } })) });
+  const run = await runAutomation(syntheticSession(), { mode: "required", provider, overallTimeoutMs: 60 });
+  assert.equal(run.status, "unavailable");
+  gate.resolve();
+  await delay(50);
+  assert.equal(closed, 1, "the late browser is closed exactly once");
+});
+
+test("a hanging context.close is bounded and recorded, never a silent pass", async () => {
+  const provider = createFakeProvider({ launch: () => ({ version: () => "0.0.0-fake", async newContext() { return { async route() {}, async newPage() { return { setDefaultTimeout() {}, async setContent() {}, async waitForFunction() {}, async evaluate() { return runtimeReport("light"); } }; }, async close() { return never(); } }; }, async close() {} }) });
+  const started = Date.now();
+  const run = await runAutomation(syntheticSession(), { mode: "required", provider, overallTimeoutMs: 300 });
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed < 3000, `bounded cleanup: ${elapsed}ms`);
+  assert.ok(run.errors.some((error) => error.cause === "cleanup-timeout"), "a failed cleanup is recorded, not swallowed");
+});
+
+test("a hanging provider.close is bounded and never blocks the run", async () => {
+  const provider = createFakeProvider();
+  provider.close = () => never();
+  const started = Date.now();
+  const run = await runAutomation(syntheticSession(), { mode: "required", provider, overallTimeoutMs: 250 });
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed < 3000, `bounded close: ${elapsed}ms`);
+  assert.ok(run.errors.some((error) => error.phase === "cleanup" && error.cause === "cleanup-timeout"), "a provider.close timeout is recorded, never silent");
+  assert.notEqual(run.status, "complete");
+});
+
+test("a measure-failed engine keeps a planned expectation, never a misleading 0/0", async () => {
+  const provider = createFakeProvider({ fail: () => "wait" });
+  const run = await runAutomation(syntheticSession(), { mode: "required", provider, overallTimeoutMs: 1000 });
+  assert.equal(run.measurements.length, 0);
+  assert.equal(run.coverage.complete, false);
+  // baseline + tuned × 2 themes × 2 preferences = 8 planned scenarios for the one launched engine.
+  assert.equal(run.expected.scenarios.length, 8);
+  assert.equal(run.planned.scenarios.length, 8);
+  assert.ok(run.coverage.expectedCount > 0, "the planned pair expectation survives a measure failure");
+  assert.equal(run.coverage.measuredCount, 0);
+  assert.deepEqual(run.requestedEngines, ["chromium"]);
+  assert.equal(run.status, "incomplete");
+});
+
+test("without tuning the planned expectation is baseline-only (4 scenarios per launched engine)", async () => {
+  const session = { ...syntheticSession(), css: { baseline: ":root { --color-bg: white; }\n", tuning: null, tuningSupport: "absent" } };
+  const provider = createFakeProvider({ fail: () => "wait" });
+  const run = await runAutomation(session, { mode: "required", provider, overallTimeoutMs: 1000 });
+  assert.equal(run.planned.scenarios.length, 4);
+  assert.equal(run.expected.scenarios.length, 4);
+  assert.equal(run.coverage.measuredCount, 0);
+});
+
+test("a second-preference failure keeps the full planned expectation (complete false, missing ids)", async () => {
+  const provider = createFakeProvider({ fail: (_engine, colorScheme) => (colorScheme === "dark" ? "evaluate" : null) });
+  const run = await runAutomation(syntheticSession(), { mode: "required", provider });
+  assert.equal(run.expected.scenarios.length, 8, "both preferences × both variants × both themes are expected");
+  assert.equal(run.coverage.complete, false);
+  assert.ok(run.coverage.missingScenarios.length > 0, "the failed preference's scenarios are missing, not dropped");
+  assert.ok(run.coverage.missingScenarios.some((id) => id.endsWith("-dark")), "the missing identity is the dark preference");
+  assert.equal(run.engines[0].status, "incomplete");
+  assert.equal(run.partial, true);
+});
+
+test("a report that declares no expected but carries unknown ids cannot pass", async () => {
+  const provider = createFakeProvider({ reportFor: () => ({
+    ...failingReport({ status: "incomplete", phase: "measure", cause: "runtime-run-failed", message: "reduced report" }),
+    measurements: [{ pairId: "ghost", scenarioId: "not-a-scenario", foreground: "rgb(0, 0, 0)", background: "rgb(255, 255, 255)", target: 4.6, minimum: 4.5, ratio: 21, status: "pass", error: null }],
+  }) });
+  const run = await runAutomation(syntheticSession(), { mode: "required", provider });
+  assert.equal(run.coverage.complete, false);
+  assert.ok(run.coverage.unexpectedScenarios.length > 0, "unknown ids are rejected, not absorbed");
+  assert.ok(run.coverage.missingScenarios.length > 0);
+  assert.notEqual(run.status, "complete");
+});
+
+test("a context delivered after the deadline is closed best-effort", async () => {
+  const gate = deferred();
+  let closed = 0;
+  const provider = createFakeProvider({ launch: () => ({ version: () => "v", async newContext() { return gate.promise.then(() => ({ async route() {}, async newPage() { return { setDefaultTimeout() {}, async setContent() {}, async waitForFunction() {}, async evaluate() {} }; }, async close() { closed += 1; } })); }, async close() {} }) });
+  const run = await runAutomation(syntheticSession(), { mode: "required", provider, overallTimeoutMs: 50 });
+  assert.equal(run.status, "incomplete");
+  gate.resolve();
+  await delay(110);
+  assert.ok(closed >= 1, "the late context is closed best-effort");
 });
 
 // ---------------------------------------------------------------------------

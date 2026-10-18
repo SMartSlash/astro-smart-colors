@@ -127,9 +127,31 @@ test("a resolved config is authoritative and the caller's inlineConfig always re
   assert.equal(adopted.inputs.find((input) => input.name === "config").present, true);
 });
 
-test("an unloadable config blocks the session instead of reusing stale outputs", async (t) => {
+test("an unloadable config blocks the session with a typed not-found code", async (t) => {
   const root = await fixture(t);
-  await assert.rejects(() => createDiagnosticSession({ root, configFile: "missing.config.mjs", suggest: false }), { code: "ENOENT" });
+  await assert.rejects(() => createDiagnosticSession({ root, configFile: "missing.config.mjs", suggest: false }), (error) => {
+    assert.equal(error.code, "ENOENT");
+    assert.equal(error.smartColorsCode, "SMART_COLORS_CONFIG_NOT_FOUND");
+    assert.equal(error.configFile, "missing.config.mjs");
+    assert.equal(error.root, root);
+    assert.equal(error.cause.code, "ENOENT");
+    return true;
+  });
+});
+
+test("a missing palette is named explicitly before any analysis", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "smart-colors-diagnostic-session-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await assert.rejects(() => createDiagnosticSession({ root, suggest: false }), (error) => {
+    assert.equal(error.code, "ENOENT");
+    assert.equal(error.smartColorsCode, "SMART_COLORS_PALETTE_NOT_FOUND");
+    assert.equal(error.palettePath, PALETTE_PATH);
+    assert.equal(error.root, root);
+    assert.equal(error.configFile, CONFIG_FILE);
+    // Never the misleading canvas/ink contract errors of an empty read.
+    assert.doesNotMatch(error.message, /roles\.canvas|validation failed/);
+    return true;
+  });
 });
 
 test("a config that changes during import blocks the session", async (t) => {

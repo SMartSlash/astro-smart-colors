@@ -23,12 +23,16 @@ test("missing implicit default config is optional, including configFile undefine
   }
 });
 
-test("an explicitly selected missing config rejects, even when it names the default path", async (t) => {
+test("an explicitly selected missing config rejects with a typed code, even when it names the default path", async (t) => {
   const root = await createProject(t);
   for (const configFile of ["missing.config.mjs", DEFAULT_CONFIG_FILE]) {
     await assert.rejects(loadSmartColorsConfig({ root, configFile }), (error) => {
       assert.equal(error.code, "ENOENT");
+      assert.equal(error.smartColorsCode, "SMART_COLORS_CONFIG_NOT_FOUND");
+      assert.equal(error.configFile, configFile);
+      assert.equal(error.root, root);
       assert.equal(error.path, path.join(root, configFile));
+      assert.equal(error.cause.code, "ENOENT");
       return true;
     });
   }
@@ -75,6 +79,14 @@ test("an existing config directory propagates its import error", async (t) => {
   const root = await createProject(t);
   await mkdir(path.join(root, DEFAULT_CONFIG_FILE));
   await assert.rejects(loadSmartColorsConfig({ root }), { code: "ERR_UNSUPPORTED_DIR_IMPORT" });
+});
+
+test("a config file name with # and % resolves as a literal path, not a URL fragment", async (t) => {
+  const root = await createProject(t);
+  const name = "settings #50%.mjs";
+  await writeFile(path.join(root, name), "export default { output: 'out #1%/colors.css' };\n", "utf8");
+  const config = await loadSmartColorsConfig({ root, configFile: name });
+  assert.equal(config.output, "out #1%/colors.css");
 });
 
 test("permission and other I/O access errors propagate unchanged for implicit and explicit configs", async (t) => {

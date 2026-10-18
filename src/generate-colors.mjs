@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { contrast, clamp, fitToSrgb, mixOklch, oklch, serializedColor } from "./color-math.mjs";
 import { formatColorsCss, formatColorsMotionCss } from "./format-css.mjs";
-import { DEFAULT_CONFIG_FILE, loadSmartColorsConfig, resolveProjectUrl } from "./load-config.mjs";
+import { DEFAULT_CONFIG_FILE, loadSmartColorsConfig, paletteNotFoundError, resolveProjectUrl } from "./load-config.mjs";
 import { contrastSummary, meetsSolidTarget, nearestLightness, resolvedColor, solidContrasts, sourceColorValue } from "./contrast-advice.mjs";
 import { parseOklch, parsePalette, parsePaletteWithDiagnostics, tokenKey } from "./parse-palette.mjs";
 import { validateSmartColorsInput } from "./validate-config.mjs";
@@ -32,7 +32,16 @@ async function inspectColorTokens(options, strict, paletteSnapshot) {
 
   const paletteUrl = resolveProjectUrl(root, config.palette);
   if (paletteSnapshot !== undefined && typeof paletteSnapshot !== "string") throw new TypeError("Palette snapshot must be a CSS string.");
-  const paletteCss = paletteSnapshot ?? await readFile(paletteUrl, "utf8");
+  let paletteCss = paletteSnapshot;
+  if (paletteCss === undefined) {
+    try {
+      paletteCss = await readFile(paletteUrl, "utf8");
+    } catch (error) {
+      // Only an absent palette is re-typed: EISDIR/EACCES/… stay exactly as they were.
+      if (error?.code === "ENOENT") throw paletteNotFoundError({ palettePath: config.palette, root, configFile: options.configFile, cause: error });
+      throw error;
+    }
+  }
   const parsedPalette = parsePaletteWithDiagnostics(paletteCss);
   const palette = parsedPalette.tokens;
   const annotatedRoles = parsedPalette.annotatedRoles ?? {};
@@ -83,10 +92,10 @@ async function inspectColorTokens(options, strict, paletteSnapshot) {
   };
   // Internal write capability (SC-08, plan §5.1.1). It is a non-enumerable closure, not a package
   // export and not JSON-visible: a forged plain object cannot carry it. It first refuses a tampered
-  // analysis, then re-runs `validateOutputPaths` (path collisions, symlinks, hard links) against the
-  // captured bytes and the current filesystem, and only then writes the snapshot. So a stale or
-  // tampered analysis can never reach the disk, and `generateColorTokens` never reads a
-  // caller-provided analysis.
+  // analysis, then re-runs `validateOutputPaths` (path collisions and canonical aliases resolved from
+  // the filesystem) against the captured bytes, and only then writes the snapshot through an atomic
+  // rename. So a stale or tampered analysis can never reach the disk, and `generateColorTokens` never
+  // reads a caller-provided analysis.
   Object.defineProperty(analysis, "applyValidatedOutput", {
     value: () => applyValidatedOutput(analysis, snapshot),
     enumerable: false,

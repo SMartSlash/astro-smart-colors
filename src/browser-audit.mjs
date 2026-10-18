@@ -194,11 +194,22 @@ export async function launch(name, root = process.cwd()) {
 
 const AUTOMATION_MODES = ["auto", "off", "required"];
 const AUTOMATION_RUN_PREFERENCES = ["light", "dark"];
+const SCENARIO_THEMES = ["light", "dark"];
 const AUTOMATION_TERMINAL_STATES = DIAGNOSTIC_STATES.filter((state) => ["complete", "incomplete", "unavailable", "unsupported"].includes(state));
 // Phases that describe the environment rather than a measurement; a run can be complete while one
 // requested engine was simply unavailable.
 const ENVIRONMENT_PHASES = ["discovery", "import", "availability", "launch"];
 const DEFAULT_AUTOMATION_TIMEOUT_MS = 15000;
+// One budget for the whole automation phase of a run (discovery → launch → measure → cleanup). No
+// per-operation timeout can extend it: every await is bounded by the remaining budget, so a hanging
+// provider cannot withhold the HTML publication indefinitely. Tests inject a small `overallTimeoutMs`.
+const DEFAULT_AUTOMATION_OVERALL_TIMEOUT_MS = 60000;
+export const AUTOMATION_OVERALL_TIMEOUT_MS = DEFAULT_AUTOMATION_OVERALL_TIMEOUT_MS;
+// Cleanup runs with an explicit, finite grace beyond the main budget, so the run always concludes
+// within `overallTimeoutMs` plus at most this grace — a "budget + grace" bound, not an exact 60 s.
+const CLEANUP_GRACE_MS = 1000;
+// A late fulfillment (a browser/context delivered after the deadline) gets a shorter grace.
+const LATE_CLEANUP_GRACE_MS = 250;
 
 function usageError(message) {
   const error = new Error(message);
@@ -321,6 +332,10 @@ function buildRun(parts) {
     errors: parts.errors ?? [],
     notes: parts.notes ?? [],
     partial: Boolean(parts.partial),
+    // Planned matrix for every requested engine (the CLI's requested-coverage metadata), distinct from
+    // `expected`, which only reflects the engines that actually reported plus launched-measure-failed.
+    planned: parts.planned ?? { scenarios: [], pairs: {} },
+    requestedEngines: parts.requestedEngines ?? [],
     measuredAt: parts.measuredAt ?? null,
   };
 }
@@ -329,26 +344,127 @@ function unavailableEngines(names, phase, reason) {
   return names.map((name) => ({ name, launched: false, status: "unavailable", version: null, executable: null, phase, reason }));
 }
 
-function idleRun({ mode, status, snapshotId, engines, errors, notes }) {
-  return buildRun({ mode, status, snapshotId, engines: engines ?? [], errors: errors ?? [], notes: notes ?? [], coverage: core.coverage([], []), environment: null, measuredAt: null });
+function idleRun({ mode, status, snapshotId, engines, errors, notes, planned, requestedEngines }) {
+  return buildRun({ mode, status, snapshotId, engines: engines ?? [], errors: errors ?? [], notes: notes ?? [], coverage: core.coverage([], []), environment: null, measuredAt: null, planned, requestedEngines });
+}
+
+// ---------------------------------------------------------------------------
+// Overall budget: every potentially-stalling await is bounded by the remaining budget of the run.
+// This bounds discovery/import/availability/launch and context/page/measure/cleanup alike, and turns
+// a hung provider into a structured phase/cause timeout instead of an unresolved await. Cancelling an
+// in-flight ESM import is impossible, so the deadline operates on the *wait*: a late fulfillment is
+// cleaned up best-effort, never awaited further.
+// ---------------------------------------------------------------------------
+
+function createDeadline(options) {
+  if (Number.isFinite(options.deadline) && options.deadline > 0) return { at: options.deadline };
+  const budget = Number.isFinite(options.overallTimeoutMs) && options.overallTimeoutMs > 0 ? options.overallTimeoutMs : DEFAULT_AUTOMATION_OVERALL_TIMEOUT_MS;
+  return { at: Date.now() + budget };
+}
+
+function deadlineError(phase, cause, engine, message) {
+  const error = new Error(message);
+  error.phase = phase;
+  error.cause = cause;
+  error.engine = engine ?? null;
+  error.timedOut = true;
+  return error;
+}
+
+// Race a promise against the remaining budget. Resolves with the value, rethrows a real error, or
+// throws a structured timeout. A late fulfillment is handed to `onLate` (bounded cleanup) and a late
+// rejection is swallowed, so no unhandled rejection and no leaked browser/context survive the race.
+const DEADLINE = Symbol("smart-colors-deadline");
+
+// The operation is a FACTORY, so the budget is checked *before* the first await/start: a zero/negative
+// budget never starts the operation (no wasted work, nothing to clean up). A synchronous throw from
+// the factory is captured as a structured failure, and a real error is rethrown unchanged (its cause
+// is preserved), never rewritten into a timeout.
+async function withinDeadline(factory, deadline, { phase, cause, engine = null, message, onLate = null }) {
+  const remaining = deadline.at - Date.now();
+  if (remaining <= 0) throw deadlineError(phase, cause, engine, message);
+  const guarded = Promise.resolve().then(() => factory()).then((value) => ({ value }), (error) => ({ error }));
+  const handleLate = () => {
+    if (typeof onLate !== "function") return;
+    guarded.then((late) => { if (late && Object.hasOwn(late, "value")) Promise.resolve(onLate(late.value)).catch(() => {}); });
+  };
+  let timer;
+  const guard = new Promise((resolve) => { timer = setTimeout(() => resolve(DEADLINE), remaining); });
+  let outcome;
+  try {
+    outcome = await Promise.race([guarded, guard]);
+  } finally {
+    clearTimeout(timer);
+  }
+  if (outcome === DEADLINE) { handleLate(); throw deadlineError(phase, cause, engine, message); }
+  if (outcome && Object.hasOwn(outcome, "error")) throw outcome.error;
+  return outcome ? outcome.value : undefined;
+}
+
+function cleanupBudget(deadline, grace = CLEANUP_GRACE_MS) {
+  const remaining = deadline ? deadline.at - Date.now() : 0;
+  const cap = remaining > 0 ? Math.min(remaining, grace) : grace;
+  return { at: Date.now() + cap };
+}
+
+// Best-effort close with an explicit finite grace. Returns the timeout error when the close did not
+// complete so the caller records it (a cleanup failure is never swallowed); a hung close can never
+// block the caller. "Best effort" is accurate: if the underlying close is itself blocked, no stronger
+// guarantee is claimed beyond the grace, and we keep no timer/listener that could outlive the run.
+async function closeQuietly(target, deadline, grace = CLEANUP_GRACE_MS) {
+  if (!target || typeof target.close !== "function") return null;
+  try {
+    await withinDeadline(() => target.close(), cleanupBudget(deadline, grace), { phase: "cleanup", cause: "cleanup-timeout", message: "cleanup" });
+    return null;
+  } catch (error) {
+    return error;
+  }
+}
+
+// Contract-backed planned matrix for one engine: baseline plus tuned (only when a non-empty tuning
+// stylesheet exists), both themes, both emulated preferences — exactly the identities the SC-04
+// runtime reports, namespaced per engine. Declared before measurement so a measure failure is a
+// visible "expected > 0, measured 0", never a misleading "0/0".
+function plannedMatrix(session, engineName, contract) {
+  const css = session && typeof session.css === "object" && session.css !== null ? session.css : {};
+  const variants = ["baseline"];
+  if (typeof css.tuning === "string" && css.tuning !== "") variants.push("tuned");
+  const scenarios = [];
+  const pairs = {};
+  for (const preference of AUTOMATION_RUN_PREFERENCES) {
+    for (const variant of variants) {
+      for (const theme of SCENARIO_THEMES) {
+        const id = namespaceScenario(engineName, `${variant}-${theme}-${preference}`);
+        scenarios.push(id);
+        pairs[id] = (contract.pairs[theme] ?? []).map((pair) => pair.id);
+      }
+    }
+  }
+  return { scenarios, pairs };
 }
 
 // One page per emulated preference; the runtime measures both themes under that preference, so two
-// pages per engine cover the four theme/preference crossings (baseline and tuned).
-async function measureEngine(browser, engineName, { payload, runtimeSource, timeoutMs }) {
+// pages per engine cover the four theme/preference crossings (baseline and tuned). Errors (measure and
+// cleanup) are pushed into the shared run-level `errors`, so a late cleanup failure is recorded too.
+async function measureEngine(browser, engineName, { payload, runtimeSource, timeoutMs, deadline, errors }) {
   const reports = [];
-  const errors = [];
   const html = runtimeFixtureHtml(payload, runtimeSource);
+  const measureMessage = (preference, label) => `preferenza ${preference}: budget complessivo esaurito durante ${label}.`;
   for (const preference of AUTOMATION_RUN_PREFERENCES) {
     let context = null;
     try {
-      context = await browser.newContext({ colorScheme: preference, reducedMotion: "reduce" });
+      context = await withinDeadline(() => browser.newContext({ colorScheme: preference, reducedMotion: "reduce" }), deadline, {
+        phase: "measure", cause: "timeout", engine: engineName, message: measureMessage(preference, "la creazione del contesto"),
+        onLate: (lateContext) => closeQuietly(lateContext, deadline, LATE_CLEANUP_GRACE_MS).then((lateError) => {
+          if (lateError) errors.push({ phase: "cleanup", cause: "cleanup-timeout", engine: engineName, scenarioId: null, pairId: null, message: `preferenza ${preference}: contesto tardivo non chiuso entro il grace di cleanup (${lateError.message}).` });
+        }),
+      });
       // Network is blocked; only http(s) is aborted so the local srcdoc measurement frames still load.
-      await context.route(/^https?:\/\//i, (route) => route.abort());
-      const page = await context.newPage();
+      await withinDeadline(() => context.route(/^https?:\/\//i, (route) => route.abort()), deadline, { phase: "measure", cause: "timeout", engine: engineName, message: measureMessage(preference, "il blocco della rete") });
+      const page = await withinDeadline(() => context.newPage(), deadline, { phase: "measure", cause: "timeout", engine: engineName, message: measureMessage(preference, "la creazione della pagina") });
       page.setDefaultTimeout(timeoutMs);
-      await page.setContent(html, { timeout: timeoutMs, waitUntil: "load" });
-      await page.waitForFunction(
+      await withinDeadline(() => page.setContent(html, { timeout: timeoutMs, waitUntil: "load" }), deadline, { phase: "measure", cause: "timeout", engine: engineName, message: measureMessage(preference, "il caricamento della fixture") });
+      await withinDeadline(() => page.waitForFunction(
         ({ global, terminal }) => {
           const controller = window[global];
           if (!controller) return false;
@@ -357,18 +473,22 @@ async function measureEngine(browser, engineName, { payload, runtimeSource, time
         },
         { global: DIAGNOSTIC_RUNTIME_GLOBAL, terminal: AUTOMATION_TERMINAL_STATES },
         { timeout: timeoutMs },
-      );
-      reports.push(await page.evaluate((global) => window[global].report(), DIAGNOSTIC_RUNTIME_GLOBAL));
+      ), deadline, { phase: "measure", cause: "timeout", engine: engineName, message: measureMessage(preference, "l'attesa dello stato terminale") });
+      reports.push(await withinDeadline(() => page.evaluate((global) => window[global].report(), DIAGNOSTIC_RUNTIME_GLOBAL), deadline, { phase: "measure", cause: "timeout", engine: engineName, message: measureMessage(preference, "la lettura del report") }));
     } catch (error) {
       errors.push({
         phase: "measure", cause: "runtime-run-failed", engine: engineName, scenarioId: null, pairId: null,
         message: `preferenza ${preference}: ${error && error.message ? error.message : error}`,
       });
     } finally {
-      if (context) { try { await context.close(); } catch { /* best effort */ } }
+      if (context) {
+        // A cleanup failure is never a silent pass: it is recorded and leaves coverage unconfirmed.
+        const cleanupError = await closeQuietly(context, deadline);
+        if (cleanupError) errors.push({ phase: "cleanup", cause: "cleanup-timeout", engine: engineName, scenarioId: null, pairId: null, message: `preferenza ${preference}: contesto non chiuso entro il grace di cleanup (${cleanupError.message}); la copertura non è confermata.` });
+      }
     }
   }
-  return { reports, errors, attempted: AUTOMATION_RUN_PREFERENCES.length };
+  return { reports, attempted: AUTOMATION_RUN_PREFERENCES.length };
 }
 
 /**
@@ -395,6 +515,19 @@ export async function runAutomation(session, options = {}) {
     return idleRun({ mode, status: "disabled", snapshotId, notes: ["Automazione disattivata: Playwright non viene né risolto né importato."] });
   }
 
+  // The deadline exists only when automation is actually requested: off creates no timer at all.
+  const deadline = createDeadline(options);
+  const contract = core.createContract(session && typeof session === "object" ? session.config : null);
+  const requestedEngines = [...selected];
+  // Planned matrix for every requested engine, even ones that never launch: the CLI's metadata stays
+  // complete while `coverage`/exit keeps the auto policy (an unavailable engine is not coverage).
+  const planned = { scenarios: [], pairs: {} };
+  for (const name of selected) {
+    const matrix = plannedMatrix(session, name, contract);
+    planned.scenarios.push(...matrix.scenarios);
+    Object.assign(planned.pairs, matrix.pairs);
+  }
+
   const provider = options.provider ?? createPlaywrightProvider({ root });
   const runtimeSource = options.runtimeSource ?? createDiagnosticRuntimeSource();
   const payload = sessionPayload(session);
@@ -403,13 +536,43 @@ export async function runAutomation(session, options = {}) {
   const reports = [];
 
   try {
-    const opened = await provider.open();
+    let opened;
+    try {
+      opened = await withinDeadline(() => provider.open(), deadline, {
+        phase: ENVIRONMENT_PHASES[0], cause: "timeout",
+        message: `Budget automazione esaurito durante discovery/import di Playwright (consumer ${root}). Nessun browser è stato avviato.`,
+      });
+    } catch (error) {
+      const phase = error.phase ?? ENVIRONMENT_PHASES[0];
+      // Preserve the real cause of a non-timeout failure; only the deadline maps to "timeout".
+      const cause = error.timedOut ? "timeout" : (error.cause && error.cause.code ? error.cause.code : (error.code ?? "open-failed"));
+      errors.push({ phase, cause, engine: null, scenarioId: null, pairId: null, message: error.message });
+      return idleRun({ mode, status: "unavailable", snapshotId, engines: unavailableEngines(selected, phase, error.message), errors, notes: [`Ambiente non disponibile: ${error.message}`], planned, requestedEngines });
+    }
     if (!opened.ok) {
       errors.push({ phase: opened.phase, cause: opened.cause, engine: null, scenarioId: null, pairId: null, message: opened.message });
-      return idleRun({ mode, status: "unavailable", snapshotId, engines: unavailableEngines(selected, opened.phase, opened.message), errors, notes: [`Ambiente non disponibile: ${opened.message}`] });
+      return idleRun({ mode, status: "unavailable", snapshotId, engines: unavailableEngines(selected, opened.phase, opened.message), errors, notes: [`Ambiente non disponibile: ${opened.message}`], planned, requestedEngines });
     }
     for (const name of selected) {
-      const availability = await provider.availability(name);
+      // Budget exhausted: never start the next engine (no work started, nothing to clean up).
+      if (Date.now() >= deadline.at) {
+        engines.push({ name, launched: false, status: "unavailable", version: null, executable: null, phase: "launch", reason: "Budget automazione esaurito prima dell'avvio del motore." });
+        errors.push({ phase: "launch", cause: "timeout", engine: name, scenarioId: null, pairId: null, message: `${name}: budget automazione esaurito prima dell'avvio del motore.` });
+        continue;
+      }
+      let availability;
+      try {
+        availability = await withinDeadline(() => provider.availability(name), deadline, {
+          phase: "availability", cause: "timeout", engine: name,
+          message: `${name}: budget automazione esaurito durante la verifica del binario (availability).`,
+        });
+      } catch (error) {
+        const phase = error.phase ?? "availability";
+        const cause = error.timedOut ? "timeout" : (error.cause && error.cause.code ? error.cause.code : (error.code ?? "availability-failed"));
+        engines.push({ name, launched: false, status: "unavailable", version: null, executable: null, phase, reason: error.message });
+        errors.push({ phase, cause, engine: name, scenarioId: null, pairId: null, message: error.message });
+        continue;
+      }
       if (!availability.available) {
         engines.push({ name, launched: false, status: "unavailable", version: null, executable: availability.executable ?? null, phase: availability.phase ?? "availability", reason: availability.message });
         errors.push({ phase: availability.phase ?? "availability", cause: availability.cause ?? "engine-unavailable", engine: name, scenarioId: null, pairId: null, message: availability.message });
@@ -417,32 +580,42 @@ export async function runAutomation(session, options = {}) {
       }
       let browser;
       try {
-        browser = await provider.launch(name, { timeout: timeoutMs });
+        browser = await withinDeadline(() => provider.launch(name, { timeout: timeoutMs }), deadline, {
+          phase: "launch", cause: "timeout", engine: name,
+          message: `${name}: budget automazione esaurito durante l'avvio del browser (launch).`,
+          onLate: (lateBrowser) => closeQuietly(lateBrowser, deadline, LATE_CLEANUP_GRACE_MS).then((lateError) => {
+            if (lateError) errors.push({ phase: "cleanup", cause: "cleanup-timeout", engine: name, scenarioId: null, pairId: null, message: `${name}: browser tardivo non chiuso entro il grace di cleanup (${lateError.message}).` });
+          }),
+        });
       } catch (error) {
         const phase = error.phase ?? "launch";
         engines.push({ name, launched: false, status: "unavailable", version: null, executable: availability.executable, phase, reason: error.message });
-        errors.push({ phase, cause: error.cause && error.cause.code ? error.cause.code : "launch-failed", engine: name, scenarioId: null, pairId: null, message: error.message });
+        const cause = error.timedOut ? "timeout" : (error.cause && error.cause.code ? error.cause.code : "launch-failed");
+        errors.push({ phase, cause, engine: name, scenarioId: null, pairId: null, message: error.message });
         continue;
       }
       let version = null;
       try { version = typeof browser.version === "function" ? browser.version() : null; } catch { version = null; }
       try {
-        const run = await measureEngine(browser, name, { payload, runtimeSource, timeoutMs });
-        for (const report of run.reports) reports.push(namespaceReport(name, report));
-        errors.push(...run.errors);
-        const status = engineStatus(run.reports, run.attempted);
-        const reason = status === "complete" ? null : (run.errors.length ? run.errors[0].message : engineReason(run.reports));
+        const before = errors.length;
+        const engineRun = await measureEngine(browser, name, { payload, runtimeSource, timeoutMs, deadline, errors });
+        for (const report of engineRun.reports) reports.push(namespaceReport(name, report));
+        const engineErrors = errors.slice(before);
+        const status = engineStatus(engineRun.reports, engineRun.attempted);
+        const reason = status === "complete" ? null : (engineErrors.find((error) => error.message)?.message ?? engineReason(engineRun.reports));
         engines.push({ name, launched: true, status, version, executable: availability.executable, phase: status === "complete" ? null : "measure", reason });
       } catch (error) {
         const message = error && error.message ? error.message : String(error);
         errors.push({ phase: "measure", cause: "engine-run-failed", engine: name, scenarioId: null, pairId: null, message });
         engines.push({ name, launched: true, status: "incomplete", version, executable: availability.executable, phase: "measure", reason: message });
       } finally {
-        try { await browser.close(); } catch { /* best effort */ }
+        const cleanupError = await closeQuietly(browser, deadline);
+        if (cleanupError) errors.push({ phase: "cleanup", cause: "cleanup-timeout", engine: name, scenarioId: null, pairId: null, message: `${name}: browser.close non completato entro il grace di cleanup (${cleanupError.message}); la copertura non è confermata.` });
       }
     }
   } finally {
-    if (typeof provider.close === "function") { try { await provider.close(); } catch { /* best effort */ } }
+    const cleanupError = await closeQuietly(provider, deadline);
+    if (cleanupError) errors.push({ phase: "cleanup", cause: "cleanup-timeout", engine: null, scenarioId: null, pairId: null, message: `provider.close non completato entro il grace di cleanup (${cleanupError.message}); la copertura non è confermata.` });
   }
 
   const measurements = [];
@@ -454,14 +627,24 @@ export async function runAutomation(session, options = {}) {
   const executedScenarioIds = [];
   const environmentsByEngine = new Map();
   let measuredAt = null;
+  // Expected identities are the contract-backed plannedMatrix of every LAUNCHED engine, computed
+  // before any report is trusted: an engine that loses one preference (or a report that shrank its
+  // expected set) can never shrink the expected matrix. Unavailable engines stay out of the current
+  // coverage, preserving the auto/partial policy.
+  for (const engine of engines) {
+    if (engine.launched !== true) continue;
+    const matrix = plannedMatrix(session, engine.name, contract);
+    for (const id of matrix.scenarios) expectedScenarioIds.push(id);
+    Object.assign(expectedPairs, matrix.pairs);
+  }
   for (const report of reports) {
     scenarioRecords.push(...report.scenarios);
     measurements.push(...report.measurements);
     unsupported.push(...report.unsupported);
     errors.push(...report.errors);
-    Object.assign(expectedPairs, report.expected.pairs);
+    // The adapter's own `expected` is never trusted for the identity set: a measurement with an
+    // unknown scenario id is left for core.coverage to reject as unexpected, not silently absorbed.
     Object.assign(executedPairs, report.executed.pairs);
-    expectedScenarioIds.push(...report.expected.scenarios);
     executedScenarioIds.push(...report.executed.scenarios);
     if (report.environment) {
       const group = environmentsByEngine.get(report.engine) ?? [];
@@ -500,6 +683,7 @@ export async function runAutomation(session, options = {}) {
     expected: { scenarios: expectedScenarioIds, pairs: expectedPairs },
     executed: { scenarios: executedScenarioIds, pairs: executedPairs },
     scenarios: scenarioRecords, measurements, coverage, unsupported, errors, notes, partial, measuredAt,
+    planned, requestedEngines,
   });
 }
 

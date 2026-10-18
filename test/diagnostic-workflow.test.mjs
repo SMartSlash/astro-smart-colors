@@ -29,6 +29,8 @@ const PALETTE = `@property --palette-bg { syntax: "<color>"; inherits: true; ini
 const PALETTE_PATH = "src/styles/tokens/palette.css";
 const OUTPUT_PATH = "src/styles/tokens/colors.css";
 const TUNING_PATH = "src/styles/tokens/colors-tuning.css";
+// A non-empty tuning so the planned matrix (baseline + tuned) matches what the stub runtime reports.
+const WORKFLOW_TUNING = ":root { --color-text-muted: rgb(0, 0, 255); }";
 
 // A mid-gray ink/canvas cannot reach a 21:1 text contract: the model is strict-invalid while every
 // input still passes validation.
@@ -154,7 +156,7 @@ function surfaceTextPair(contract) {
 // ---------------------------------------------------------------------------
 
 test("report maps a complete run into scenarios, coverage and exit 0 without writing CSS", async (t) => {
-  const root = await fixture(t);
+  const root = await fixture(t, { tuning: WORKFLOW_TUNING });
   const contract = await resolvedContract(root);
   const provider = createFakeProvider({ reportFor: (_engine, preference) => runtimeReport(contract, preference) });
 
@@ -299,7 +301,7 @@ test("a report never modifies palette, config, tuning or CSS bytes", async (t) =
 });
 
 test("an explicit multi-engine request aggregates engines and reports partial coverage policy", async (t) => {
-  const root = await fixture(t);
+  const root = await fixture(t, { tuning: WORKFLOW_TUNING });
   const contract = await resolvedContract(root);
   const complete = () => createFakeProvider({ reportFor: (_engine, preference) => runtimeReport(contract, preference) });
 
@@ -360,14 +362,14 @@ test("a baseline-only run (no tuning) is the final source of problems and exit p
 });
 
 test("a config proposal verified with the same collector is published, and a non-improving one is not", async (t) => {
-  const root = await fixture(t);
+  const root = await fixture(t, { tuning: WORKFLOW_TUNING });
   const { analysis, contract } = await resolved(root);
   const failingPairId = surfaceTextPair(contract).id;
 
   // The stub tells the main run from a candidate trial by the payload's effective CSS bytes.
   const candidateAware = () => createFakeProvider({
     reportFor: (_engine, preference, payload) => {
-      const isCandidate = payload !== null && (payload.css.baseline !== analysis.css || payload.css.tuning !== null);
+      const isCandidate = payload !== null && payload.css.baseline !== analysis.css;
       return runtimeReport(contract, preference, { failingPairId: isCandidate ? null : failingPairId });
     },
   });
@@ -421,4 +423,113 @@ test("a config that changes while it is imported blocks the session before any w
     { code: "SMART_COLORS_INPUTS_CHANGED" },
   );
   await assert.rejects(readFile(path.join(root, OUTPUT_PATH), "utf8"), { code: "ENOENT" });
+});
+
+// ---------------------------------------------------------------------------
+// Reliability: shared budget, published HTML and the exit matrix under a stall.
+// ---------------------------------------------------------------------------
+
+const HANG = () => new Promise(() => {});
+
+async function readArtifacts(result) {
+  return {
+    report: await readFile(result.publication.reportPath, "utf8"),
+    preview: await readFile(result.publication.previewPath, "utf8"),
+  };
+}
+
+test("a hanging automation deadline still publishes both HTML and keeps the build/report exit matrix", async (t) => {
+  const root = await fixture(t);
+
+  const built = await runDiagnosticWorkflow({ root, command: "build", automation: "auto", provider: createFakeProvider({ open: HANG }), overallTimeoutMs: 120 });
+  assert.equal(built.run.status, "unavailable");
+  assert.equal(built.exitCode, 0);
+  assert.ok(built.production && Array.isArray(built.production.outputs), "production handoff is { accepted, outputs, candidates }");
+  for (const html of Object.values(await readArtifacts(built))) assert.match(html, /^<!-- smart-colors-report:v1 -->/);
+
+  const reported = await runDiagnosticWorkflow({ root, command: "report", automation: "required", browsers: ["chromium"], provider: createFakeProvider({ open: HANG }), overallTimeoutMs: 120 });
+  assert.equal(reported.run.status, "unavailable");
+  assert.equal(reported.exitCode, 1, "required stays strict on an unavailable environment");
+  for (const html of Object.values(await readArtifacts(reported))) assert.match(html, /^<!-- smart-colors-report:v1 -->/);
+});
+
+test("a measure failure is an incomplete report: exit 1, published HTML and planned coverage nonzero", async (t) => {
+  const root = await fixture(t, { tuning: ":root { --color-text-muted: black; }" });
+  const provider = createFakeProvider({ fail: () => "wait" });
+  const result = await runDiagnosticWorkflow({ root, command: "report", automation: "required", browsers: ["chromium"], provider, overallTimeoutMs: 1000 });
+
+  assert.equal(result.run.status, "incomplete");
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.coverage.measuredPairs, 0);
+  assert.ok(result.coverage.expectedPairs > 0, "expected pairs must not collapse to 0");
+  assert.ok(result.coverage.missingPairs > 0, "missing pairs are counted by expected identity");
+  assert.equal(result.coverage.complete, false);
+  for (const html of Object.values(await readArtifacts(result))) assert.match(html, /^<!-- smart-colors-report:v1 -->/);
+});
+
+test("a partial multi-engine run stays exit 0 under auto with no all-clear, and strict under required", async (t) => {
+  const root = await fixture(t, { tuning: WORKFLOW_TUNING });
+  const contract = await resolvedContract(root);
+  const provider = () => createFakeProvider({
+    reportFor: (_engine, preference) => runtimeReport(contract, preference),
+    availability: (name) => (name === "webkit"
+      ? { name, available: false, phase: "availability", cause: "binary-missing", message: "webkit: binary unavailable", executable: null }
+      : { name, available: true, executable: `/fake/${name}` }),
+  });
+
+  const auto = await runDiagnosticWorkflow({ root, command: "report", automation: "auto", provider: provider() });
+  assert.equal(auto.run.status, "complete");
+  assert.equal(auto.run.partial, true);
+  assert.equal(auto.exitCode, 0, "auto must keep an environmentally-unavailable engine non-blocking");
+  assert.equal(auto.coverage.complete, false, "a partial run is never an all-clear");
+  assert.equal(auto.coverage.planned.engines.length, 3, "requested coverage names every requested engine");
+  assert.equal(auto.coverage.launched, 2);
+
+  const required = await runDiagnosticWorkflow({ root, command: "report", automation: "required", browsers: ["chromium", "webkit"], provider: provider() });
+  assert.equal(required.run.partial, true);
+  assert.equal(required.exitCode, 1);
+  assert.equal(required.coverage.complete, false);
+});
+
+test("proposal trials share the workflow budget and never make the current audit incomplete", async (t) => {
+  const root = await fixture(t, { tuning: WORKFLOW_TUNING });
+  const { contract } = await resolved(root);
+  const failingPairId = surfaceTextPair(contract).id;
+  // The main run is the first open; every proposal trial re-opens, so those runs hang: the shared
+  // budget must stop them and declare the proposals unverified without touching the current audit.
+  let currentRun = 0;
+  const provider = {
+    record: { openCalls: 0 },
+    async open() { this.record.openCalls += 1; currentRun = this.record.openCalls; return { ok: true, request: "playwright", resolved: "/fake/pw", browsers: {} }; },
+    async availability(name) { return { name, available: true, executable: `/fake/${name}` }; },
+    async launch(name) {
+      return {
+        version: () => `0.0.0-${name}`,
+        async newContext(options) {
+          const preference = options.colorScheme;
+          return {
+            async route() {},
+            async newPage() {
+              return {
+                setDefaultTimeout() {},
+                async setContent() {},
+                async waitForFunction() { if (currentRun > 1) return HANG(); },
+                async evaluate() { return runtimeReport(contract, preference, { failingPairId }); },
+              };
+            },
+            async close() {},
+          };
+        },
+        async close() {},
+      };
+    },
+    async close() {},
+  };
+
+  const result = await runDiagnosticWorkflow({ root, command: "report", automation: "required", browsers: ["chromium"], provider, overallTimeoutMs: 800 });
+  assert.equal(result.run.status, "complete", "the current-pairs audit is unaffected by a rejected proposal");
+  assert.ok(result.problems.length >= 1);
+  assert.equal(result.proposals.length, 0);
+  assert.ok(result.rejectedSources.length >= 1, "the unverified proposal is declared, not silently dropped");
+  assert.ok(result.rejectedSources.some((entry) => /budget|incompleta/.test(entry.reason)));
 });

@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { analyzeColorTokens } from "./generate-colors.mjs";
-import { DEFAULT_CONFIG_FILE, loadSmartColorsConfig } from "./load-config.mjs";
+import { DEFAULT_CONFIG_FILE, loadSmartColorsConfig, paletteNotFoundError } from "./load-config.mjs";
 import { captureReportInputs, reportSnapshot } from "./report-data.mjs";
 
 const { version: TOOL_VERSION } = createRequire(import.meta.url)("../package.json");
@@ -34,7 +34,13 @@ export async function createDiagnosticSession({ root = process.cwd(), configFile
     ? mergeConfigLayers(config, inlineConfig ?? {})
     : await loadStableConfig(root, configFile, inlineConfig ?? {});
   const captured = await captureReportInputs(root, selected, { configFile });
-  const paletteCss = captured.inputs.find(([name]) => name === "palette")[2];
+  const paletteInput = captured.inputs.find(([name]) => name === "palette");
+  // A missing palette is named explicitly (path/root/configFile) before any analysis: an empty
+  // read would otherwise surface as contract errors about canvas/ink instead of a clear diagnosis.
+  if (paletteInput && paletteInput[3] === false) {
+    throw paletteNotFoundError({ palettePath: captured.files.palette, root, configFile });
+  }
+  const paletteCss = paletteInput[2];
   const analysis = await analyzeColorTokens({ root, config: selected, configFile, ...restOptions }, paletteCss);
   const snapshot = await reportSnapshot(root, analysis, captured);
   const tuning = tuningContent(captured);

@@ -62,6 +62,52 @@ pnpm add -D github:SMartSlash/astro-smart-colors#v0.3.0
 - Legacy `./report` and `./audit` API wrappers keep their documented behavior.
   The new exit policy belongs to the CLI workflow; adapters return structured
   data and do not set `process.exitCode`.
+- The CLI console summary is now Italian and coherent: headings, state lines,
+  help descriptions and parser messages are localized, while model
+  warning/suggestion strings and raw core errors stay verbatim on stderr (the
+  technical channel).
+- An empty argument (for example `smart-colors ""` or `smart-colors build ""`)
+  is now a usage error that exits `1` and writes nothing, instead of silently
+  falling back to the default `build` command.
+- `build` and `report` no longer print a plain success heading on a non-zero
+  exit. A strict-invalid model prints `Build non completata` with the model
+  error count and an explicit note that the two diagnostic HTML files were
+  still published. A non-zero `build` otherwise distinguishes
+  `Build completata · verifica richiesta non disponibile` (no engine started),
+  `· verifica incompleta` (a launched run that did not complete) and
+  `· problemi di contrasto` (complete measurement, below-minimum pairs);
+  `report` distinguishes `Report generati · problemi rilevati`,
+  `· verifica incompleta` and `· contratto non valido`.
+- `build`/`report` print two clickable `file://` link lines (`Anteprima:` and
+  `Report:`) instead of four path/URL lines, and the next step is “open the
+  preview”. `report` no longer recycles an identical `report` command as its
+  only next action; `build` keeps a secondary regenerate command.
+- Optional automation is a brief stdout note with no install instruction by
+  default. In `auto`, an expected absence (Playwright simply not installed) is
+  only that brief note: its discovery reason is not echoed as a raw stderr
+  detail, while import/availability/launch/measurement failures stay detailed.
+  `required` keeps the technical detail and states the explicit action instead.
+  A zero-engine run names every selected engine with a brief cause and never
+  substitutes a hardcoded `chromium` install command for another engine, and it
+  distinguishes a missing package/API from a missing engine binary. The raw
+  engine/run detail is deduplicated on stderr, stays bounded, and stdout lines
+  are length-capped with terminal control characters escaped (clickable URLs and
+  command lines are never truncated). Automation keeps one shared 60-second
+  budget for the whole run, proposals included.
+- The CLI localizes the two typed absent-input errors: a missing palette points
+  at `pnpm exec smart-colors init --root …`, and a missing explicitly selected
+  config explains how to create it or drop `--config`, without suggesting an
+  `init` that would fail on the same missing config. Other I/O errors keep their
+  raw shape. `check` suggests the real regeneration command with the effective
+  `--root`/`--config`, and its summary is printed before the raw stderr detail.
+- The model facts are shown once: a single grouped problem synthesis in the
+  console, counts in the model line, and the raw warning/suggestion strings on
+  stderr only. A partial or empty run after a launch is reported as an explicit
+  incomplete verification, never as a green all-clear. `report` names a stale or
+  absent CSS output on the console as a diagnostic candidate, not accepted
+  production. `init` lists only the files it actually created as “File creati”,
+  keeps the effective `--root`/`--config` in its next-step command, and surfaces
+  the owner's tuning guidance as an “Avvisi” section instead of a false success.
 
 ### Removed from the manifest
 

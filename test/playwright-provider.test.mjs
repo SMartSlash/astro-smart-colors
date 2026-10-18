@@ -230,3 +230,13 @@ test("discovery does not resolve anything until open is called", async () => {
   createPlaywrightProvider({ root: WORKSPACE_ROOT, resolve, importModule: async () => ({}) });
   assert.deepEqual(resolve.calls, []);
 });
+
+test("the not-found reason is brief and non-imperative, with no install nag", async () => {
+  const provider = createPlaywrightProvider({ root: WORKSPACE_ROOT, resolve: throwingResolve(), importModule: async () => ({}) });
+  const opened = await provider.open();
+  assert.equal(opened.ok, false);
+  assert.equal(opened.phase, "discovery");
+  assert.equal(opened.cause, "playwright-not-found");
+  assert.ok(opened.message.includes(WORKSPACE_ROOT), "the reason names the effective consumer root");
+  assert.doesNotMatch(opened.message, /pnpm exec playwright install|Installa playwright/);
+});

@@ -38,18 +38,10 @@
     "test": "node --test test/*.test.mjs"
   },
   "peerDependencies": {
-    "astro": ">=5",
-    "playwright": ">=1.40",
-    "@playwright/test": ">=1.40"
+    "astro": ">=5"
   },
   "peerDependenciesMeta": {
     "astro": {
-      "optional": true
-    },
-    "playwright": {
-      "optional": true
-    },
-    "@playwright/test": {
       "optional": true
     }
   },

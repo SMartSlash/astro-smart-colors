@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { defaultSmartColorsConfig } from "./defaults.mjs";
 import { analyzeColorTokens } from "./generate-colors.mjs";
 import { clamp, contrast, fitToSrgb, mixOklch, oklch, serializedColor } from "./color-math.mjs";
 import { nearestLightness, resolvedColor, sourceColorValue } from "./contrast-advice.mjs";
@@ -91,21 +92,39 @@ export function formatReportSummary(snapshot) {
   return lines.join("\n");
 }
 
-async function optionalRead(file) {
+async function optionalRead(file, name) {
   try {
     const bytes = await readFile(file);
     return [bytes.toString("utf8"), true, createHash("sha256").update(bytes).digest("hex")];
-  } catch (error) { if (error.code === "ENOENT") return ["", false, null]; throw error; }
+  } catch (error) {
+    if (error.code === "ENOENT") return ["", false, null];
+    // An existing but unreadable input is not the same as a missing one: naming it
+    // keeps the failure explicit instead of degrading to a valid absence.
+    const wrapped = new Error(`Smart Colors input ${name ? `"${name}"` : file} is unreadable at ${file}: ${error.message}`, { cause: error });
+    wrapped.code = "SMART_COLORS_INPUT_UNREADABLE";
+    throw wrapped;
+  }
 }
 
-export async function captureReportInputs(root, config) {
-  const files = { ...REPORT_FILES, ...(config ? { palette: config.palette, output: config.output } : {}), tuning: await resolveTuningFile(root, config) };
-  const inputs = await Promise.all(Object.entries(files).map(async ([name, file]) => [name, file, ...await optionalRead(path.resolve(root, file))]));
+export async function captureReportInputs(root, config, options = {}) {
+  // The effective config file must be captured as-is: the default name may not stand in for a
+  // caller-provided --config. The option is additive so existing two-argument callers keep the
+  // legacy default path. The motion output is captured even while disabled: it is a protected
+  // production output, not an optional extra.
+  const configFile = options.configFile ?? REPORT_FILES.config;
+  const files = {
+    ...REPORT_FILES,
+    config: configFile,
+    ...(config ? { palette: config.palette, output: config.output } : {}),
+    tuning: await resolveTuningFile(root, config),
+    motion: config?.motion?.output ?? defaultSmartColorsConfig.motion.output,
+  };
+  const inputs = await Promise.all(Object.entries(files).map(async ([name, file]) => [name, file, ...await optionalRead(path.resolve(root, file), name)]));
   return { files, inputs };
 }
 
 export async function assertReportInputsUnchanged(root, captured) {
-  const current = await Promise.all(captured.inputs.map(async ([name, file]) => [name, file, ...await optionalRead(path.resolve(root, file))]));
+  const current = await Promise.all(captured.inputs.map(async ([name, file]) => [name, file, ...await optionalRead(path.resolve(root, file), name)]));
   if (JSON.stringify(current) !== JSON.stringify(captured.inputs)) {
     const error = new Error("Smart Colors inputs changed during the report session; no report was published. Rerun with stable inputs.");
     error.code = "SMART_COLORS_INPUTS_CHANGED";

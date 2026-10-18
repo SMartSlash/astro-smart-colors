@@ -605,8 +605,9 @@ export function familyAtlasData(entries) {
 }
 
 // Visual catalog of the generated families: only pairs that were actually measured,
-// each shown with its worst measurement across browser/preference scenarios.
-function familyAtlas(entries, verified) {
+// each shown with its worst measurement across browser/preference scenarios. With
+// `options.model` the same catalog renders the browser-free model samples instead.
+function familyAtlas(entries, verified, options = {}) {
   const { names, find } = familyAtlasData(entries);
   if (!names.length) return "";
   const meta = (item) => item && diagnosticValid(item)
@@ -642,8 +643,19 @@ ${light ? `<p class="eyebrow">Tema chiaro</p><div class="family-list">${light}</
 ${dark ? `<p class="eyebrow">Tema scuro</p><div class="family-list">${dark}</div>` : ""}</article>`;
   }).join("");
   if (!cards) return "";
+  const note = options.model
+    ? "Campioni calcolati dal modello del generatore, non da misure browser: ogni valore è una previsione e nessun campione riceve un badge di verifica. I rapporti esatti e gli esiti restano nel dettaglio del campione."
+    : `Solo coppie misurate negli scenari${verified ? "" : "; verifica incompleta: il quadro può essere parziale"}. Per ogni abbinamento è mostrato il caso peggiore fra browser e preferenze; i rapporti esatti restano nei dettagli tecnici.`;
   return `<div class="grid">${cards}</div>
-<p class="margin-note">Solo coppie misurate negli scenari${verified ? "" : "; verifica incompleta: il quadro può essere parziale"}. Per ogni abbinamento è mostrato il caso peggiore fra browser e preferenze; i rapporti esatti restano nei dettagli tecnici.</p>`;
+<p class="margin-note">${note}</p>`;
+}
+
+// Model atlas: the same family catalog rendered from the browser-free model samples,
+// so the preview and the report stay useful without Playwright or a local run.
+function modelAtlasHtml(samples) {
+  const entries = entriesFor(list(samples));
+  if (!familyAtlasData(entries).names.length) return "";
+  return familyAtlas(entries, false, { model: true });
 }
 
 // A functional variant normally shifts away from its brand source; only large shifts are reported,
@@ -927,6 +939,207 @@ export function validation(report, scenarios, entries) {
   return { problems, iso, digest };
 }
 
+// ---------------------------------------------------------------------------
+// Diagnostic session extras (SC-03 payload, plan §5.2/§6.2). The static report and
+// the preview read the same session; neither promotes the model or the automation
+// run to a browser-verified, local result.
+// ---------------------------------------------------------------------------
+
+/** True for the SC-03 diagnostic session (schemaVersion 1) rather than the legacy snapshot. */
+export function isDiagnosticSession(value) {
+  return record(value) && value.schemaVersion === 1 && record(value.css)
+    && typeof value.css.baseline === "string" && record(value.model) && Array.isArray(value.samples);
+}
+
+/** Declared snapshot identity: stable id, tool version and captured inputs. */
+export function sessionIdentityHtml(value) {
+  if (!isDiagnosticSession(value)) return "";
+  const snapshotId = text(value.snapshotId) ? escape(value.snapshotId) : "non disponibile";
+  const toolVersion = text(value.toolVersion) ? escape(value.toolVersion) : "non disponibile";
+  const inputs = list(value.inputs).filter((item) => record(item) && text(item.name));
+  const present = inputs.filter((item) => item.present === true).length;
+  const captured = inputs.length ? ` · Input catturati: ${present}/${inputs.length}` : "";
+  return `<p>Snapshot incorporato: <code>${snapshotId}</code> · Versione tool: <code>${toolVersion}</code>${captured}.</p>`;
+}
+
+const AUTOMATION_STATES = { pending: "In attesa", running: "In corso", complete: "Completa", incomplete: "Incompleta", unavailable: "Non disponibile", unsupported: "Non supportata", disabled: "Disattivata" };
+// Environment phases are never a measurement problem; a run can be complete while a requested
+// engine was simply unavailable in discovery/import/availability/launch.
+const AUTOMATION_ENVIRONMENT_PHASES = ["discovery", "import", "availability", "launch"];
+const AUTOMATION_MAX_ERRORS = 40;
+const AUTOMATION_MAX_MEASUREMENT_GROUPS = 60;
+
+/**
+ * Scope of a VerificationRun, never a global verdict. `complete` requires the run status, the
+ * coverage flag, zero measurement-phase errors AND no partial coverage, all limited to the engines
+ * and scenarios actually executed, so a partial run can never look like a universal pass.
+ */
+export function automationScope(value) {
+  const run = record(value) ? value : {};
+  const engines = list(run.engines).filter(record);
+  const errors = list(run.errors).filter((error) => record(error) && text(error.message));
+  const measurements = list(run.measurements).filter(record);
+  const coverage = record(run.coverage) ? run.coverage : null;
+  const measurementErrors = errors.filter((error) => !AUTOMATION_ENVIRONMENT_PHASES.includes(error.phase));
+  const environmentErrors = errors.filter((error) => AUTOMATION_ENVIRONMENT_PHASES.includes(error.phase));
+  const launched = engines.filter((engine) => engine.launched === true);
+  const coverageComplete = Boolean(coverage && coverage.complete === true);
+  const partial = run.partial === true;
+  const status = text(run.status) ? run.status : "disabled";
+  const complete = status === "complete" && coverageComplete && measurementErrors.length === 0 && !partial
+    && launched.length > 0 && measurements.length > 0;
+  return { run, status, engines, errors, measurements, coverage, measurementErrors, environmentErrors, launched, coverageComplete, partial, complete, unsupported: list(run.unsupported).filter(record) };
+}
+
+function automationStateLabel(state) {
+  return AUTOMATION_STATES[state] ?? (text(state) ? state : "Stato non indicato");
+}
+
+function automationMeasurementStatus(item) {
+  if (text(item.error)) return `Non misurata: ${item.error}`;
+  if (item.status === "pass") return "Raggiunge minimo e target";
+  if (item.status === "below-target") return "Sotto il target";
+  if (item.status === "below-minimum") return "Sotto il minimo";
+  if (item.status === "unmeasured") return "Non misurata";
+  return text(item.status) ? String(item.status) : "Esito non indicato";
+}
+
+function countPairIds(pairs) {
+  if (!record(pairs)) return 0;
+  let total = 0;
+  for (const value of Object.values(pairs)) total += list(value).length;
+  return total;
+}
+
+// Compact, explicit scope sentence. "Complete" only ever refers to the executed environments.
+function automationScopeSentence(scope) {
+  if (scope.status === "disabled") return "Automazione disattivata: nessuna misura browser è inclusa in questo snapshot.";
+  if (scope.launched.length === 0) return "Ambiente di automazione non disponibile: nessun motore ha misurato, quindi l'automazione non conferma nessuna coppia.";
+  if (scope.complete) return "Copertura completa negli ambienti eseguiti (i motori e gli scenari elencati qui sotto), non universale: vale solo per i motori richiesti che hanno completato la verifica.";
+  return `Copertura parziale o incompleta: ${scope.partial ? "non tutti i motori richiesti hanno completato la verifica" : "non tutte le coppie attese sono coperte"}; le misure eseguite non coprono gli ambienti o gli scenari mancanti.`;
+}
+
+/** Static summary of the VerificationRun; never merged with the model or the local run. */
+export function automationHtml(value) {
+  if (!record(value)) return "";
+  const scope = automationScope(value);
+  const { run, status, engines, errors, measurements, launched, complete, measurementErrors, environmentErrors, unsupported } = scope;
+  const mode = text(run.mode) ? run.mode : "off";
+  const expected = record(run.expected) ? run.expected : {};
+  const executed = record(run.executed) ? run.executed : {};
+  const facts = [
+    `<div><dt>Modalità</dt><dd><code>${escape(mode)}</code></dd></div>`,
+    `<div><dt>Stato</dt><dd>${escape(automationStateLabel(status))}</dd></div>`,
+    `<div><dt>Motori eseguiti</dt><dd>${launched.length} di ${engines.length}</dd></div>`,
+    `<div><dt>Scenari</dt><dd>${list(executed.scenarios).length} di ${list(expected.scenarios).length} eseguiti</dd></div>`,
+    `<div><dt>Coppie</dt><dd>${countPairIds(executed.pairs)} di ${countPairIds(expected.pairs)} eseguite</dd></div>`,
+    `<div><dt>Misure</dt><dd>${measurements.length}</dd></div>`,
+    `<div><dt>Copertura</dt><dd>${complete ? "completa negli ambienti eseguiti" : "parziale o incompleta"}</dd></div>`,
+  ];
+  if (measurementErrors.length) facts.push(`<div><dt>Errori di misura</dt><dd>${measurementErrors.length}</dd></div>`);
+  if (environmentErrors.length) facts.push(`<div><dt>Errori d&#39;ambiente</dt><dd>${environmentErrors.length}</dd></div>`);
+  if (text(run.measuredAt)) facts.push(`<div><dt>Istante più recente</dt><dd>${escape(run.measuredAt)}</dd></div>`);
+
+  const enginesHtml = engines.length ? `<h4>Motori richiesti</h4>
+<ul class="automation-engines">${engines.map((engine) => {
+    const name = text(engine.name) ? engine.name : "motore non indicato";
+    const version = text(engine.version) ? ` ${escape(engine.version)}` : "";
+    const state = automationStateLabel(engine.status);
+    const launch = engine.launched === true ? "eseguito" : "non eseguito";
+    const phase = text(engine.phase) ? ` · fase <code>${escape(engine.phase)}</code>` : "";
+    const reason = text(engine.reason) ? ` — ${escape(engine.reason)}` : "";
+    return `<li><code>${escape(name)}</code>${version} · ${escape(state)} · ${launch}${phase}${reason}</li>`;
+  }).join("")}</ul>` : "";
+
+  // Error causes are always listed, even when the run produced zero measurements.
+  const shownErrors = errors.slice(0, AUTOMATION_MAX_ERRORS);
+  const errorsHtml = errors.length ? `<h4>Errori dell'automazione (${errors.length})</h4>
+<ul class="automation-errors">${shownErrors.map((error) => {
+    const phase = text(error.phase) ? `<code>${escape(error.phase)}</code>` : "<code>fase non indicata</code>";
+    const cause = text(error.cause) ? `<code>${escape(error.cause)}</code>` : "<code>causa non indicata</code>";
+    const engine = text(error.engine) ? ` · motore <code>${escape(error.engine)}</code>` : "";
+    const scenario = text(error.scenarioId) ? ` · scenario <code>${escape(error.scenarioId)}</code>` : "";
+    return `<li>${phase} · ${cause} — ${escape(error.message)}${engine}${scenario}</li>`;
+  }).join("")}</ul>${errors.length > shownErrors.length ? `<p class="margin-note">Altre ${errors.length - shownErrors.length} voci d'errore sono omesse da questa sintesi; il run completo resta nei dati strutturati.</p>` : ""}` : "";
+
+  const unsupportedHtml = unsupported.length ? `<h4>Scenari non supportati (${unsupported.length})</h4>
+<ul class="automation-unsupported">${unsupported.map((entry) => {
+    const engine = text(entry.engine) ? ` · motore <code>${escape(entry.engine)}</code>` : "";
+    return `<li><code>${escape(entry.id)}</code> — ${escape(entry.reason)}${engine}</li>`;
+  }).join("")}</ul>` : "";
+
+  const groups = new Map();
+  for (const measurement of measurements) {
+    const key = JSON.stringify([measurement.pairId, measurement.minimum, measurement.target]);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(measurement);
+  }
+  const shownGroups = [...groups.values()].slice(0, AUTOMATION_MAX_MEASUREMENT_GROUPS);
+  const measurementsHtml = measurements.length ? `<h4>Misure automatizzate (${measurements.length})</h4>
+<p class="margin-note">Raggruppate per coppia, minimo e target: è mostrato il rapporto peggiore fra i motori e gli scenari eseguiti, con soglie ed esito. Il run locale di un browser è nella preview, separato da queste misure.</p>
+${table("Misure automatizzate per coppia", ["Coppia", "Tema", "Minimo", "Target", "Rapporto (peggiore)", "Esito", "Misure"], shownGroups.map((group) => {
+    const worst = group.reduce((current, item) => (finite(item.ratio) && (!finite(current.ratio) || item.ratio < current.ratio) ? item : current), group[0]);
+    const parts = pairParts(worst.pairId);
+    const pairCell = parts
+      ? `<code>${escape(parts.foreground)}</code> su <code>${escape(parts.background)}</code>`
+      : `<code>${escape(worst.pairId == null ? "coppia non indicata" : worst.pairId)}</code>`;
+    const themeCell = parts ? (parts.theme === "light" ? "Chiaro" : parts.theme === "dark" ? "Scuro" : escape(parts.theme)) : "—";
+    return `<tr><th scope="row">${pairCell}</th><td>${themeCell}</td><td>${ratio(worst.minimum)}</td><td>${ratio(worst.target)}</td><td>${compactRatio(worst.ratio, [worst.minimum, worst.target])}</td><td>${escape(automationMeasurementStatus(worst))}</td><td>${group.length}</td></tr>`;
+  }))}${groups.size > shownGroups.length ? `<p class="margin-note">Altre ${groups.size - shownGroups.length} coppie sono omesse da questa sintesi; il run completo resta nei dati strutturati.</p>` : ""}` : "";
+
+  return `<h3>Verifica automatizzata (Playwright)</h3>
+<p>Misura separata dal modello e dalla verifica locale: usa i motori richiesti e non sostituisce né i campioni del modello né le misure di questo browser. <strong>${escape(automationScopeSentence(scope))}</strong></p>
+<dl>${facts.join("")}</dl>
+${enginesHtml}${errorsHtml}${unsupportedHtml}${measurementsHtml}`;
+}
+
+function pairParts(pairId) {
+  const parts = typeof pairId === "string" ? pairId.split("|") : [];
+  return parts.length === 4 ? { theme: parts[0], property: parts[1], foreground: parts[2], background: parts[3] } : null;
+}
+
+// `validation` raises these two only because the legacy scenario matrix is empty for a session whose
+// evidence lives in the automation run; every identity problem still blocks a positive header.
+const SCENARIO_PROBLEMS = new Set([
+  "Scenari mancanti, non validi o senza misure.",
+  "Diagnostiche mancanti, non valide o incoerenti con lo scenario o con le soglie.",
+]);
+
+/**
+ * Header-level verification of a session: the snapshot identity stays intact AND the automation run
+ * is complete in the executed engines. The model never contributes to this positive and a partial or
+ * incomplete automation run can never claim it.
+ */
+export function sessionVerification(value) {
+  if (!isDiagnosticSession(value)) return null;
+  const scenarios = list(value.scenarios);
+  const entries = entriesFor(scenarios);
+  const { problems } = validation(value, scenarios, entries);
+  const identityProblems = problems.filter((problem) => !SCENARIO_PROBLEMS.has(problem));
+  const errors = [...list(value.generationErrors), ...list(value.auditErrors)];
+  const scope = record(value.automation) ? automationScope(value.automation) : null;
+  const identityOk = identityProblems.length === 0 && errors.length === 0;
+  return { scope, identityProblems, identityOk, verified: identityOk && Boolean(scope && scope.complete) };
+}
+
+// UTF-8 byte size without a build step; the pages measure the embedded CSS bytes.
+const utf8Bytes = (value) => typeof value === "string" ? new TextEncoder().encode(value).length : 0;
+
+/** Technical note on the CSS bytes embedded in the snapshot (baseline and tuning). */
+export function cssEmbedHtml(value) {
+  if (!record(value)) return "";
+  const baselineBytes = utf8Bytes(value.baseline);
+  const tuning = typeof value.tuning === "string" ? value.tuning : null;
+  const support = ["absent", "supported", "unsupported"].includes(value.tuningSupport) ? value.tuningSupport : null;
+  const tuningLine = tuning === null || support === "absent"
+    ? "Assente: nessun override a runtime."
+    : support === "unsupported"
+      ? `Incorporato (${utf8Bytes(tuning)} byte) ma non valutato: contiene <code>@import</code> o <code>url()</code> non caricabili offline, quindi le misure del modello non lo coprono.`
+      : `Incorporato: ${utf8Bytes(tuning)} byte.`;
+  return `<p>Le pagine misurano i byte CSS <strong>incorporati</strong> nel payload, non i file sul disco: rigenera dopo ogni modifica.</p>
+<dl><div><dt>Baseline incorporata</dt><dd>${baselineBytes} byte</dd></div><div><dt>Tuning</dt><dd>${tuningLine}</dd></div></dl>`;
+}
+
 /** Internal snapshot preparation shared by renderers and report summaries; no I/O or contrast recalculation. */
 export function prepareContrastReport(value) {
   const report = record(value) ? value : {};
@@ -956,10 +1169,62 @@ export function prepareContrastReport(value) {
     groups, overlaps, variantShifts, tuningGroups, complete, rejectedSources, outcome, files };
 }
 
+/**
+ * Prepared view for a diagnostic session: the legacy snapshot view with every positive verdict,
+ * verified proposal and exploratory overlap ALSO gated by `sessionVerification` (automation complete
+ * in the executed engines, identity intact). A session can only ever be downgraded here, so an
+ * incomplete, partial, unsupported, disabled or missing automation run never inherits the legacy
+ * "0 issue" outcome. `sessionVerification` calls `validation`/`automationScope`, never this function,
+ * so the two helpers cannot recurse into each other.
+ */
+export function prepareDiagnosticReport(value) {
+  const prepared = prepareContrastReport(value);
+  if (!isDiagnosticSession(value)) return { ...prepared, verification: null };
+  const verification = sessionVerification(value);
+  const verified = prepared.verified && Boolean(verification && verification.verified);
+  if (verified === prepared.verified) return { ...prepared, verification };
+  // Downgrade only: strip the positive outcome, proposal coverage and exploratory overlaps.
+  return {
+    ...prepared,
+    verification,
+    verified: false,
+    outcome: "Esito non verificato o incompleto",
+    proposals: prepared.proposals.map((view) => ({ ...view, complete: false, covered: new Set() })),
+    complete: [],
+    overlaps: overlapView(prepared.report.overlaps, prepared.scenarios, false),
+    variantShifts: null,
+  };
+}
+
 /** Render a supplied snapshot only: no I/O, recalculation of contrast or client code. */
 export function formatContrastReportHtml(value) {
+  const session = isDiagnosticSession(value) ? value : null;
+  const prepared = session ? prepareDiagnosticReport(value) : prepareContrastReport(value);
   const { report, scenarios, entries, problems, iso, digest, issues, errors, verified, proposals,
-    groups, overlaps, variantShifts, tuningGroups, complete, rejectedSources, outcome, files } = prepareContrastReport(value);
+    groups, overlaps, variantShifts, tuningGroups, complete, rejectedSources, outcome, files } = prepared;
+  const identity = session ? sessionIdentityHtml(session) : "";
+  const modelAtlas = session ? modelAtlasHtml(session.samples) : "";
+  const automation = session ? automationHtml(session.automation) : "";
+  const cssEmbed = session ? cssEmbedHtml(session.css) : "";
+  const verification = prepared.verification ?? null;
+  const verificationLine = verification
+    ? verification.verified
+      ? "<p><strong>Copertura verificata:</strong> le coppie automatizzate sono complete negli ambienti eseguiti (motori e scenari elencati). Il modello resta una previsione, non una verifica.</p>"
+      : "<p><strong>Copertura non verificata:</strong> l'automazione non copre tutte le coppie negli ambienti eseguiti; il modello resta una previsione, non una verifica.</p>"
+    : "";
+  const sessionSection = modelAtlas || automation
+    ? `<section aria-labelledby="sessione"><h2 id="sessione">Campioni dal modello e verifica automatizzata</h2>
+<p>Questi risultati vengono dal modello del generatore e dall'automazione richiesta, non da misure locali di questo browser. Le misure locali sono nella <a href="smart-colors-preview.html">preview diagnostica</a>, che non modifica questo report statico.</p>
+${modelAtlas}${automation}</section>`
+    : "";
+  const sessionNav = sessionSection ? `<li><a href="#sessione">Campioni dal modello</a></li>` : "";
+  const previewLink = session
+    ? `<p>La <a href="smart-colors-preview.html">preview diagnostica</a> mostra gli stessi campioni e aggiunge la verifica locale del browser, senza modificare questo report.</p>`
+    : "";
+  const cssDetails = cssEmbed
+    ? `<details><summary>CSS incorporato nello snapshot</summary>
+<section aria-labelledby="css"><h2 id="css">CSS incorporato nello snapshot</h2>${cssEmbed}</section></details>`
+    : "";
   const messages = (heading, values) => `<h3>${heading}</h3>${values.length ? `<ul>${values.map((item) => `<li>${escape(item)}</li>`).join("")}</ul>` : "<p>Nessuno.</p>"}`;
   return `${MARKER}
 <!doctype html>
@@ -972,8 +1237,8 @@ export function formatContrastReportHtml(value) {
 <header><h1>Rapporto di contrasto</h1><p class="status overview">${outcome}</p>
 <ul class="summary-facts"><li><strong>${groups.length}</strong> ${agree(groups.length, "problema distinto", "problemi distinti")}</li><li><strong>${complete.length}</strong> ${agree(complete.length, "correzione verificata", "correzioni verificate")}</li><li><strong>${entries.length}</strong> ${agree(entries.length, "coppia misurata", "coppie misurate")}</li><li><strong>${variantShifts === null ? "n.d." : variantShifts.length}</strong> ${agree(variantShifts?.length ?? 0, "variante da rivedere", "varianti da rivedere")}</li><li><strong>${scenarios.length}</strong> ${agree(scenarios.length, "scenario", "scenari")}</li></ul>
 <p>Generato il ${iso ? `<time datetime="${escape(report.generatedAt)}">${escape(report.generatedAt)}</time>` : escape(report.generatedAt)}.</p>
-<p><strong>Snapshot statico, non stato attuale del progetto.</strong> Rigenera il report dopo ogni modifica ai colori. Data, file e impronta sono nei dettagli tecnici.</p>
-<nav aria-label="Sezioni del rapporto"><ul><li><a href="#proposte">Correzione consigliata</a></li><li><a href="#problemi">Problemi e risultato atteso</a></li><li><a href="#usi">Colpo d’occhio sugli usi</a></li><li><a href="#tecnici">Dettagli tecnici</a></li></ul></nav></header>
+${identity}${verificationLine}${previewLink}<p><strong>Snapshot statico, non stato attuale del progetto.</strong> Rigenera il report dopo ogni modifica ai colori. Data, file e impronta sono nei dettagli tecnici.</p>
+<nav aria-label="Sezioni del rapporto"><ul><li><a href="#proposte">Correzione consigliata</a></li><li><a href="#problemi">Problemi e risultato atteso</a></li><li><a href="#usi">Colpo d’occhio sugli usi</a></li>${sessionNav}<li><a href="#tecnici">Dettagli tecnici</a></li></ul></nav></header>
 <main id="contenuto">
 ${verified ? "" : `<div class="notice"><p class="status">Nessuna conclusione positiva: dati assenti, non validi, incoerenti o errori impediscono di verificare lo snapshot.</p><ul>${[...problems, ...errors].map((item) => `<li>${escape(item)}</li>`).join("")}</ul></div>`}
 ${list(report.notes).length ? `<p>${escape(report.notes[0])}</p>` : ""}
@@ -993,7 +1258,7 @@ ${familyAtlas(entries, verified)}
 ${variantShiftsHtml(variantShifts)}
 <h3>Se sovrapponi liberamente i colori base</h3>${overlapsHtml(overlaps)}
 <p>Su foto, gradienti o trasparenze, verifica il risultato sullo sfondo reale. Colori diversi per tonalità possono avere poco contrasto: non basta che sembrino diversi.</p></section>
-<section aria-labelledby="tecnici"><h2 id="tecnici">Dettagli tecnici</h2><p>Non servono per leggere la correzione. Tutti i dati originali restano disponibili qui.</p>
+${sessionSection}<section aria-labelledby="tecnici"><h2 id="tecnici">Dettagli tecnici</h2><p>Non servono per leggere la correzione. Tutti i dati originali restano disponibili qui.</p>
 <details><summary>Misure complete — ${scenarios.length} scenari, ${entries.length} controlli</summary>
 <section aria-labelledby="scenari"><h2 id="scenari">Scenari, misure e issue</h2><p>Ogni rapporto riguarda la coppia primo piano/sfondo indicata, non il colore isolato. Minimo e target sono distinti; i rapporti sono mostrati con la precisione completa del dato numerico fornito.</p>${scenariosHtml(scenarios, entries, proposals)}</section></details>
 <details><summary>Palette completa — fonte e colori risolti</summary>
@@ -1005,7 +1270,7 @@ ${variantShiftsHtml(variantShifts)}
 <dl><dt>Generato il (dato dichiarato)</dt><dd>${escape(report.generatedAt)}</dd><dt>SHA-256 degli input (dichiarato, non ricalcolato)</dt><dd><code>${escape(report.inputDigest)}</code>${digest ? "" : " — non valido"}</dd></dl>
 ${table("File dello snapshot", ["Ruolo", "Percorso dichiarato"], FILE_KEYS.map((key) => `<tr><th scope="row">${key}</th><td><code>${escape(files[key] === null ? "Non fornito" : files[key])}</code></td></tr>`))}
 ${messages("Problemi di integrità", problems)}${messages("Errori di generazione", list(report.generationErrors))}${messages("Errori di audit", list(report.auditErrors))}${messages("Note", list(report.notes))}</section></details>
-<details><summary>Limiti delle verifiche e metodo</summary>
+${cssDetails}<details><summary>Limiti delle verifiche e metodo</summary>
 <section aria-labelledby="limiti"><h2 id="limiti">Limiti e metodo di lettura</h2>
 <ul><li>Il comando di report verifica i colori calcolati nei browser indicati negli scenari. Le correzioni complete raggiungono le soglie delle coppie coperte, non di qualsiasi uso futuro.</li>
 <li>Le sovrapposizioni libere sono simulazioni separate: segnalano rischi d’uso, non difetti accertati del sito. Un contrasto sufficiente non garantisce che due colori siano distinguibili per ogni persona: usa anche etichette, forme o icone.</li>

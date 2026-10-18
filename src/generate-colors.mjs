@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { contrast, clamp, fitToSrgb, mixOklch, oklch, serializedColor } from "./color-math.mjs";
 import { formatColorsCss, formatColorsMotionCss } from "./format-css.mjs";
-import { DEFAULT_CONFIG_FILE, loadSmartColorsConfig, resolveProjectUrl } from "./load-config.mjs";
+import { DEFAULT_CONFIG_FILE, loadSmartColorsConfig, paletteNotFoundError, resolveProjectUrl } from "./load-config.mjs";
 import { contrastSummary, meetsSolidTarget, nearestLightness, resolvedColor, solidContrasts, sourceColorValue } from "./contrast-advice.mjs";
 import { parseOklch, parsePalette, parsePaletteWithDiagnostics, tokenKey } from "./parse-palette.mjs";
 import { validateSmartColorsInput } from "./validate-config.mjs";
@@ -32,7 +32,16 @@ async function inspectColorTokens(options, strict, paletteSnapshot) {
 
   const paletteUrl = resolveProjectUrl(root, config.palette);
   if (paletteSnapshot !== undefined && typeof paletteSnapshot !== "string") throw new TypeError("Palette snapshot must be a CSS string.");
-  const paletteCss = paletteSnapshot ?? await readFile(paletteUrl, "utf8");
+  let paletteCss = paletteSnapshot;
+  if (paletteCss === undefined) {
+    try {
+      paletteCss = await readFile(paletteUrl, "utf8");
+    } catch (error) {
+      // Only an absent palette is re-typed: EISDIR/EACCES/… stay exactly as they were.
+      if (error?.code === "ENOENT") throw paletteNotFoundError({ palettePath: config.palette, root, configFile: options.configFile, cause: error });
+      throw error;
+    }
+  }
   const parsedPalette = parsePaletteWithDiagnostics(paletteCss);
   const palette = parsedPalette.tokens;
   const annotatedRoles = parsedPalette.annotatedRoles ?? {};
@@ -52,7 +61,7 @@ async function inspectColorTokens(options, strict, paletteSnapshot) {
   const advice = options.suggest === false || model.errors.length
     ? { suggestions: [], proposals: [] }
     : buildContrastSuggestions(model, palette, parsedPalette.authoredTokens, mergedConfig, annotatedDarkBlends, options.configFile ?? DEFAULT_CONFIG_FILE, paletteCss);
-  return {
+  const analysis = {
     inputs: { paletteCss },
     model,
     config: mergedConfig,
@@ -66,11 +75,71 @@ async function inspectColorTokens(options, strict, paletteSnapshot) {
     errors: model.errors,
     warnings,
   };
+  // Private snapshot taken before the analysis is exposed: the literal `root`/`configFile` of this
+  // call plus clones of the exact config, CSS bytes, motion bytes and diagnostics. The write
+  // capability reads only this snapshot, so mutating the exposed analysis object (clearing
+  // `analysis.errors`, redirecting `analysis.config.output`, replacing `analysis.css`) or the
+  // `options` object afterwards can neither change what is written nor relax the strict contract.
+  const snapshot = {
+    root,
+    configFile: options.configFile,
+    config: structuredClone(mergedConfig),
+    css: analysis.css,
+    motionCss: analysis.motionCss,
+    errors: [...model.errors],
+    warnings: [...warnings],
+    suggestions: [...advice.suggestions],
+  };
+  // Internal write capability (SC-08, plan §5.1.1). It is a non-enumerable closure, not a package
+  // export and not JSON-visible: a forged plain object cannot carry it. It first refuses a tampered
+  // analysis, then re-runs `validateOutputPaths` (path collisions and canonical aliases resolved from
+  // the filesystem) against the captured bytes, and only then writes the snapshot through an atomic
+  // rename. So a stale or tampered analysis can never reach the disk, and `generateColorTokens` never
+  // reads a caller-provided analysis.
+  Object.defineProperty(analysis, "applyValidatedOutput", {
+    value: () => applyValidatedOutput(analysis, snapshot),
+    enumerable: false,
+    writable: false,
+    configurable: false,
+  });
+  return analysis;
+}
+
+// Refuse a mutated analysis instead of trusting the live object it shares with its caller.
+function assertAnalysisUnmodified(analysis, snapshot) {
+  const changed = analysis.css !== snapshot.css
+    || analysis.motionCss !== snapshot.motionCss
+    || JSON.stringify(analysis.config) !== JSON.stringify(snapshot.config)
+    || JSON.stringify(analysis.errors) !== JSON.stringify(snapshot.errors);
+  if (changed) {
+    throw new Error("Smart Colors analysis changed after it was validated; no CSS was written.");
+  }
+}
+
+async function applyValidatedOutput(analysis, snapshot) {
+  assertAnalysisUnmodified(analysis, snapshot);
+  await validateOutputPaths({ root: snapshot.root, config: snapshot.config, configFile: snapshot.configFile });
+  if (snapshot.errors.length) {
+    throw new Error(`Smart Colors generated an invalid contrast contract:\n${snapshot.errors.map((error) => `- ${error}`).join("\n")}`);
+  }
+  return writeGeneratedCss({ root: snapshot.root, analysis: snapshot, check: false });
 }
 
 export async function generateColorTokens(options = {}) {
   const root = options.root ?? process.cwd();
-  const { config, css, motionCss, warnings, suggestions } = await inspectColorTokens(options, true);
+  // Public entry point: it always performs a full strict analysis and re-validates inputs and
+  // output paths. A caller-provided `options.analysis` is ignored on purpose, so the public
+  // `./generate` export cannot be used to bypass validation or to overwrite another path.
+  const analysis = await inspectColorTokens(options, true);
+  return writeGeneratedCss({ root, analysis, check: Boolean(options.check) });
+}
+
+// Apply an already-validated analysis to the configured outputs without re-analyzing the palette.
+// Reached only through `generateColorTokens` or the internal `applyValidatedOutput` capability.
+async function writeGeneratedCss({ root, analysis, check }) {
+  const config = analysis.config;
+  const css = analysis.css;
+  const motionCss = analysis.motionCss;
   const outputSpecs = [
     { path: config.output, css },
     ...(motionCss == null ? [] : [{ path: config.motion.output, css: motionCss }]),
@@ -81,13 +150,13 @@ export async function generateColorTokens(options = {}) {
     return { ...output, outputUrl, changed: current !== output.css };
   }));
   const changed = outputStates.some((output) => output.changed);
-  const errors = options.check
+  const errors = check
     ? outputStates
       .filter((output) => output.changed)
       .map((output) => `Generated ${output.path} is out of date. Run smart-colors build.`)
     : [];
 
-  if (!options.check) {
+  if (!check) {
     await Promise.all(outputStates
       .filter((output) => output.changed)
       .map((output) => writeOutputAtomically(output.outputUrl, output.css)));
@@ -99,8 +168,8 @@ export async function generateColorTokens(options = {}) {
     motionCss,
     outputs: outputStates.map((output) => ({ path: output.path, changed: output.changed })),
     config,
-    warnings,
-    suggestions,
+    warnings: analysis.warnings ?? [],
+    suggestions: analysis.suggestions ?? [],
     errors,
   };
 }

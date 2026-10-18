@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { defaultSmartColorsConfig } from "../src/defaults.mjs";
 import { formatContrastReportHtml, prepareContrastReport } from "../src/format-report-html.mjs";
-import { formatContrastPreviewHtml } from "../src/format-report-preview.mjs";
+import { createLocalPresenter, formatContrastPreviewHtml } from "../src/format-report-preview.mjs";
 import { writeContrastReport } from "../src/report-artifact.mjs";
 
 const MARKER = "<!-- smart-colors-report:v1 -->";
@@ -469,4 +470,393 @@ test("one writer call publishes both marked artifacts and never overwrites an un
   const onlyReport = await writeContrastReport({ root: single, config: structuredClone(defaultSmartColorsConfig), report: input });
   assert.equal(onlyReport, path.join(single, "reports/smart-colors.html"));
   assert.deepEqual(await readdir(path.join(single, "reports")), ["smart-colors.html"]);
+});
+
+// ---------------------------------------------------------------------------
+// SC-03 diagnostic session: payload, runtime, CSP and the model/automation split.
+// These are Node-only checks; the real browser proof runs on a temporary `file://
+// fixture outside this suite (see the SC-06 delivery notes).
+// ---------------------------------------------------------------------------
+
+function sessionDiag(overrides = {}) {
+  const item = {
+    label: "primary / family surface", scheme: "light", foregroundToken: "--color-primary-text",
+    backgroundToken: "--color-primary-surface", foreground: color(0.4, 0.1, 350), background: color(0.95, 0.02, 90),
+    ratio: 4.4, target: 4.6, minimum: 4.5, kind: "text", provenance: "model",
+    ...overrides,
+  };
+  return { ...item, status: overrides.status ?? statusFor(item.ratio, item.target, item.minimum) };
+}
+
+function diagSession(overrides = {}) {
+  const samples = [{ browser: "model", scheme: "light", preference: "no-preference", provenance: "model", diagnostics: [sessionDiag()] }];
+  return {
+    ...report({ scenarios: [] }),
+    roles: { identities: [{ name: "primary", role: "accent-text", token: "primary", paletteName: "--primary" }] },
+    schemaVersion: 1,
+    toolVersion: "0.3.0",
+    snapshotId: "snap-123",
+    config: { contrast: { text: 4.6, onColor: 4.6, ui: 3, maxIdentity: 7.5, darkRichness: 1.15 }, roles: { identities: { primary: { token: "primary", role: "accent-text" } }, decoratives: {} } },
+    inputs: [{ name: "palette", path: "tokens/palette.css", present: true, sha256: "b".repeat(64) }],
+    css: { baseline: ":root { --color-bg: oklch(1 0 0); }", tuning: null, tuningSupport: "absent" },
+    model: { diagnostics: samples[0].diagnostics, errors: [], warnings: [] },
+    samples,
+    automation: { provenance: "model", mode: "off", status: "disabled", expected: { scenarios: [], pairs: [] }, executed: { scenarios: [], pairs: [] }, measurements: [], errors: [], environment: null, measuredAt: null },
+    ...overrides,
+  };
+}
+
+function automationRun(overrides = {}) {
+  return {
+    provenance: "browser-automation", mode: "required", status: "complete", snapshotId: "snap-123",
+    engines: [{ name: "chromium", launched: true, status: "complete", version: "151.0.7922.34", executable: "/opt/chromium", phase: null, reason: null }],
+    environment: { engines: [{ name: "chromium", version: "151.0.7922.34", executable: "/opt/chromium", environments: [{ userAgent: "Mozilla/5.0", language: "it-IT", preference: "light", forcedColors: false, measuredAt: "2026-07-01T12:00:00.000Z" }] }] },
+    expected: { scenarios: ["chromium/baseline-light-light"], pairs: { "chromium/baseline-light-light": ["light|color|--color-primary-text|--color-primary-surface"] } },
+    executed: { scenarios: ["chromium/baseline-light-light"], pairs: { "chromium/baseline-light-light": ["light|color|--color-primary-text|--color-primary-surface"] } },
+    scenarios: [{ id: "chromium/baseline-light-light", theme: "light", variant: "baseline", preference: "light", status: "measured", reason: null, engine: "chromium" }],
+    measurements: [{ pairId: "light|color|--color-primary-text|--color-primary-surface", scenarioId: "chromium/baseline-light-light", engine: "chromium", target: 4.6, minimum: 4.5, ratio: 4.7, status: "pass", error: null }],
+    coverage: { complete: true, expectedCount: 1, measuredCount: 1, scenarios: [], duplicateScenarios: [], missingScenarios: [], unexpectedScenarios: [], duplicates: [], unmeasured: [] },
+    unsupported: [], errors: [], notes: [], partial: false, measuredAt: "2026-07-01T12:00:00.000Z",
+    ...overrides,
+  };
+}
+
+const runtimeScript = (html) => html.match(/<script id="smart-colors-runtime">([\s\S]*?)<\/script>/)[1];
+const payloadBlock = (html) => html.match(/<script type="application\/json" id="smart-colors-payload">([\s\S]*?)<\/script>/)[1];
+const cspOf = (html) => html.match(/http-equiv="Content-Security-Policy" content="([^"]*)"/)[1].replaceAll("&#39;", "'");
+const markupOf = (html) => html.slice(0, html.indexOf("<script"));
+
+// A test-only DOM good enough for the presenter: createElement/appendChild/insertBefore/
+// querySelector plus a `role="status"` region and a frames container under the host.
+function presenterDom() {
+  const makeElement = (tag) => ({
+    tagName: tag, className: "", textContent: "", attributes: {}, children: [], parentNode: null,
+    style: { setProperty() {} },
+    get firstChild() { return this.children[0] ?? null; },
+    setAttribute(name, value) { this.attributes[name] = String(value); },
+    getAttribute(name) { return Object.hasOwn(this.attributes, name) ? this.attributes[name] : null; },
+    appendChild(child) { child.parentNode = this; this.children.push(child); return child; },
+    insertBefore(child, reference) {
+      child.parentNode = this;
+      const index = this.children.indexOf(reference);
+      this.children.splice(index < 0 ? this.children.length : index, 0, child);
+      return child;
+    },
+    removeChild(child) { const index = this.children.indexOf(child); if (index >= 0) this.children.splice(index, 1); child.parentNode = null; return child; },
+    querySelector() { return null; },
+  });
+  const host = makeElement("div");
+  const frames = makeElement("div");
+  host.appendChild(frames);
+  host.querySelector = (selector) => {
+    if (selector === ".local-rows") return host.children.find((child) => child.className === "local-rows") ?? null;
+    if (selector.includes("frames")) return frames;
+    return null;
+  };
+  return { host, frames, document: { getElementById: (id) => id === "smart-colors-diagnostic" ? host : null, createElement: makeElement } };
+}
+
+test("a diagnostic session preview embeds one hashed script, an inert payload and no inline handler", () => {
+  const html = preview(diagSession());
+  assert.equal(html.split("\n")[0], MARKER);
+  assert.equal((html.match(/<script/g) ?? []).length, 2);
+  const source = runtimeScript(html);
+  const hash = createHash("sha256").update(source, "utf8").digest("base64");
+  assert.ok(cspOf(html).includes(`script-src 'sha256-${hash}'`), "the CSP hash must cover the exact emitted bytes");
+  assert.match(cspOf(html), /frame-src 'none'/);
+  assert.match(cspOf(html), /default-src 'none'/);
+  assert.doesNotMatch(cspOf(html), /unsafe-eval|unsafe-hashes/);
+  assert.doesNotMatch(markupOf(html), /\son[a-z]+\s*=/i, "no inline event handler in markup");
+  assert.doesNotMatch(markupOf(html), /<(?:link|img|object|embed|svg|input|form)\b|https?:\/\//i);
+  assert.doesNotMatch(source, /innerHTML|insertAdjacentHTML|outerHTML|document\.write/);
+  assert.doesNotMatch(source, /\beval\s*\(|new Function\b|\bfetch\s*\(|XMLHttpRequest|WebSocket/);
+  assert.ok(!source.includes("</"), "no closing-tag sequence inside the hashed script");
+});
+
+test("the payload stays inert JSON and never lets embedded CSS close the block or leak markup", () => {
+  const hostile = `:root { --x: '</script><style></style>'; } /* " & ' */}`;
+  const html = preview(diagSession({ css: { baseline: hostile, tuning: hostile, tuningSupport: "supported" } }));
+  const text = payloadBlock(html);
+  assert.ok(!text.includes("<"), "every < must be escaped so no tag can appear in the block");
+  assert.ok(!text.includes("</"), "no closing-tag sequence may terminate the block early");
+  const payload = JSON.parse(text);
+  assert.equal(payload.schemaVersion, 1);
+  assert.equal(payload.css.baseline, hostile);
+  assert.equal(payload.css.tuning, hostile);
+  assert.equal(payload.css.tuningSupport, "supported");
+  assert.equal(payload.snapshotId, "snap-123");
+  assert.equal(payload.config.contrast.text, 4.6);
+  assert.equal(payload.config.roles.identities.primary.token, "primary");
+  assert.ok(!Object.hasOwn(payload, "automation"), "automation must stay out of the local payload");
+  assert.ok(!Object.hasOwn(payload, "samples"), "model samples must stay out of the local payload");
+});
+
+test("the local presenter is serialized self-contained and renders rows, status and scope", () => {
+  const factory = new Function("return (" + createLocalPresenter.toString() + ");")();
+  const dom = presenterDom();
+  let listener = null;
+  const report = {
+    preference: { active: "light", unmeasured: ["dark"] },
+    coverage: { complete: false },
+    executed: { scenarios: ["baseline-light-light"] },
+    measurements: [{ pairId: "light|color|--color-primary-text|--color-primary-surface", scenarioId: "baseline-light-light", ratio: 4.44, minimum: 4.5, target: 4.6, status: "below-target", error: null }],
+    errors: [{ phase: "measure", cause: "computed-empty", message: "x" }],
+    unsupported: [{ id: "baseline-dark-dark", reason: "forced-colors is active" }],
+  };
+  const controller = { status: () => ({ state: "incomplete", report }), subscribe: (fn) => { listener = fn; return () => {}; } };
+  const presenter = factory({ document: dom.document, controller });
+  assert.ok(presenter, "the presenter must attach to the host");
+  const panel = dom.host.children.find((child) => child.className === "local-rows");
+  assert.ok(panel, "the presenter must create its own panel before the frames container");
+  assert.equal(panel.children[0].tagName, "h3");
+  assert.equal(panel.children[0].textContent, "Misure locali di questo browser");
+  const scope = panel.children.find((child) => child.className === "local-scope");
+  assert.match(scope.textContent, /Provenienza: browser-local/);
+  assert.match(scope.textContent, /copertura: incompleta/);
+  assert.match(scope.textContent, /preferenza non misurata: dark/);
+  const scroll = panel.children.find((child) => child.className === "local-table-scroll");
+  assert.equal(scroll.getAttribute("role"), "region");
+  const table = scroll.children[0];
+  const head = table.children.find((child) => child.tagName === "thead");
+  assert.deepEqual(head.children[0].children.map((cell) => cell.textContent), ["Scenario", "Coppia", "Rapporto", "Minimo", "Target", "Esito", "Nota"]);
+  assert.ok(head.children[0].children.every((cell) => cell.getAttribute("scope") === "col"));
+  const body = table.children.find((child) => child.tagName === "tbody");
+  const row = body.children[0];
+  assert.equal(row.children[0].getAttribute("scope"), "row");
+  assert.equal(row.children[1].textContent, "--color-primary-text su --color-primary-surface (color, tema light)");
+  assert.equal(row.children[2].textContent, "4,44:1");
+  assert.equal(row.children[2].getAttribute("data-ratio"), "4.44");
+  assert.equal(row.children[2].getAttribute("data-minimum"), "4.5");
+  assert.equal(row.children[2].getAttribute("data-target"), "4.6");
+  assert.equal(row.children[3].textContent, "4,50:1");
+  assert.equal(row.children[4].textContent, "4,60:1");
+  assert.equal(row.children[5].textContent, "Sotto il target");
+  const errorsHeading = panel.children.filter((child) => child.tagName === "h3").map((child) => child.textContent);
+  assert.deepEqual(errorsHeading, ["Misure locali di questo browser", "Scenari non supportati", "Errori della verifica locale"]);
+  assert.equal(listener instanceof Function, true);
+  // A fresh subscriber snapshot must repaint the same panel without duplicating it.
+  listener({ state: "pending", report: null });
+  assert.equal(dom.host.children.filter((child) => child.className === "local-rows").length, 1);
+});
+
+test("a session preview stays useful without JavaScript and keeps the model out of any verified verdict", () => {
+  const html = preview(diagSession());
+  assert.match(html, /<h1>Contrasto colori — anteprima<\/h1>/);
+  assert.equal((html.match(/<h1>/g) ?? []).length, 1);
+  assert.match(html, /<main id="contenuto">/);
+  assert.match(html, /Campioni dal modello \(senza browser\)/);
+  assert.match(html, /Campioni calcolati dal modello del generatore, senza browser/);
+  assert.match(html, /non ricevono un badge di verifica/);
+  assert.doesNotMatch(html, /class="color-choice color-choice--suggested"/);
+  assert.match(html, /badge badge--dashed">Snapshot non verificato</);
+  assert.match(html, /Verifica automatizzata/);
+  assert.match(html, /Automazione disattivata/);
+  assert.match(html, /Misure locali non eseguite: serve JavaScript nel browser/);
+  assert.match(html, /Snapshot incorporato: <code>snap-123<\/code> · Versione tool: <code>0\.3\.0<\/code>/);
+  assert.match(html, /<a href="smart-colors\.html">/);
+});
+
+test("session markup follows the navigation, keeps a logical heading order and never moves focus", () => {
+  const html = preview(diagSession());
+  const anchors = [...html.match(/<nav aria-label="Sezioni dell’anteprima">([\s\S]*?)<\/nav>/)[1].matchAll(/href="#([a-z]+)"/g)].map((match) => match[1]);
+  assert.deepEqual(anchors, ["locale", "azione", "problemi", "modello", "palette", "varianti", "abbinamenti", "automazione"]);
+  assert.deepEqual([...html.matchAll(/<section id="([a-z]+)"/g)].map((match) => match[1]), anchors);
+  const levels = headingLevels(html);
+  assert.equal(levels[0], 1);
+  for (let index = 1; index < levels.length; index += 1) assert.ok(levels[index] - levels[index - 1] <= 1, `heading jump at ${index}: ${levels}`);
+  assert.doesNotMatch(html, /\bautofocus\b/);
+  assert.match(html, /:focus-visible\s*\{[^}]*outline:\s*3px solid/);
+  assert.match(html, /data-smart-colors-diagnostic="status" role="status"/);
+  assert.match(html, /<button type="button" data-smart-colors-diagnostic="retry" hidden>Ripeti verifica<\/button>/);
+  assert.ok([...html.matchAll(/href="([^"]+)"/g)].every((match) => /^(#|smart-colors\.html(#\w+)?$)/.test(match[1])), "only in-document anchors or the full report may be linked");
+});
+
+test("a diagnostic session escapes hostile identity and automation metadata", () => {
+  const attack = '<script>"&\u2028</script>';
+  const html = preview(diagSession({
+    snapshotId: attack,
+    toolVersion: attack,
+    automation: { provenance: "model", mode: attack, status: "unavailable", expected: {}, executed: {}, measurements: [], errors: [], environment: { browser: attack, version: attack }, measuredAt: attack },
+  }));
+  assert.doesNotMatch(markupOf(html), /<script>"&/);
+  assert.ok(!markupOf(html).includes(attack), "the raw attack string must never reach the markup");
+  assert.match(html, /&lt;script&gt;&quot;&amp;/);
+});
+
+// Provisional preview budget pending orchestrator approval. The historical 120.000-byte
+// budget predates the embedded SC-04 runtime (fixed ~67 KB) and the exact CSS payload;
+// 220 KB covers the starter (~85 KB) and the extended palette (~161 KB) with headroom.
+const PREVIEW_BUDGET_BYTES = 220 * 1024;
+
+function extendedSession() {
+  const names = ["primary", "secondary", "info", "success", "warning", "danger", "accent", "neutral", "brand", "muted"];
+  const tokenLines = [":root {"];
+  for (let index = 0; index < 800; index += 1) tokenLines.push(`  --color-scale-${index}: oklch(0.4 0.1 ${(index * 7) % 360});`);
+  tokenLines.push("}");
+  const pairsFor = (scheme, name) => [
+    sessionDiag({ scheme, label: `${name} text`, foregroundToken: `--color-${name}-text`, backgroundToken: `--color-${name}-surface`, ratio: 4.4 }),
+    sessionDiag({ scheme, label: `${name} border`, foregroundToken: `--color-${name}-border-strong`, backgroundToken: `--color-${name}-surface`, ratio: 3.2, kind: "non-text", minimum: 3, target: 3 }),
+    sessionDiag({ scheme, label: `${name} solid`, foregroundToken: `--color-${name}-solid-text`, backgroundToken: `--color-${name}-solid`, ratio: 5.5 }),
+    sessionDiag({ scheme, label: `${name} ink`, foregroundToken: `--color-${name}-ink`, backgroundToken: `--color-${name}`, ratio: 4.8 }),
+  ];
+  const samples = ["light", "dark"].map((scheme) => ({ browser: "model", scheme, preference: "no-preference", provenance: "model", diagnostics: names.flatMap((name) => pairsFor(scheme, name)) }));
+  return diagSession({
+    palette: names.map((name) => ({ name, role: "accent-text", authored: color(0.5, 0.3), resolved: color() })),
+    roles: { identities: names.map((name) => ({ name, role: "accent-text", token: name, paletteName: `--${name}` })) },
+    css: { baseline: tokenLines.join("\n"), tuning: null, tuningSupport: "absent" },
+    samples,
+    model: { diagnostics: samples.flatMap((sample) => sample.diagnostics), errors: [], warnings: [] },
+  });
+}
+
+test("a session preview stays inside the proposed size budget on the starter and the extended palette", () => {
+  const starter = Buffer.byteLength(preview(diagSession()), "utf8");
+  const extended = Buffer.byteLength(preview(extendedSession()), "utf8");
+  assert.ok(starter <= PREVIEW_BUDGET_BYTES, `starter preview is ${starter} bytes, over the proposed budget`);
+  assert.ok(extended <= PREVIEW_BUDGET_BYTES, `extended preview is ${extended} bytes, over the proposed budget`);
+  assert.ok(extended > starter, "the extended palette must be the heavier measurement");
+});
+
+test("the legacy snapshot preview never gains the session runtime", () => {
+  const html = preview(report({ proposals: [proposal()] }));
+  assert.doesNotMatch(html, /<script/i);
+  assert.doesNotMatch(html, /smart-colors-diagnostic|smart-colors-payload/);
+});
+
+function panelOf(presenterReport) {
+  const factory = new Function("return (" + createLocalPresenter.toString() + ");")();
+  const dom = presenterDom();
+  const controller = { status: () => ({ state: presenterReport.state ?? "complete", report: presenterReport.report }), subscribe: () => () => {} };
+  factory({ document: dom.document, controller });
+  return dom.host.children.find((child) => child.className === "local-rows");
+}
+
+test("the local ratio label never rounds a below-threshold value onto its own minimum", () => {
+  const panel = panelOf({
+    state: "complete",
+    report: {
+      preference: { active: "light", unmeasured: [] }, coverage: { complete: true }, executed: { scenarios: ["baseline-light-light"] },
+      measurements: [{ pairId: "light|color|--color-primary-text|--color-primary-surface", scenarioId: "baseline-light-light", ratio: 4.4999, minimum: 4.5, target: 4.6, status: "below-minimum", error: null }],
+      errors: [], unsupported: [],
+    },
+  });
+  const scroll = panel.children.find((child) => child.className === "local-table-scroll");
+  const body = scroll.children[0].children.find((child) => child.tagName === "tbody");
+  const cell = body.children[0].children[2];
+  assert.equal(cell.textContent, "< 4,5:1");
+  assert.notEqual(cell.textContent, "4,50:1");
+  assert.equal(cell.getAttribute("data-ratio"), "4.4999");
+  assert.match(panel.children.find((child) => child.className === "local-scope").textContent, /copertura: completa negli scenari locali eseguiti \(non universale\)/);
+});
+
+test("zero local measurements still surface error causes and unsupported reasons", () => {
+  const panel = panelOf({
+    state: "unsupported",
+    report: {
+      preference: { active: "dark", unmeasured: ["light"] }, coverage: { complete: false }, executed: { scenarios: [] },
+      measurements: [],
+      errors: [{ phase: "measure", cause: "forced-colors-active", scenarioId: "baseline-light-dark", pairId: "light|color|--color-text|--color-bg", message: "forced-colors is active" }],
+      unsupported: [{ id: "baseline-dark-dark", reason: "the isolated document could not be measured" }],
+    },
+  });
+  const headings = panel.children.filter((child) => child.tagName === "h3").map((child) => child.textContent);
+  assert.deepEqual(headings, ["Misure locali di questo browser", "Scenari non supportati", "Errori della verifica locale"]);
+  assert.ok(panel.children.some((child) => child.className === "local-empty"));
+  const errors = panel.children.find((child) => child.className === "local-errors");
+  assert.equal(errors.tagName, "ul");
+  assert.equal(errors.children[0].textContent, "measure · forced-colors-active — forced-colors is active; scenario baseline-light-dark; coppia light|color|--color-text|--color-bg");
+  const unsupported = panel.children.find((child) => child.className === "local-unsupported");
+  assert.match(unsupported.children[0].textContent, /^baseline-dark-dark — the isolated document could not be measured$/);
+});
+
+test("a complete automation run qualifies the preview header instead of a global pass", () => {
+  const html = preview(diagSession({ automation: automationRun() }));
+  assert.match(html, /<span class="badge badge--outline">Snapshot verificato: coppie automatizzate negli ambienti eseguiti<\/span>/);
+  assert.match(html, /Verifica circoscritta ai motori e agli scenari automatizzati elencati/);
+  assert.doesNotMatch(html, /Snapshot verificato<\/span>/);
+  assert.match(html, /Copertura completa negli ambienti eseguiti \(i motori e gli scenari elencati qui sotto\), non universale/);
+  assert.match(html, /<h4>Motori richiesti<\/h4>/);
+  assert.match(html, /<code>chromium<\/code> 151\.0\.7922\.34 · Completa · eseguito/);
+});
+
+test("an incomplete or partial automation run cannot render a positive preview header", () => {
+  const html = preview(diagSession({ automation: automationRun({ partial: true, status: "incomplete", coverage: { complete: false, expectedCount: 1, measuredCount: 0 } }) }));
+  assert.match(html, /<span class="badge badge--dashed">Snapshot non verificato<\/span>/);
+  assert.match(html, /Nessuna conclusione positiva: l'automazione non copre tutte le coppie/);
+  assert.doesNotMatch(html, /Snapshot verificato/);
+  assert.match(html, /Copertura parziale o incompleta/);
+});
+
+test("automation engine and error details stay static, escaped and cause-complete", () => {
+  const run = automationRun({
+    partial: true,
+    engines: [
+      { name: "chromium", launched: true, status: "complete", version: "151.0.7922.34", executable: "/opt/chromium", phase: null, reason: null },
+      { name: "firefox", launched: false, status: "unavailable", version: null, executable: null, phase: "availability", reason: "browser binary unavailable at /opt/firefox" },
+    ],
+    errors: [
+      { phase: "availability", cause: "binary-missing", engine: "firefox", scenarioId: null, pairId: null, message: "firefox: install it with pnpm exec playwright install firefox" },
+      { phase: "measure", cause: "runtime-run-failed", engine: "chromium", scenarioId: "chromium/baseline-dark-dark", pairId: null, message: "preferenza dark: timeout" },
+    ],
+    measurements: [
+      { pairId: "light|color|--color-primary-text|--color-primary-surface", scenarioId: "chromium/baseline-light-light", engine: "chromium", target: 4.6, minimum: 4.5, ratio: 4.2, status: "below-minimum", error: null },
+    ],
+  });
+  const html = preview(diagSession({ automation: run }));
+  const markup = markupOf(html);
+  assert.match(markup, /<code>firefox<\/code> · Non disponibile · non eseguito · fase <code>availability<\/code> — browser binary unavailable at \/opt\/firefox/);
+  assert.match(markup, /<code>availability<\/code> · <code>binary-missing<\/code> — firefox: install it with pnpm exec playwright install firefox/);
+  assert.match(markup, /<code>measure<\/code> · <code>runtime-run-failed<\/code> — preferenza dark: timeout · motore <code>chromium<\/code> · scenario <code>chromium\/baseline-dark-dark<\/code>/);
+  assert.match(markup, /<caption>Misure automatizzate per coppia<\/caption>/);
+  assert.match(markup, /<th scope="row"><code>--color-primary-text<\/code> su <code>--color-primary-surface<\/code><\/th><td>Chiaro<\/td><td><code>4\.5:1<\/code><\/td><td><code>4\.6:1<\/code><\/td><td>4,20:1<\/td><td>Sotto il minimo<\/td><td>1<\/td>/);
+  assert.match(markup, /<h4>Errori dell'automazione \(2\)<\/h4>/);
+  assert.doesNotMatch(markup, /\/opt\/foo\.svg|https?:\/\//);
+});
+
+// QA finding, preview side: a session with externally supplied, structurally valid scenarios must
+// not render a positive action/header while its automation run is not complete.
+function sessionWithIssue(overrides = {}) {
+  return diagSession({ scenarios: [scenario({ diagnostics: [diagnostic({ ratio: 4.499999999999999 })] })], proposals: [proposal()], ...overrides });
+}
+
+function sessionAllPass(overrides = {}) {
+  return diagSession({ scenarios: [scenario({ diagnostics: [diagnostic({ ratio: 5 })] })], ...overrides });
+}
+
+function previewGateCases() {
+  return [
+    ["missing automation", () => { const session = sessionWithIssue(); delete session.automation; return session; }],
+    ["disabled automation", () => sessionWithIssue({ automation: automationRun({ mode: "off", status: "disabled", partial: false, engines: [], measurements: [], coverage: { complete: false, expectedCount: 0, measuredCount: 0 } }) })],
+    ["incomplete automation", () => sessionWithIssue({ automation: automationRun({ status: "incomplete", partial: true, coverage: { complete: false, expectedCount: 1, measuredCount: 0 }, measurements: [] }) })],
+    ["unavailable automation", () => sessionWithIssue({ automation: automationRun({ status: "unavailable", partial: true, coverage: { complete: false, expectedCount: 1, measuredCount: 0 }, measurements: [], engines: [] }) })],
+    ["partial automation", () => sessionWithIssue({ automation: automationRun({ partial: true }) })],
+    ["unsupported automation", () => sessionWithIssue({ automation: automationRun({ status: "unsupported", partial: true, coverage: { complete: false, expectedCount: 1, measuredCount: 0 }, measurements: [] }) })],
+  ];
+}
+
+test("a session preview never inherits a positive outcome while automation is not complete", () => {
+  for (const [label, build] of previewGateCases()) {
+    const html = preview(build());
+    assert.match(html, /badge badge--dashed">Snapshot non verificato/, label);
+    assert.doesNotMatch(html, /Snapshot verificato: coppie automatizzate/, label);
+    assert.doesNotMatch(html, /class="color-choice color-choice--suggested"/, label);
+    assert.match(html, /Nessun colore suggerito/, label);
+    assert.match(html, /Nessuna conclusione positiva/, label);
+  }
+});
+
+test("a session preview with valid scenarios and complete automation may be positive", () => {
+  const html = preview(sessionWithIssue({ automation: automationRun() }));
+  assert.match(html, /Snapshot verificato: coppie automatizzate negli ambienti eseguiti/);
+  assert.match(html, /class="color-choice color-choice--suggested"/);
+  assert.match(section(html, "azione"), /<h4>Correzione locale del primo piano<\/h4>/);
+  assert.doesNotMatch(html, /Nessuna conclusione positiva/);
+});
+
+test("a session preview verdict is non-positive while automation is not complete", () => {
+  const gated = preview(sessionAllPass({ automation: automationRun({ status: "incomplete", partial: true, coverage: { complete: false, expectedCount: 1, measuredCount: 0 }, measurements: [] }) }));
+  assert.doesNotMatch(gated, /Esito positivo dello snapshot: 0 issue/);
+  assert.match(gated, /<p class="verdict">Esito non verificato o incompleto<\/p>/);
+  const positive = preview(sessionAllPass({ automation: automationRun() }));
+  assert.match(positive, /<p class="verdict">Esito positivo dello snapshot: 0 issue<\/p>/);
 });

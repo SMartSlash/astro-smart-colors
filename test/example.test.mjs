@@ -55,12 +55,15 @@ test("minimal example builds, checks and consumes only generated tokens", async 
   await cp(EXAMPLE_ROOT, root, { recursive: true });
 
   const built = await execFileAsync(process.execPath, [CLI_PATH, "build"], { cwd: root, timeout: 30_000 });
-  assert.match(built.stdout, /src\/styles\/tokens\/colors\.css generated\./);
+  assert.match(built.stdout, /src\/styles\/tokens\/colors\.css rigenerato\./);
   assert.equal((built.stdout.match(/\[smart-colors\]/g) ?? []).length, 1);
+  // Clean starter build in AUTO with no Playwright: the brief note stays on stdout, and the raw
+  // technical coverage detail must not leak to stderr (only required/measure failures and model
+  // warnings remain technical there).
   assert.equal(built.stderr, "");
 
   const checked = await execFileAsync(process.execPath, [CLI_PATH, "check"], { cwd: root, timeout: 30_000 });
-  assert.match(checked.stdout, /src\/styles\/tokens\/colors\.css is up to date\./);
+  assert.match(checked.stdout, /src\/styles\/tokens\/colors\.css è aggiornato\./);
 
   const [html, css, tuningTemplate] = await Promise.all([
     readFile(path.join(root, "index.html"), "utf8"),

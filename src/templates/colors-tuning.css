@@ -1,23 +1,42 @@
 /* ==========================================================================
-   COLORS TUNING — project overrides for generated Smart Colors tokens.
+   COLORS TUNING — guided project panel for generated Smart Colors tokens.
 
    Import this file after the generated colors.css, in the same cascade layer.
    Every declaration below is an example and stays commented out: uncomment
    only what you need. Values here survive `smart-colors build`, which only
    regenerates colors.css.
 
-   Tune public `--color-tune-*` tokens. Direct overrides of generated
-   `--_color-*` internals are not part of the package contract.
+   Tune the public `--color-tune-*` API. Never override generated `--_color-*`
+   internals: they are implementation detail and are not a package contract.
 
-   1. MACRO THEME TUNING — warmth, depth, surfaces
-   2. PER-COLOR DARK TUNING — one identity at a time
-   3. ELEVATION TUNING — alpha and semantic mapping
+   Read the flow in this order:
+     source in palette.css
+       -> recipe (neutral, identity, surface, contrast, decorative, scale, hue)
+       -> public token (--color-*)
+       -> control (--color-tune-*)
+       -> check the ACTUAL generated CSS plus this tuning file.
+
+   The tuning API is uniform: every emitted public `--color-*` token reads a
+   per-theme `--color-tune-<token-without--color->-light|dark` pair. The
+   generated value is the fallback: most tokens are contrast-solved literals,
+   while the family `surface`/`surface-strong` are live runtime mixes whose
+   source quota is set in section 3. The override replaces the token at runtime
+   and is NOT revalidated by `smart-colors check`, so re-measure the affected
+   pairs: an override can silently invalidate a pair that the build had solved.
+
+   Panel:
+     1. MACRO THEME TUNING (legacy, preserved)
+     2. UNIFORM PER-TOKEN LIGHT/DARK OVERRIDES
+     3. SURFACE MIX CONTROLS
+     4. DARK-BLEND AND FOUNDATION DARK CONTROLS
+     5. ELEVATION TUNING
    ========================================================================== */
 
 /* ==========================================================================
-   1. MACRO THEME TUNING
+   1. MACRO THEME TUNING (legacy, preserved)
 
-   Percentages: 100% keeps the maximum effect, 0% turns it off.
+   These names remain valid. Percentages: 100% keeps the maximum effect,
+   0% turns it off.
 
    --color-tune-light-warmth
      How much of the source hue survives in light mode.
@@ -54,31 +73,179 @@
 */
 
 /* ==========================================================================
-   2. PER-COLOR DARK TUNING
+   2. UNIFORM PER-TOKEN LIGHT/DARK OVERRIDES
 
-   `ui` and `feedback` colors can declare `dark-blend: 0…100` directly in
-   palette.css. Prefer that for stable choices: the generator validates it
-   and derives readable pairs from the result.
+   Every emitted public colour token accepts the same pair:
 
-   Two unvalidated runtime escape hatches remain for temporary experiments:
+     --color-tune-<public-name>-light
+     --color-tune-<public-name>-dark
 
-   --color-tune-<id>-dark-mix
-     Percentage of the source color preserved in the generated dark fill;
-     lower values mix in more white. It only reparametrizes the generated
-     color-mix(), so border and solid stay aligned with it.
-   --color-tune-<id>-dark
-     Whole OKLCH color for the dark fill, overriding the generated value.
+   `<public-name>` is the public token without the `--color-` prefix. A whole
+   opaque OKLCH color replaces the generated fallback for that theme only:
+   light never leaks into dark, and an omitted control keeps the generated
+   default. Examples below use the starter names (brand, success, highlight);
+   substitute your own palette names.
+
+   The same pattern covers every category:
+     neutral          bg, surface, text, text-muted,
+                      border-subtle, border-strong, focus-ring
+     controls         control-bg-active, control-border-active,
+                      control-focus-bg, control-icon-muted, ...
+     identity         brand, brand-ink
+     family variants  brand-surface, brand-surface-strong, brand-border,
+                      brand-border-strong, brand-solid, brand-solid-hover,
+                      brand-solid-text, brand-text, brand-text-strong
+     decoratives      highlight, highlight-ink
+     scale steps      brand-500, ...          (when scales are enabled)
+     hue variants     brand-warm, brand-cool  (when hue variants are enabled)
    ========================================================================== */
 
 /*
 :root {
-  --color-tune-brand-dark-mix: 78%;
-  --color-tune-success-dark-mix: 81%;
+  Neutral foundation and text
+  --color-tune-bg-light: oklch(0.97 0.005 250);
+  --color-tune-bg-dark: oklch(0.18 0.01 250);
+  --color-tune-surface-light: oklch(0.94 0.006 250);
+  --color-tune-surface-dark: oklch(0.22 0.012 250);
+  --color-tune-text-light: oklch(0.28 0.007 3.68);
+  --color-tune-text-dark: oklch(0.94 0.004 3.68);
+  --color-tune-text-muted-light: oklch(0.48 0.006 3.68);
+  --color-tune-text-muted-dark: oklch(0.72 0.005 3.68);
+  --color-tune-border-subtle-light: oklch(0.7 0.01 250);
+  --color-tune-border-subtle-dark: oklch(0.4 0.01 250);
+  --color-tune-border-strong-light: oklch(0.55 0.01 250);
+  --color-tune-border-strong-dark: oklch(0.6 0.01 250);
+  --color-tune-focus-ring-light: oklch(0.54 0.16 32.41);
+  --color-tune-focus-ring-dark: oklch(0.78 0.12 32.41);
+
+  Controls
+  --color-tune-control-bg-active-light: oklch(0.9 0.03 32.41);
+  --color-tune-control-bg-active-dark: oklch(0.26 0.03 32.41);
+  --color-tune-control-border-active-light: oklch(0.5 0.12 32.41);
+  --color-tune-control-border-active-dark: oklch(0.74 0.1 32.41);
+  --color-tune-control-focus-bg-light: oklch(0.96 0.02 32.41);
+  --color-tune-control-focus-bg-dark: oklch(0.2 0.02 32.41);
+  --color-tune-control-icon-muted-light: oklch(0.6 0.01 3.68);
+  --color-tune-control-icon-muted-dark: oklch(0.7 0.01 3.68);
+
+  Identity base and its direct companion
+  --color-tune-brand-light: oklch(0.56 0.14 255);
+  --color-tune-brand-dark: oklch(0.7 0.1 255);
+  --color-tune-brand-ink-light: oklch(0.98 0 0);
+  --color-tune-brand-ink-dark: oklch(0.14 0 0);
+
+  Family variants: text/border/solid are contrast-solved literals; surface and
+  surface-strong are live mixes with a source quota (section 3). Each override
+  is a runtime replacement that must be re-measured.
+  --color-tune-brand-surface-light: oklch(0.93 0.03 255);
+  --color-tune-brand-surface-dark: oklch(0.24 0.03 255);
+  --color-tune-brand-surface-strong-light: oklch(0.89 0.05 255);
+  --color-tune-brand-surface-strong-dark: oklch(0.3 0.05 255);
+  --color-tune-brand-border-light: oklch(0.56 0.14 255);
+  --color-tune-brand-border-dark: oklch(0.7 0.1 255);
+  --color-tune-brand-border-strong-light: oklch(0.44 0.14 255);
+  --color-tune-brand-border-strong-dark: oklch(0.78 0.12 255);
+  --color-tune-brand-solid-light: oklch(0.56 0.14 255);
+  --color-tune-brand-solid-dark: oklch(0.7 0.1 255);
+  --color-tune-brand-solid-hover-light: oklch(0.5 0.14 255);
+  --color-tune-brand-solid-hover-dark: oklch(0.74 0.1 255);
+  --color-tune-brand-solid-text-light: oklch(0.99 0 0);
+  --color-tune-brand-solid-text-dark: oklch(0.12 0 0);
+  --color-tune-brand-text-light: oklch(0.42 0.13 255);
+  --color-tune-brand-text-dark: oklch(0.82 0.1 255);
+  --color-tune-brand-text-strong-light: oklch(0.36 0.12 255);
+  --color-tune-brand-text-strong-dark: oklch(0.88 0.09 255);
+
+  Decorative fill and its readable companion
+  --color-tune-highlight-light: oklch(0.78 0.09 330);
+  --color-tune-highlight-dark: oklch(0.84 0.07 330);
+  --color-tune-highlight-ink-light: oklch(0.16 0 0);
+  --color-tune-highlight-ink-dark: oklch(0.92 0 0);
+
+  Advanced optional tokens, only when enabled
+  --color-tune-brand-500-light: oklch(0.56 0.14 255);
+  --color-tune-brand-500-dark: oklch(0.7 0.1 255);
+  --color-tune-brand-warm-light: oklch(0.58 0.14 285);
+  --color-tune-brand-cool-dark: oklch(0.66 0.12 225);
 }
 */
 
 /* ==========================================================================
-   3. ELEVATION TUNING
+   3. SURFACE MIX CONTROLS
+
+   A family surface is a mix of the identity source and the neutral backdrop.
+   Besides the full per-theme override above, the source quota has its own
+   knobs:
+
+     --color-tune-<identity>-surface-<theme>-mix
+       default 10% source in light, 18% source in dark
+     --color-tune-<identity>-surface-strong-<theme>-mix
+       default 18% source in light, 28% source in dark
+
+   Mix knobs are percentages of the SOURCE color, not a WCAG ratio and not a
+   fixed 10/90 rule. A full color control from section 2 wins over the mix
+   knob, and the mix knob wins over the generated default:
+
+     --color-tune-brand-surface-light        (full color, highest priority)
+     --color-tune-brand-surface-light-mix    (source percentage)
+     generated default                       (lowest priority)
+
+   These mixes are design tints: they are not contrast-checked by themselves.
+   Check the text/border pairs that sit on the resulting surface.
+   ========================================================================== */
+
+/*
+:root {
+  --color-tune-brand-surface-light-mix: 10%;
+  --color-tune-brand-surface-dark-mix: 18%;
+  --color-tune-brand-surface-strong-light-mix: 18%;
+  --color-tune-brand-surface-strong-dark-mix: 28%;
+}
+*/
+
+/* ==========================================================================
+   4. DARK-BLEND AND FOUNDATION DARK CONTROLS
+
+   `dark-blend: 0…100` is authored directly in palette.css and is accepted on
+   every role. It is a bounded WHITE wash, never a darkening toward black:
+
+     0    -> 100% source + 0% white
+     80   -> 77.6% source + 22.4% white
+     100  -> 72% source + 28% white
+
+   Omitting `dark-blend` keeps the role's automatic derivation; it does NOT
+   mean 0. WCAG does not impose a 10/90 (or any other) mix: the resolved
+   pairs are what gets checked. Prefer palette.css for stable choices: the
+   generator validates `dark-blend` and derives readable pairs from it.
+
+   The dark identity fill still keeps the legacy per-identity knobs:
+
+   --color-tune-<identity>-dark-mix
+     Percentage of the source color preserved in the generated dark fill;
+     lower values mix in more white. It only reparametrizes the generated
+     color-mix(), so border and solid stay aligned with it.
+   --color-tune-<identity>-dark
+     Whole OKLCH color for the dark fill. It is also the uniform per-token
+     dark override, so a more specific token override still wins.
+
+   Foundation dark values are controlled through the same uniform pair:
+   --color-tune-bg-dark and --color-tune-surface-dark replace the dark page
+   background and neutral surface; both must be re-measured after the edit.
+   ========================================================================== */
+
+/*
+:root {
+  --color-tune-brand-dark-mix: 77.6%;
+  --color-tune-brand-dark: oklch(0.7 0.1 255);
+
+  Foundation dark controls, replace the generated dark canvas/surface.
+  --color-tune-bg-dark: oklch(0.18 0.01 250);
+  --color-tune-surface-dark: oklch(0.22 0.012 250);
+}
+*/
+
+/* ==========================================================================
+   5. ELEVATION TUNING
 
    `--elevation-1/2` and `--elevation-filter-1/2` are generated. The first
    pair uses box-shadow grammar; the second uses drop-shadow() chains that

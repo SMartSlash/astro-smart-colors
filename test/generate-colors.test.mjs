@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { contrast, fitToSrgb, mixOklch as nativeMixOklch } from "../src/color-math.mjs";
-import { generateColorTokens } from "../src/generate-colors.mjs";
+import { analyzeColorTokens, generateColorTokens } from "../src/generate-colors.mjs";
 import { parseOklch } from "../src/parse-palette.mjs";
+import { getDeclarations, resolveThemeColor, splitTopLevel, unwrapFunction } from "./css-resolver.mjs";
 
 const DEFAULT_PALETTE = `@property --palette-canvas {
   syntax: "<color>";
@@ -64,117 +66,21 @@ async function createProject(t, paletteCss = DEFAULT_PALETTE) {
   return root;
 }
 
-function getDeclarations(css) {
-  const declarations = new Map();
-  const pattern = /(?:^|\n)\s*(--[a-z0-9_-]+)\s*:\s*([^;]+);/gi;
-
-  for (const match of css.matchAll(pattern)) {
-    declarations.set(match[1], match[2].trim());
-  }
-
-  return declarations;
-}
-
 function getDeclaration(css, tokenName) {
   const value = getDeclarations(css).get(tokenName);
   assert.ok(value, `Expected generated token ${tokenName}.`);
   return value;
 }
 
-function splitTopLevel(value) {
-  const parts = [];
-  let depth = 0;
-  let start = 0;
-
-  for (let index = 0; index < value.length; index += 1) {
-    const character = value[index];
-    if (character === "(") depth += 1;
-    if (character === ")") depth -= 1;
-
-    if (character === "," && depth === 0) {
-      parts.push(value.slice(start, index).trim());
-      start = index + 1;
-    }
-  }
-
-  parts.push(value.slice(start).trim());
-  return parts;
-}
-
-function unwrapFunction(value, functionName) {
-  const prefix = `${functionName}(`;
-  if (!value.startsWith(prefix) || !value.endsWith(")")) return null;
-  return value.slice(prefix.length, -1).trim();
-}
-
-function resolveThemeColor(declarations, tokenName, scheme, stack = []) {
-  assert.ok(!stack.includes(tokenName), `Circular custom-property reference: ${[...stack, tokenName].join(" -> ")}`);
-  const value = declarations.get(tokenName);
-  assert.ok(value, `Expected generated token ${tokenName}.`);
-  return resolveColorExpression(declarations, value, scheme, [...stack, tokenName]);
-}
-
-function resolveColorExpression(declarations, expression, scheme, stack) {
-  const value = expression.trim();
-  const lightDarkBody = unwrapFunction(value, "light-dark");
-
-  if (lightDarkBody != null) {
-    const choices = splitTopLevel(lightDarkBody);
-    assert.equal(choices.length, 2, `Expected two light-dark() colors in ${value}.`);
-    return resolveColorExpression(declarations, choices[scheme === "light" ? 0 : 1], scheme, stack);
-  }
-
-  const varBody = unwrapFunction(value, "var");
-  if (varBody != null) {
-    const [reference, fallback] = splitTopLevel(varBody);
-    if (declarations.has(reference)) return resolveThemeColor(declarations, reference, scheme, stack);
-    assert.ok(fallback, `Expected ${reference} or a fallback in ${value}.`);
-    return resolveColorExpression(declarations, fallback, scheme, stack);
-  }
-
-  const mixBody = unwrapFunction(value, "color-mix");
-  if (mixBody != null) {
-    const [space, weighted, second] = splitTopLevel(mixBody);
-    assert.equal(space, "in oklch");
-    const match = /^(.*)\s+(?:var\((--[a-z0-9_-]+),\s*(\d+(?:\.\d+)?)%\)|(\d+(?:\.\d+)?)%)$/.exec(weighted);
-    assert.ok(match, `Expected a weighted mix in ${value}.`);
-    const firstColor = resolveColorExpression(declarations, match[1], scheme, stack);
-    const secondColor = resolveColorExpression(declarations, second, scheme, stack);
-    const rawPct = match[2] && declarations.has(match[2])
-      ? declarations.get(match[2]).replace(/%$/, "")
-      : (match[3] ?? match[4]);
-    const ratio = Number(rawPct) / 100;
-    let delta = secondColor.h - firstColor.h;
-    if (delta > 180) delta -= 360;
-    if (delta < -180) delta += 360;
-    return {
-      l: firstColor.l * ratio + secondColor.l * (1 - ratio),
-      c: firstColor.c * ratio + secondColor.c * (1 - ratio),
-      h: (firstColor.h + delta * (1 - ratio) + 360) % 360,
-    };
-  }
-
-  const parsed = parseOklch(value);
-  assert.deepEqual(parsed.errors, [], `Expected a resolvable OKLCH color, received ${value}.`);
-  return parsed.source;
-}
-
 function getLightnessSteps(css, name) {
-  return [...css.matchAll(new RegExp(`--color-${name}-(\\d+): light-dark\\(oklch\\(([^\\s]+)`, "g"))]
+  // Scale tokens now read `light-dark(var(--color-tune-<name>-<step>-light, oklch(<l> ...)), ...)`.
+  return [...css.matchAll(new RegExp(`--color-${name}-(\\d+): light-dark\\(var\\(--color-tune-${name}-\\d+-light, oklch\\(([^\\s]+)`, "g"))]
     .map((match) => ({ step: Number(match[1]), lightness: Number(match[2]) }))
     .sort((a, b) => a.step - b.step);
 }
 
-
-
 function getDarkScaleColor(css, name, step) {
-  const value = getDeclaration(css, `--color-${name}-${step}`);
-  const lightDarkBody = unwrapFunction(value, "light-dark");
-  assert.ok(lightDarkBody, `Expected light-dark() in --color-${name}-${step}.`);
-  const choices = splitTopLevel(lightDarkBody);
-  const parsed = parseOklch(choices[1]);
-  assert.deepEqual(parsed.errors, []);
-  return parsed.source;
+  return resolveThemeColor(getDeclarations(css), `--color-${name}-${step}`, "dark");
 }
 
 
@@ -778,4 +684,316 @@ test("check mode reports stale generated output", async (t) => {
 
   assert.equal(staleReport.changed, true);
   assert.ok(staleReport.errors.some((error) => error.includes("out of date")));
+});
+
+function assertColorWithin(actual, expected, tolerance, label) {
+  for (const channel of ["l", "c", "h"]) {
+    assert.ok(
+      Math.abs(actual[channel] - expected[channel]) <= tolerance,
+      `${label} ${channel} ${actual[channel]} should be within ${tolerance} of ${expected[channel]}.`,
+    );
+  }
+}
+
+test("default output parity: every public colour resolves to the generated value in both themes", async (t) => {
+  const root = await createProject(t);
+  // Relative (runtime) mode: the resolver evaluates the emitted light-dark/var/
+  // color-mix chain exactly as the browser would, so parity is measured on the
+  // real bytes rather than a materialized literal.
+  const analysis = await analyzeColorTokens({ root });
+  const declarations = getDeclarations(analysis.css);
+  const { neutrals } = analysis.model;
+  const expected = [
+    ["--color-bg", { light: neutrals.bgLight, dark: neutrals.bgDark }],
+    ["--color-surface", { light: neutrals.surfaceLight, dark: neutrals.surfaceDark }],
+    ["--color-text", { light: neutrals.textLight, dark: neutrals.textDark }],
+    ["--color-text-muted", { light: neutrals.textMutedLight, dark: neutrals.textMutedDark }],
+  ];
+  const variants = [
+    ["surface", "surface"], ["surface-strong", "surfaceStrong"], ["text", "text"], ["text-strong", "textStrong"],
+    ["border", "border"], ["border-strong", "borderStrong"], ["solid", "solid"], ["solid-hover", "solidHover"], ["solid-text", "onSolid"],
+  ];
+  for (const [name, identity] of Object.entries(analysis.model.identities)) {
+    expected.push([`--color-${name}`, { light: identity.light, dark: identity.dark }]);
+    expected.push([`--color-${name}-ink`, { light: parseOklch(analysis.model.onColors[name].light).source, dark: parseOklch(analysis.model.onColors[name].dark).source }]);
+    for (const [suffix, key] of variants) expected.push([`--color-${name}-${suffix}`, { light: identity.family.light[key], dark: identity.family.dark[key] }]);
+  }
+  for (const [name, decorative] of Object.entries(analysis.model.decoratives)) {
+    expected.push([`--color-${name}`, { light: decorative.light, dark: decorative.dark }]);
+    expected.push([`--color-${name}-ink`, { light: parseOklch(analysis.model.onColors[name].light).source, dark: parseOklch(analysis.model.onColors[name].dark).source }]);
+  }
+  for (const [token, themes] of expected) {
+    for (const scheme of ["light", "dark"]) {
+      assertColorWithin(resolveThemeColor(declarations, token, scheme), themes[scheme], 0.002, `${token} ${scheme}`);
+    }
+  }
+});
+
+// The starter workspace's real config+palette, resolved from the actual CSS in
+// both themes: the declared contrast contract must hold on the emitted bytes.
+test("the starter output meets its declared contrast contract on the emitted CSS in both themes", async (t) => {
+  const root = await createProject(t);
+  const analysis = await analyzeColorTokens({ root, suggest: false });
+  const declarations = getDeclarations(analysis.css);
+  const { contrast: limits } = analysis.config;
+  const darkTarget = (base) => Math.min(limits.maxIdentity, base * limits.darkRichness);
+  const forTheme = {
+    light: { text: limits.text, ui: limits.ui },
+    dark: { text: darkTarget(limits.text), ui: darkTarget(limits.ui) },
+  };
+  const measured = (token, background, scheme) => contrast(
+    resolveThemeColor(declarations, token, scheme),
+    resolveThemeColor(declarations, background, scheme),
+  );
+  for (const scheme of ["light", "dark"]) {
+    const target = forTheme[scheme];
+    for (const background of ["--color-bg", "--color-surface"]) {
+      for (const token of ["--color-text", "--color-text-muted"]) {
+        assert.ok(measured(token, background, scheme) >= target.text, `${scheme} ${token} / ${background} = ${measured(token, background, scheme)} < ${target.text}`);
+      }
+    }
+    for (const name of Object.keys(analysis.config.roles.identities)) {
+      const backgrounds = ["--color-bg", "--color-surface", `--color-${name}-surface`, `--color-${name}-surface-strong`];
+      for (const suffix of ["text", "text-strong"]) {
+        for (const background of backgrounds) {
+          assert.ok(measured(`--color-${name}-${suffix}`, background, scheme) >= target.text, `${scheme} ${name}-${suffix} / ${background} = ${measured(`--color-${name}-${suffix}`, background, scheme)} < ${target.text}`);
+        }
+      }
+      for (const background of backgrounds) {
+        assert.ok(measured(`--color-${name}-border-strong`, background, scheme) >= target.ui, `${scheme} ${name}-border-strong / ${background} = ${measured(`--color-${name}-border-strong`, background, scheme)} < ${target.ui}`);
+      }
+    }
+  }
+  // On-colour pairs are reported, not silently corrected: the solid companions
+  // must appear as measured diagnostics instead of a hidden guarantee.
+  for (const name of Object.keys(analysis.config.roles.identities)) {
+    for (const scheme of ["light", "dark"]) {
+      assert.ok(
+        analysis.diagnostics.some((diagnostic) => diagnostic.foregroundToken === `--color-${name}-solid-text` && diagnostic.scheme === scheme),
+        `${scheme} ${name}-solid-text must be a measured diagnostic`,
+      );
+    }
+  }
+});
+
+test("family surfaces are live mixes with the shared source quota and a runtime override", async (t) => {
+  const root = await createProject(t);
+  const report = await generateColorTokens({ root });
+  const declarations = getDeclarations(report.css);
+
+  assert.equal(getDeclaration(report.css, "--color-primary-surface"),
+    "light-dark(var(--color-tune-primary-surface-light, color-mix(in oklch, var(--_color-primary-light) var(--color-tune-primary-surface-light-mix, 10%), var(--_color-bg-light))), var(--color-tune-primary-surface-dark, color-mix(in oklch, var(--_color-primary-dark) var(--color-tune-primary-surface-dark-mix, 18%), var(--_color-bg-dark))))");
+  assert.equal(getDeclaration(report.css, "--color-primary-surface-strong"),
+    "light-dark(var(--color-tune-primary-surface-strong-light, color-mix(in oklch, var(--_color-primary-light) var(--color-tune-primary-surface-strong-light-mix, 18%), var(--_color-bg-light))), var(--color-tune-primary-surface-strong-dark, color-mix(in oklch, var(--_color-primary-dark) var(--color-tune-primary-surface-strong-dark-mix, 28%), var(--_color-bg-dark))))");
+
+  // A source-quota knob changes only that family surface, and matches the registry ratio.
+  const tuned = getDeclarations(report.css);
+  tuned.set("--color-tune-primary-surface-strong-light-mix", "50%");
+  const source = resolveThemeColor(tuned, "--color-primary", "light");
+  const background = resolveThemeColor(tuned, "--color-bg", "light");
+  assertColorWithin(resolveThemeColor(tuned, "--color-primary-surface-strong", "light"), nativeMixOklch(source, background, 0.5), 0.001, "tuned surface-strong");
+  assertColorWithin(resolveThemeColor(tuned, "--color-primary-surface", "light"), nativeMixOklch(source, background, 0.1), 0.001, "untouched surface");
+
+  // A full per-theme override wins over the recipe and does not touch the other theme.
+  const overridden = getDeclarations(report.css);
+  overridden.set("--color-tune-primary-surface-light", "oklch(0.2 0.05 300)");
+  assertColorWithin(resolveThemeColor(overridden, "--color-primary-surface", "light"), { l: 0.2, c: 0.05, h: 300 }, 0.001, "surface light override");
+});
+
+test("every public colour exposes a working per-theme override, more specific than the legacy knob", async (t) => {
+  const root = await createProject(t);
+  const report = await generateColorTokens({
+    root,
+    inlineConfig: {
+      aliases: { action: "primary" },
+      scales: { enabled: true, applyTo: ["primary"], hueVariants: { enabled: true, shifts: [30, -30], applyTo: ["primary"] } },
+    },
+  });
+  const declarations = getDeclarations(report.css);
+
+  // A default dark=light overridePair must never leak the string `undefined`.
+  assert.doesNotMatch(report.css, /undefined/);
+  if (typeof report.motionCss === "string") assert.doesNotMatch(report.motionCss, /undefined/);
+
+  // Every emitted colour token reads its own `--color-tune-<name>-<theme>` pair,
+  // and that documented override resolves in its theme (no leak into the other).
+  const colorTokens = [...declarations.keys()].filter((name) => /^--color-(?!tune-)/.test(name));
+  assert.ok(colorTokens.length > 0, "expected emitted colour tokens");
+  for (const token of colorTokens) {
+    const name = token.slice("--color-".length);
+    const value = declarations.get(token);
+    assert.match(value, new RegExp(`var\\(--color-tune-${name}-light, `), `${token} must read its light override`);
+    assert.match(value, new RegExp(`var\\(--color-tune-${name}-dark, `), `${token} must read its dark override`);
+    for (const scheme of ["light", "dark"]) {
+      const map = new Map(declarations);
+      map.set(`--color-tune-${name}-${scheme}`, "oklch(0.44 0.07 84)");
+      assertColorWithin(resolveThemeColor(map, token, scheme), { l: 0.44, c: 0.07, h: 84 }, 0.001, `${token} ${scheme} documented override`);
+      const other = scheme === "light" ? "dark" : "light";
+      const otherColor = resolveThemeColor(map, token, other);
+      assert.notDeepEqual(otherColor, { l: 0.44, c: 0.07, h: 84 }, `${token} ${scheme} override must not leak into ${other}`);
+    }
+  }
+
+  // A more specific override beats the legacy per-identity fill knob.
+  const precedence = getDeclarations(report.css);
+  precedence.set("--color-tune-primary-dark", "oklch(0.5 0.1 32)");
+  precedence.set("--color-tune-primary-solid-dark", "oklch(0.2 0.05 32)");
+  assertColorWithin(resolveThemeColor(precedence, "--color-primary-solid", "dark"), { l: 0.2, c: 0.05, h: 32 }, 0.001, "solid specific beats legacy");
+  assertColorWithin(resolveThemeColor(precedence, "--color-primary", "dark"), { l: 0.5, c: 0.1, h: 32 }, 0.001, "legacy drives the fill");
+});
+
+test("explicit dark-blend uses the shared rule for canvas, ink and decorative; omitting keeps the role default", async (t) => {
+  const blended = DEFAULT_PALETTE
+    .replace("  role: canvas;", "  role: canvas;\n  dark-blend: 60;")
+    .replace("  role: ink;", "  role: ink;\n  dark-blend: 0;")
+    .replace("  role: decorative;", "  role: decorative;\n  dark-blend: 50;");
+  const blendedRoot = await createProject(t, blended);
+  const report = await generateColorTokens({ root: blendedRoot, suggest: false });
+  assert.deepEqual(report.errors, []);
+
+  // 60 -> 16.8% white (83.2% source kept); the neutral surface follows the chosen canvas.
+  assert.equal(getDeclaration(report.css, "--_color-bg-dark"),
+    "color-mix(in oklch, var(--_color-bg-source) 83.2%, oklch(1 0 none))");
+  assert.equal(getDeclaration(report.css, "--_color-surface-dark"),
+    "color-mix(in oklch, var(--_color-surface-light) 83.2%, oklch(1 0 none))");
+  // No ghost runtime knob: the quota is a build-time constant.
+  assert.doesNotMatch(report.css, /color-tune-canvas-dark-blend/);
+  // Ink 0 keeps the authored ink as the dark text, verified through the normal pipeline.
+  const textDark = parseOklch(getDeclaration(report.css, "--_color-text-dark"));
+  assert.deepEqual(textDark.errors, []);
+  assertColorWithin(textDark.source, fitToSrgb({ l: 0.28, c: 0.007, h: 3.68 }), 0.01, "ink dark-blend 0");
+  // An explicit decorative dark-blend feeds its companions; omitting it leaves the pair untouched.
+  assert.match(getDeclaration(report.css, "--_color-tertiary-dark"), /^oklch\(/);
+
+  // Omitting every descriptor keeps the role defaults byte-for-byte.
+  const defaultRoot = await createProject(t);
+  const base = await generateColorTokens({ root: defaultRoot, suggest: false });
+  assert.notEqual(getDeclaration(report.css, "--_color-tertiary-dark"), getDeclaration(base.css, "--_color-tertiary-dark"));
+  assert.equal(getDeclaration(base.css, "--_color-bg-dark"),
+    "color-mix(in oklch, var(--_color-bg-warm) var(--color-tune-dark-bg-mix), oklch(0 0 none))");
+  assert.equal(getDeclaration(base.css, "--_color-surface-dark"),
+    "color-mix(in oklch, var(--_color-bg-warm) var(--color-tune-dark-surface-mix), oklch(0 0 none))");
+  assert.match(getDeclaration(base.css, "--_color-text-dark"), /^color-mix\(in oklch, var\(--_color-bg-source\) var\(--color-tune-dark-text-mix\), oklch\(0\.99 0 none\)\)$/);
+});
+
+test("analysis.design exposes a complete, serializable binding for every public colour", async (t) => {
+  const root = await createProject(t);
+  const analysis = await analyzeColorTokens({
+    root,
+    inlineConfig: {
+      aliases: { action: "primary" },
+      scales: { enabled: true, applyTo: ["primary"], hueVariants: { enabled: true, shifts: [30, -30], applyTo: ["primary"] } },
+    },
+  });
+  const design = JSON.parse(JSON.stringify(analysis.design));
+
+  assert.equal(design.version, 1);
+  const canvas = design.sources.find((source) => source.name === "canvas");
+  assert.equal(canvas.token, "--palette-canvas");
+  assert.equal(canvas.role, "canvas");
+  assert.equal(canvas.darkBlend, null);
+  assert.deepEqual(canvas.darkMix, { mode: "automatic", sourcePercent: null, whitePercent: null });
+  const primary = design.sources.find((source) => source.name === "primary");
+  assert.equal(primary.role, "ui");
+  assert.deepEqual(primary.darkMix, { mode: "automatic", sourcePercent: 81, whitePercent: 19 });
+
+  // The registry is referenced once and never copied into a token binding.
+  assert.equal(design.recipes.surface.mix.light, 0.1);
+  assert.equal(design.recipes["surface-strong"].mix.dark, 0.28);
+  const surface = design.tokens["--color-primary-surface"];
+  assert.deepEqual(surface.sources, ["--palette-primary"]);
+  assert.equal(surface.recipe, "surface");
+  assert.equal(surface.controls.light.mix, "--color-tune-primary-surface-light-mix");
+  assert.equal(surface.controls.light.defaultMix, 0.1);
+  assert.equal(design.tokens["--color-action"].recipe, "alias");
+  assert.equal(design.tokens["--color-action"].mappedTo, "--color-primary");
+  assert.equal(design.tokens["--color-action-ink"].mappedTo, "--color-primary-ink");
+  assert.equal(design.tokens["--color-action-surface"].mappedTo, "--color-primary-surface");
+  assert.deepEqual(design.tokens["--color-action"].sources, ["--palette-primary"]);
+
+  // Every emitted public colour has a binding whose declared override names are
+  // exactly the `--color-tune-<token>-<theme>` knobs the CSS actually reads.
+  const emitted = [...getDeclarations(analysis.css).keys()].filter((name) => /^--color-(?!tune-)/.test(name));
+  assert.deepEqual([...Object.keys(design.tokens)].sort(), [...emitted].sort());
+  for (const [token, binding] of Object.entries(design.tokens)) {
+    const name = token.slice("--color-".length);
+    for (const theme of ["light", "dark"]) {
+      assert.equal(binding.controls[theme].override, `--color-tune-${name}-${theme}`, `${token} ${theme} override name`);
+    }
+  }
+});
+
+function blendPalette(role, value) {
+  return DEFAULT_PALETTE.replace(`  role: ${role};`, `  role: ${role};\n  dark-blend: ${value};`);
+}
+
+test("a fractional dark-blend keeps four-decimal precision in the emitted knob", async (t) => {
+  const root = await createProject(t, blendPalette("ui", 50.1234));
+  const report = await generateColorTokens({ root });
+  // 50.1234 -> 14.0346% white, 85.9654% source kept (four decimals, no 2-decimal loss).
+  assert.match(report.css, /--_color-primary-dark-generated: color-mix\(in oklch, var\(--_color-primary-source\) var\(--color-tune-primary-dark-mix, 85\.9654%\), oklch\(1 0 none\)\);/);
+});
+
+// Contract A is unchanged (0 = SOURCE), so an explicit canvas/ink can put a light
+// foundation under the dark theme. The derived foregrounds must adapt through the
+// normal solver and stay measurable instead of surfacing hidden neutral errors.
+test("explicit canvas/ink dark-blend resolves neutral and family text on the emitted CSS", async (t) => {
+  const darkTargetFor = (config) => Math.min(config.contrast.maxIdentity, config.contrast.text * config.contrast.darkRichness);
+  const measure = (declarations, token, background, scheme) => contrast(
+    resolveThemeColor(declarations, token, scheme),
+    resolveThemeColor(declarations, background, scheme),
+  );
+  for (const [role, value, label] of [
+    ["canvas", 0, "canvas0"], ["canvas", 50, "canvas50"], ["canvas", 100, "canvas100"],
+    ["ink", 0, "ink0"], ["ink", 50, "ink50"], ["ink", 100, "ink100"],
+  ]) {
+    const root = await createProject(t, blendPalette(role, value));
+    const analysis = await analyzeColorTokens({ root, suggest: false });
+    assert.deepEqual(analysis.errors, [], `${label} must not hide a contrast error`);
+    const declarations = getDeclarations(analysis.css);
+    const target = darkTargetFor(analysis.config);
+    for (const token of ["--color-text", "--color-text-muted"]) {
+      for (const background of ["--color-bg", "--color-surface"]) {
+        const ratio = measure(declarations, token, background, "dark");
+        assert.ok(ratio >= target, `${label} ${token} / ${background} = ${ratio} < ${target}`);
+      }
+    }
+    // The figurative roles (ui/feedback) and the decorative stay valid too.
+    for (const name of Object.keys(analysis.config.roles.identities)) {
+      for (const suffix of ["text", "text-strong"]) {
+        for (const background of ["--color-bg", "--color-surface", `--color-${name}-surface`, `--color-${name}-surface-strong`]) {
+          const ratio = measure(declarations, `--color-${name}-${suffix}`, background, "dark");
+          assert.ok(ratio >= target, `${label} ${name}-${suffix} / ${background} = ${ratio} < ${target}`);
+        }
+      }
+    }
+  }
+
+  // 0 = SOURCE: the chosen dark canvas is the authored source (contract A).
+  const zeroRoot = await createProject(t, blendPalette("canvas", 0));
+  const zero = await analyzeColorTokens({ root: zeroRoot, suggest: false });
+  const zeroDeclarations = getDeclarations(zero.css);
+  assertColorWithin(resolveThemeColor(zeroDeclarations, "--color-bg", "dark"), fitToSrgb({ l: 0.962, c: 0.015, h: 88 }), 0.01, "canvas 0 keeps the source");
+  assertColorWithin(resolveThemeColor(zeroDeclarations, "--color-surface", "dark"), resolveThemeColor(zeroDeclarations, "--color-surface", "light"), 0.01, "canvas 0 keeps the light surface");
+
+  // Combined explicit canvas + ink behaves the same.
+  const comboRoot = await createProject(t, blendPalette(blendPalette("canvas", 0), "ink", 100));
+  const combo = await analyzeColorTokens({ root: comboRoot, suggest: false });
+  assert.deepEqual(combo.errors, []);
+  const comboDeclarations = getDeclarations(combo.css);
+  const comboTarget = darkTargetFor(combo.config);
+  for (const background of ["--color-bg", "--color-surface"]) {
+    assert.ok(measure(comboDeclarations, "--color-text", background, "dark") >= comboTarget, `combo --color-text / ${background}`);
+  }
+});
+
+// Read-only: the repository root model must analyze cleanly with the new pipeline
+// and the child must never write the root output.
+test("the repository root model analyzes without issues and stays read-only", async (t) => {
+  const root = fileURLToPath(new URL("../../..", import.meta.url));
+  const output = path.join(root, "src/styles/tokens/colors.css");
+  const before = await readFile(output, "utf8");
+  const analysis = await analyzeColorTokens({ root });
+  assert.deepEqual(analysis.errors, []);
+  assert.equal(await readFile(output, "utf8"), before, "analysis must not write the root output");
 });

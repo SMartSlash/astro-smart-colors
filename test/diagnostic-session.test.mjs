@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { defaultSmartColorsConfig } from "../src/defaults.mjs";
-import { acceptDiagnosticOutput, assertDiagnosticInputsUnchanged, createDiagnosticSession } from "../src/diagnostic-session.mjs";
+import { acceptDiagnosticOutput, applyDiagnosticOutput, assertDiagnosticInputsUnchanged, createDiagnosticSession } from "../src/diagnostic-session.mjs";
+import { formatContrastReportHtml, prepareContrastReport, prepareDiagnosticReport, validation } from "../src/format-report-html.mjs";
+
+const sha256 = (value) => createHash("sha256").update(value, "utf8").digest("hex");
 
 const PALETTE = `@property --palette-bg { initial-value: oklch(.962 .015 88); role: canvas; }
 @property --palette-ink { initial-value: oklch(.28 .007 3.68); role: ink; }
@@ -163,11 +167,13 @@ test("a config that changes during import blocks the session", async (t) => {
 test("the session describes the captured palette bytes and blocks source changes", async (t) => {
   const root = await fixture(t);
   const { session, captured } = await createDiagnosticSession({ root, suggest: false });
-  const authored = session.palette.find((item) => item.name === "--palette-primary").authored;
-  assert.equal(authored.l, 0.62);
+  const primary = session.paletteSource.sources.find((source) => source.token === "--palette-primary");
+  assert.equal(primary.value, "oklch(.62 .300049 32.00005)");
+  assert.equal(session.paletteSource.css, PALETTE);
 
   await writeFile(path.join(root, PALETTE_PATH), PALETTE.replace(".62", ".70"));
-  assert.deepEqual(session.palette.find((item) => item.name === "--palette-primary").authored, authored);
+  assert.equal(session.paletteSource.css, PALETTE);
+  assert.equal(session.paletteSource.sources.find((source) => source.token === "--palette-primary").value, "oklch(.62 .300049 32.00005)");
   await assert.rejects(assertDiagnosticInputsUnchanged(root, captured), { code: "SMART_COLORS_INPUTS_CHANGED" });
 
   await writeFile(path.join(root, PALETTE_PATH), PALETTE);
@@ -278,4 +284,235 @@ test("when motion is enabled the motion write is accepted and watched separately
   await writeFile(path.join(root, MOTION_PATH), "/* stale motion */");
   assert.deepEqual((await acceptDiagnosticOutput(root, captured, analysis)).candidates, [{ name: "motion", path: MOTION_PATH, present: true, reason: "changed" }]);
   await assert.rejects(assertDiagnosticInputsUnchanged(root, captured), { code: "SMART_COLORS_INPUTS_CHANGED" });
+});
+
+test("css separates the expected generated CSS from the actual output (absent, stale, current, empty, unsupported)", async (t) => {
+  const root = await fixture(t);
+
+  // absent: the generated CSS is only a declared candidate, never production.
+  const absent = (await createDiagnosticSession({ root, suggest: false })).session;
+  assert.equal(absent.css.source, "generated-candidate");
+  assert.equal(absent.css.status, "absent");
+  assert.equal(absent.css.production, false);
+  assert.equal(absent.css.baseline, absent.css.generated);
+  assert.equal(absent.css.digest.generated, sha256(absent.css.generated));
+  assert.equal(absent.css.digest.baseline, absent.css.digest.generated);
+  assert.equal(absent.css.baselineSupport, "supported");
+
+  // stale: the actual on-disk bytes (different from the model) are the measured baseline.
+  const FOREIGN = ":root { color-scheme: light dark; --color-bg: light-dark(rgb(1, 2, 3), rgb(4, 5, 6)); }\n";
+  await writeFile(path.join(root, OUTPUT_PATH), FOREIGN);
+  const stale = (await createDiagnosticSession({ root, suggest: false })).session;
+  assert.equal(stale.css.source, "output");
+  assert.equal(stale.css.status, "stale");
+  assert.equal(stale.css.production, false);
+  assert.equal(stale.css.baseline, FOREIGN);
+  assert.notEqual(stale.css.baseline, stale.css.generated);
+  assert.equal(stale.css.digest.baseline, sha256(FOREIGN));
+  assert.equal(stale.css.baselineSupport, "supported");
+
+  // current: byte-identical to the model is the accepted production output.
+  await writeFile(path.join(root, OUTPUT_PATH), stale.css.generated);
+  const current = (await createDiagnosticSession({ root, suggest: false })).session;
+  assert.equal(current.css.source, "output");
+  assert.equal(current.css.status, "current");
+  assert.equal(current.css.production, true);
+  assert.equal(current.css.digest.baseline, current.css.digest.generated);
+
+  // empty: a present-but-empty output is never replaced by the generated candidate.
+  await writeFile(path.join(root, OUTPUT_PATH), "");
+  const empty = (await createDiagnosticSession({ root, suggest: false })).session;
+  assert.equal(empty.css.source, "output");
+  assert.equal(empty.css.status, "empty");
+  assert.equal(empty.css.production, false);
+  assert.equal(empty.css.baseline, "");
+  assert.equal(empty.css.digest.baseline, null);
+  assert.equal(empty.css.baselineSupport, "unsupported");
+  assert.notEqual(empty.css.baseline, empty.css.generated);
+  assert.ok(empty.notes.some((note) => /vuoto/i.test(note)));
+
+  // unsupported actual: @import/url() in the real output is declared, never read as a pass.
+  await writeFile(path.join(root, OUTPUT_PATH), ':root { background-image: url("x.png"); }\n');
+  const unsupported = (await createDiagnosticSession({ root, suggest: false })).session;
+  assert.equal(unsupported.css.status, "stale");
+  assert.equal(unsupported.css.baselineSupport, "unsupported");
+  assert.ok(unsupported.notes.some((note) => /non supportat/i.test(note)));
+});
+
+test("applyDiagnosticOutput records the intentional build bytes as the measured baseline", async (t) => {
+  const root = await fixture(t);
+  const { session, analysis, captured } = await createDiagnosticSession({ root, suggest: false });
+  assert.equal(session.css.status, "absent");
+
+  const descriptor = applyDiagnosticOutput(session, analysis, captured, null, { written: analysis.css });
+  assert.equal(descriptor, session.css);
+  assert.equal(session.css.baseline, analysis.css);
+  assert.equal(session.css.source, "output");
+  assert.equal(session.css.status, "current");
+  assert.equal(session.css.production, true);
+  assert.equal(session.css.digest.baseline, sha256(analysis.css));
+  // The helper never touches the captured inputs or the accepted-output baseline.
+  assert.equal(Object.hasOwn(captured, "acceptedOutputs"), false);
+});
+
+// --- Additive session.paletteSource source contract (never supersedes session.palette) ---------
+
+const PROPERTY_PALETTE = [
+  "@property --palette-bg { initial-value: oklch(.962 .015 88); role: canvas; }",
+  "@property --palette-ink { initial-value: oklch(.28 .007 3.68); role: ink; }",
+  "@property --palette-primary { initial-value: oklch(.62 .300049 32.00005); role: ui; }",
+].join("\n");
+
+const LEGACY_PALETTE = [
+  ":root {",
+  "  /* @role canvas */",
+  "  --palette-canvas: oklch(0.96 0.01 88);",
+  "  /* @role ink */",
+  "  --palette-ink: oklch(0.28 0.007 4);",
+  "  /* @role ui */",
+  "  --palette-primary: oklch(0.62 0.02 32);",
+  "}",
+  "",
+].join("\n");
+
+test("session.paletteSource captures the exact palette bytes and one source per authored token", async (t) => {
+  const root = await fixture(t);
+  const { session } = await createDiagnosticSession({ root, suggest: false });
+
+  assert.deepEqual(Object.keys(session.paletteSource).sort(), ["css", "path", "sha256", "sources"]);
+  assert.equal(session.paletteSource.css, PALETTE);
+  assert.equal(session.paletteSource.path, PALETTE_PATH);
+  assert.equal(session.paletteSource.sha256, sha256(PALETTE));
+  assert.equal(session.paletteSource.sha256, session.inputs.find((input) => input.name === "palette").sha256);
+
+  assert.deepEqual(session.paletteSource.sources.map((source) => source.token), ["--palette-bg", "--palette-ink", "--palette-primary"]);
+  for (const source of session.paletteSource.sources) {
+    assert.deepEqual(Object.keys(source).sort(), ["darkBlend", "declaration", "role", "token", "value"]);
+  }
+  // Exact initial-value and the exact @property declaration, sliced from the captured bytes.
+  assert.deepEqual(session.paletteSource.sources[0], {
+    token: "--palette-bg",
+    value: "oklch(.962 .015 88)",
+    role: "canvas",
+    darkBlend: null,
+    declaration: "@property --palette-bg { initial-value: oklch(.962 .015 88); role: canvas; }",
+  });
+  assert.equal(session.paletteSource.sources[2].value, "oklch(.62 .300049 32.00005)");
+  assert.equal(session.paletteSource.sources[2].role, "ui");
+  assert.equal(session.paletteSource.sources[2].darkBlend, null);
+  // The payload stays JSON-only: sources and raw bytes are plain data, no functions or lookups.
+  assertJsonOnly(session);
+});
+
+test("session.paletteSource is additive: the legacy snapshot palette array is untouched", async (t) => {
+  const root = await fixture(t);
+  const { session } = await createDiagnosticSession({ root, suggest: false });
+
+  // The legacy array survives with the exact snapshot rows (name/role/authored/resolved/darkBlend),
+  // so report validation, the palette gallery and the proposal/variant views keep reading it.
+  assert.ok(Array.isArray(session.palette), "session.palette must stay the legacy snapshot array");
+  assert.deepEqual(session.palette.map((item) => item.name), ["--palette-bg", "--palette-ink", "--palette-primary"]);
+  for (const item of session.palette) {
+    assert.deepEqual(Object.keys(item).sort(), ["authored", "darkBlend", "name", "resolved", "role"]);
+  }
+  const primary = session.palette.find((item) => item.name === "--palette-primary");
+  assert.equal(primary.role, "ui");
+  assert.equal(primary.authored.l, 0.62);
+  // The additive source list describes exactly the same authored tokens, in the same order.
+  assert.deepEqual(
+    session.paletteSource.sources.map((source) => source.token),
+    session.palette.map((item) => item.name),
+  );
+});
+
+test("session.paletteSource keeps an explicit dark-blend 0 distinct from an omitted descriptor", async (t) => {
+  const root = await fixture(t);
+  await writeFile(path.join(root, PALETTE_PATH), [
+    "@property --palette-bg { initial-value: oklch(.962 .015 88); role: canvas; dark-blend: 0; }",
+    "@property --palette-ink { initial-value: oklch(.28 .007 3.68); role: ink; }",
+    "@property --palette-primary { initial-value: oklch(.62 .14 32); role: ui; dark-blend: 40; }",
+  ].join("\n"));
+  const { session } = await createDiagnosticSession({ root, suggest: false });
+  const byToken = Object.fromEntries(session.paletteSource.sources.map((source) => [source.token, source]));
+  assert.equal(byToken["--palette-bg"].darkBlend, 0);
+  assert.equal(byToken["--palette-ink"].darkBlend, null);
+  assert.equal(byToken["--palette-primary"].darkBlend, 40);
+});
+
+test("a legacy :root palette keeps exact values but reports null declaration and blend metadata", async (t) => {
+  const root = await fixture(t);
+  await writeFile(path.join(root, PALETTE_PATH), LEGACY_PALETTE);
+  const { session } = await createDiagnosticSession({ root, suggest: false });
+
+  assert.equal(session.paletteSource.css, LEGACY_PALETTE);
+  assert.equal(session.paletteSource.sha256, sha256(LEGACY_PALETTE));
+  assert.deepEqual(session.paletteSource.sources, [
+    { token: "--palette-canvas", value: "oklch(0.96 0.01 88)", role: "canvas", darkBlend: null, declaration: null },
+    { token: "--palette-ink", value: "oklch(0.28 0.007 4)", role: "ink", darkBlend: null, declaration: null },
+    { token: "--palette-primary", value: "oklch(0.62 0.02 32)", role: "ui", darkBlend: null, declaration: null },
+  ]);
+  // No @property block is invented for a legacy palette.
+  assert.ok(session.paletteSource.sources.every((source) => source.declaration === null));
+});
+
+test("markup-significant palette bytes are retained verbatim as inert data", async (t) => {
+  const root = await fixture(t);
+  const hostile = `/* </script><script>alert(1)</script> & \"quotes\" */\n${PROPERTY_PALETTE}`;
+  await writeFile(path.join(root, PALETTE_PATH), hostile);
+  const { session } = await createDiagnosticSession({ root, suggest: false });
+
+  assert.equal(session.paletteSource.css, hostile);
+  assert.ok(session.paletteSource.css.includes("</script><script>alert(1)</script>"));
+  assert.equal(session.paletteSource.sha256, sha256(hostile));
+  // The comment is inert for parsing, so the authored sources stay exact.
+  assert.equal(session.paletteSource.sources.find((source) => source.token === "--palette-bg").value, "oklch(.962 .015 88)");
+  const json = assertJsonOnly(session);
+  assert.ok(json.includes("</script>"), "the raw bytes must survive JSON serialization untouched");
+});
+
+test("the palette contract is captured once and never re-read from disk", async (t) => {
+  const root = await fixture(t);
+  const { session } = await createDiagnosticSession({ root, suggest: false });
+  await writeFile(path.join(root, PALETTE_PATH), PALETTE.replace(".62", ".70"));
+  assert.equal(session.paletteSource.css, PALETTE);
+  assert.equal(session.paletteSource.sources.find((source) => source.token === "--palette-primary").value, "oklch(.62 .300049 32.00005)");
+});
+
+// --- Additivity regression: the legacy palette must still validate and render ---------------
+
+test("a real session keeps the legacy palette valid for the static report (no integrity failure)", async (t) => {
+  const root = await fixture(t);
+  const { session } = await createDiagnosticSession({ root, suggest: false });
+
+  // The report gate reads `session.palette` (the array). Adding paletteSource must not break it:
+  // a wrongly superseded palette would flag "Campo palette assente o non valido" and suppress the
+  // palette gallery plus the proposal/variant views.
+  for (const prepared of [prepareContrastReport(session), prepareDiagnosticReport(session)]) {
+    assert.deepEqual(prepared.problems.filter((problem) => /palette/i.test(problem)), [], "no palette integrity problem may be reported");
+  }
+
+  const html = formatContrastReportHtml(session);
+  assert.doesNotMatch(html, /La palette contiene dati non validi/);
+  assert.doesNotMatch(html, /Campo palette assente o non valido/);
+  assert.doesNotMatch(html, /Palette originale non disponibile/);
+  // Legacy palette data (token name and role) still renders in the static report.
+  assert.match(html, /<h3>--palette-primary<\/h3>/);
+  assert.match(html, /Ruolo: <code>ui<\/code>/);
+});
+
+test("report validation still fails closed on a genuinely missing or invalid palette", () => {
+  const base = {
+    generatedAt: new Date().toISOString(),
+    inputDigest: "a".repeat(64),
+    files: { palette: PALETTE_PATH, config: CONFIG_FILE, tuning: null, output: OUTPUT_PATH },
+    scenarios: [], overlaps: [], proposals: [], generationErrors: [], auditErrors: [], notes: [], rejectedSources: [],
+  };
+  // Missing palette field: explicit integrity problem.
+  assert.ok(validation(base, [], []).problems.includes("Campo palette assente o non valido."));
+  // A palette row with an invalid color is rejected, never silently accepted.
+  const invalid = { ...base, palette: [{ name: "--palette-x", role: "ui", authored: { l: 0.5, c: 0.1, h: 30 }, resolved: null }] };
+  assert.deepEqual(validation(invalid, [], []).problems.filter((problem) => /palette/i.test(problem)), ["La palette contiene dati non validi."]);
+  // A valid palette row (the session's own array shape) clears the gate.
+  const valid = { ...base, palette: [{ name: "--palette-x", role: "ui", authored: { l: 0.5, c: 0.1, h: 30 }, resolved: { l: 0.5, c: 0.1, h: 30 } }] };
+  assert.deepEqual(validation(valid, [], []).problems.filter((problem) => /palette/i.test(problem)), []);
 });

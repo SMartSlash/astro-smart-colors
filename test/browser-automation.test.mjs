@@ -546,6 +546,56 @@ test("a context delivered after the deadline is closed best-effort", async () =>
 // Opt-in: real smoke on Chromium and WebKit.
 // ---------------------------------------------------------------------------
 
+test("exploration data is aggregated separately and never touches the primary run", async () => {
+  const explorationOf = (scenarioId, pairId) => ({ pairId, scenarioId, foreground: "rgb(0, 0, 0)", background: "rgb(255, 255, 255)", target: 3, minimum: 3, ratio: 3, status: "pass", error: null });
+  const provider = createFakeProvider({
+    reportFor: (_engine, colorScheme) => {
+      const report = runtimeReport(colorScheme);
+      const scenarioId = report.scenarios[0].id;
+      report.explorations = [explorationOf(scenarioId, "light|exploration|--color-bg|--color-primary")];
+      report.explorationErrors = [{ phase: "exploration", cause: "exploration-unsupported", scenarioId, pairId: null, message: "exploration not measured" }];
+      report.explorationCoverage = { expected: 2, measured: 1, unmeasured: 1, omittedFamilies: ["ghost"], complete: false };
+      return report;
+    },
+  });
+
+  const run = await runAutomation(syntheticSession(), { mode: "required", provider });
+  assert.equal(run.status, "complete", "exploration never changes the primary status");
+  assert.equal(run.coverage.complete, true, "primary coverage stays intact");
+  assert.equal(run.measurements.length, 80, "exploration is never merged into the primary measurements");
+  assert.equal(run.explorations.length, 2, "one exploration per preference report");
+  assert.ok(run.explorations.every((measurement) => measurement.scenarioId.startsWith("chromium/")), "exploration scenario ids are namespaced per engine");
+  assert.equal(run.explorationErrors.length, 2);
+  assert.equal(run.explorationCoverage.expected, 4);
+  assert.equal(run.explorationCoverage.measured, 2);
+  assert.equal(run.explorationCoverage.unmeasured, 2);
+  assert.deepEqual(run.explorationCoverage.omittedFamilies, ["ghost"]);
+  assert.equal(run.explorationCoverage.complete, false);
+  assert.ok(!run.errors.some((error) => error.phase === "exploration"), "exploration errors stay out of the primary errors");
+});
+
+test("sessionPayload passes css source/status/production/digest through and never the generated string", async () => {
+  const provider = createFakeProvider({ reportFor: () => failingReport() });
+  const session = {
+    ...syntheticSession(),
+    css: {
+      baseline: ":root { --color-bg: white; }\n", tuning: null, tuningSupport: "absent",
+      generated: "SHOULD-NOT-APPEAR-IN-THE-PAYLOAD",
+      source: "output", status: "stale", production: false,
+      digest: { generated: "g".repeat(64), baseline: "b".repeat(64) },
+    },
+  };
+  await runAutomation(session, { mode: "required", provider });
+  const html = provider.record.contents[0];
+  const payload = JSON.parse(/<script type="application\/json" id="[^"]+">([\s\S]*?)<\/script>/.exec(html)[1].replace(/\\u003c/g, "<"));
+  assert.equal(payload.css.source, "output");
+  assert.equal(payload.css.status, "stale");
+  assert.equal(payload.css.production, false);
+  assert.deepEqual(payload.css.digest, { generated: "g".repeat(64), baseline: "b".repeat(64) });
+  assert.equal(Object.hasOwn(payload.css, "generated"), false, "the payload never duplicates the generated string");
+  assert.equal(html.includes("SHOULD-NOT-APPEAR-IN-THE-PAYLOAD"), false);
+});
+
 const NATIVE_PROOF = process.env.SMART_COLORS_NATIVE_PROOF === "1";
 
 // Only the tokens the default catalog's pairs read, so the run is complete; the tuning changes the

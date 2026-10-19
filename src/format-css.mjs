@@ -1,4 +1,33 @@
 import { fitToSrgb, oklch } from "./color-math.mjs";
+import { createDesignTools } from "./design-recipes.mjs";
+
+// The formatter and the generator share one recipe/knob registry, so the surface
+// source quotas and the dark-blend cap cannot drift between the JS model and the
+// emitted CSS.
+const designTools = createDesignTools();
+
+// A public colour token reads `--color-tune-<token-without--color->-<theme>` with
+// the generated value as the fallback: the default stays byte-exact, and a later
+// declaration in colors-tuning.css overrides it. The fallback for a fill that
+// references `--_color-<id>-dark` keeps the legacy `--color-tune-<id>-dark`
+// escape hatch below the more specific per-token override.
+function overridePair(name, lightValue, darkValue = lightValue) {
+  return `light-dark(var(--color-tune-${name}-light, ${lightValue}), var(--color-tune-${name}-dark, ${darkValue}))`;
+}
+
+// A family surface is an aesthetic, non-WCAG mix of the identity and the canvas.
+// The knob is the source quota kept in the mix, so a project can retune it at
+// runtime without touching an `--_*` internal.
+function surfaceExpression(name, variant, theme) {
+  const quota = `${name}-${variant}-${theme}-mix`;
+  const ratio = mixPercentOf(designTools.surfaceRatio(variant, theme));
+  const source = `var(--_color-${name}-${theme === "dark" ? "dark" : "light"})`;
+  return `color-mix(in oklch, ${source} var(--color-tune-${quota}, ${ratio}), var(--_color-bg-${theme}))`;
+}
+
+function mixPercentOf(ratio) {
+  return `${Number((ratio * 100).toFixed(2))}%`;
+}
 
 export function formatColorsCss(model, config) {
   const { neutrals, identities, decoratives, logoTokens, onColors, focus, scales } = model;
@@ -27,44 +56,44 @@ export function formatColorsCss(model, config) {
   /* ─── Foundation ────────────────────────────────────────────────────────
      Neutral canvas/surface + text/text-muted. Translucent borders are
      ornamental; focus is checked against the neutral backgrounds. */
-  --color-bg: light-dark(var(--_color-bg-light), var(--_color-bg-dark));
-  --color-surface: light-dark(var(--_color-surface-light), var(--_color-surface-dark));
-  --color-text: light-dark(var(--_color-text-light), var(--_color-text-dark));
-  --color-text-muted: light-dark(var(--_color-text-muted-light), var(--_color-text-muted-dark));
+  --color-bg: ${overridePair("bg", "var(--_color-bg-light)", "var(--_color-bg-dark)")};
+  --color-surface: ${overridePair("surface", "var(--_color-surface-light)", "var(--_color-surface-dark)")};
+  --color-text: ${overridePair("text", "var(--_color-text-light)", "var(--_color-text-dark)")};
+  --color-text-muted: ${overridePair("text-muted", "var(--_color-text-muted-light)", "var(--_color-text-muted-dark)")};
 
-  --color-border-subtle: oklch(from var(--color-text) l c h / 14%);
-  --color-border-strong: oklch(from var(--color-text) l c h / 28%);
-  --color-focus-ring: light-dark(var(--_color-focus-ring-light), var(--_color-focus-ring-dark));
+  --color-border-subtle: ${overridePair("border-subtle", "oklch(from var(--color-text) l c h / 14%)")};
+  --color-border-strong: ${overridePair("border-strong", "oklch(from var(--color-text) l c h / 28%)")};
+  --color-focus-ring: ${overridePair("focus-ring", "var(--_color-focus-ring-light)", "var(--_color-focus-ring-dark)")};
 ${formatFunctionalFamilies(identities, onColors, "ui", "Identity / brand (ui)")}${formatFunctionalFamilies(identities, onColors, "feedback", "Feedback")}${formatDecorativeSection(decoratives, onColors)}${formatAliases(config.aliases, onColors, identities)}
   /* ─── Controls ──────────────────────────────────────────────────────────
      Active background/border + active-text; focus background + text.
      Opaque state pairs are reported, not silently corrected. Alpha
      boundaries and icons need checks on their actual local background. */
-  --color-control-bg: var(--color-surface);
-  --color-control-border: var(--color-border-subtle);
+  --color-control-bg: ${overridePair("control-bg", "var(--color-surface)")};
+  --color-control-border: ${overridePair("control-border", "var(--color-border-subtle)")};
 
   --color-control-bg-active: light-dark(
-    color-mix(in oklch, var(--_color-surface-light) 86%, var(--_color-${config.roles.focus}-light)),
-    color-mix(in oklch, var(--_color-surface-dark) 76%, var(--_color-${config.roles.focus}-dark))
+    var(--color-tune-control-bg-active-light, color-mix(in oklch, var(--_color-surface-light) 86%, var(--_color-${config.roles.focus}-light))),
+    var(--color-tune-control-bg-active-dark, color-mix(in oklch, var(--_color-surface-dark) 76%, var(--_color-${config.roles.focus}-dark)))
   );
 
   --color-control-border-active: light-dark(
-    color-mix(in oklch, var(--_color-${config.roles.focus}-light) 46%, var(--_color-text-light)),
-    color-mix(in oklch, var(--_color-${config.roles.focus}-dark) 46%, var(--_color-text-dark))
+    var(--color-tune-control-border-active-light, color-mix(in oklch, var(--_color-${config.roles.focus}-light) 46%, var(--_color-text-light))),
+    var(--color-tune-control-border-active-dark, color-mix(in oklch, var(--_color-${config.roles.focus}-dark) 46%, var(--_color-text-dark)))
   );
 
-  --color-control-active-text: var(--color-text);
+  --color-control-active-text: ${overridePair("control-active-text", "var(--color-text)")};
 
   --color-control-focus-bg: light-dark(
-    color-mix(in oklch, var(--_color-${config.roles.focus}-light) 12%, var(--_color-bg-light)),
-    color-mix(in oklch, var(--_color-${config.roles.focus}-dark) 18%, var(--_color-bg-dark))
+    var(--color-tune-control-focus-bg-light, color-mix(in oklch, var(--_color-${config.roles.focus}-light) 12%, var(--_color-bg-light))),
+    var(--color-tune-control-focus-bg-dark, color-mix(in oklch, var(--_color-${config.roles.focus}-dark) 18%, var(--_color-bg-dark)))
   );
 
-  --color-control-focus-border: oklch(from var(--color-focus-ring) l c h / 72%);
+  --color-control-focus-border: ${overridePair("control-focus-border", "oklch(from var(--color-focus-ring) l c h / 72%)")};
 
   --color-control-icon-muted: light-dark(
-    oklch(from var(--_color-text-light) l c h / 48%),
-    oklch(from var(--_color-text-dark) l c h / 72%)
+    var(--color-tune-control-icon-muted-light, oklch(from var(--_color-text-light) l c h / 48%)),
+    var(--color-tune-control-icon-muted-dark, oklch(from var(--_color-text-dark) l c h / 72%))
   );
 
   /* ─── Advanced ──────────────────────────────────────────────────────────
@@ -150,7 +179,7 @@ function formatDecorativeSection(decoratives, onColors) {
   const names = Object.keys(decoratives ?? {});
   if (!names.length) return "";
 
-  return `\n  /* ─── Decorative ────────────────────────────────────────────────────\n     Theme-adapted ornamental colors. Canvas contrast is not guaranteed;\n     each color receives a checked, best-effort companion for its own fill.\n     Do not use decorative color alone to communicate meaning or state. */\n${names.map((name) => `  --color-${name}: light-dark(var(--_color-${name}-light), var(--_color-${name}-dark));\n  --color-${name}-ink: light-dark(${onColors[name].light}, ${onColors[name].dark});`).join("\n")}\n`;
+  return `\n  /* ─── Decorative ────────────────────────────────────────────────────\n     Theme-adapted ornamental colors. Canvas contrast is not guaranteed;\n     each color receives a checked, best-effort companion for its own fill.\n     Do not use decorative color alone to communicate meaning or state. */\n${names.map((name) => `  --color-${name}: ${overridePair(name, `var(--_color-${name}-light)`, `var(--_color-${name}-dark)`)};\n  --color-${name}-ink: ${overridePair(`${name}-ink`, onColors[name].light, onColors[name].dark)};`).join("\n")}\n`;
 }
 
 function formatTuningContract(config, neutrals) {
@@ -158,7 +187,14 @@ function formatTuningContract(config, neutrals) {
   const surface = config.derivation.surface;
 
   return `  /* ─── Tuning contract ────────────────────────────────────────────────────
-     Project-level knobs. Override in colors-tuning.css. */
+     Project-level knobs. Override in colors-tuning.css.
+
+     Family surfaces are aesthetic (non-WCAG) source/background mixes. Retune the
+     source quota with --color-tune-<identity>-surface[-strong]-<theme>-mix
+     (defaults: 10% / 18% light, 18% / 28% dark). Every public colour also accepts
+     a full per-theme override --color-tune-<token-without--color->-<theme>; the
+     more specific override wins over a recipe or the legacy per-identity dark
+     knob. These runtime overrides are not revalidated by smart-colors check. */
   --color-tune-light-warmth: 100%;
   --color-tune-surface-lightness-shift: ${formatSignedNumber(surface.lightShift)};
   --color-tune-dark-warmth: 100%;
@@ -178,17 +214,35 @@ function formatNeutrals(neutrals, config) {
   const mode = config.derivation?.dark?.mode ?? "relative";
 
   if (mode === "relative") {
+    // An explicit canvas dark-blend replaces the macro black mix with the shared
+    // source/white rule at a constant build-time quota (no runtime knob); the
+    // neutral surface follows the chosen canvas, and an explicit canvas or ink
+    // resolves the dark text to its solved literal (the readability adjustment
+    // cannot be expressed as a static mix). The public --color-tune-bg/surface/
+    // text/surface-* overrides remain the runtime escape hatch.
+    const canvasBlend = neutrals.canvasBlendMix ?? null;
+    const inkBlend = neutrals.inkBlendMix ?? null;
+    const quota = canvasBlend ? `${Number(canvasBlend.sourcePercent.toFixed(4))}%` : null;
+    const bgDark = canvasBlend
+      ? `color-mix(in oklch, var(--_color-bg-source) ${quota}, oklch(1 0 none))`
+      : "color-mix(in oklch, var(--_color-bg-warm) var(--color-tune-dark-bg-mix), oklch(0 0 none))";
+    const surfaceDark = canvasBlend
+      ? `color-mix(in oklch, var(--_color-surface-light) ${quota}, oklch(1 0 none))`
+      : "color-mix(in oklch, var(--_color-bg-warm) var(--color-tune-dark-surface-mix), oklch(0 0 none))";
+    const textDark = (canvasBlend || inkBlend)
+      ? oklch(neutrals.textDark)
+      : "color-mix(in oklch, var(--_color-bg-source) var(--color-tune-dark-text-mix), oklch(0.99 0 none))";
     return `  --_color-bg-source: ${oklch(neutrals.bgLight)};
   --_color-bg-neutral: oklch(${neutrals.bgLight.l} 0 none);
   --_color-bg-light: color-mix(in oklch, var(--_color-bg-source) var(--color-tune-light-warmth), var(--_color-bg-neutral));
   --_color-bg-warm: color-mix(in oklch, var(--_color-bg-source) var(--color-tune-dark-warmth), var(--_color-bg-neutral));
-  --_color-bg-dark: color-mix(in oklch, var(--_color-bg-warm) var(--color-tune-dark-bg-mix), oklch(0 0 none));
+  --_color-bg-dark: ${bgDark};
 
   --_color-surface-light: oklch(from var(--_color-bg-light) clamp(0, calc(l + var(--color-tune-surface-lightness-shift)), 1) c h);
-  --_color-surface-dark: color-mix(in oklch, var(--_color-bg-warm) var(--color-tune-dark-surface-mix), oklch(0 0 none));
+  --_color-surface-dark: ${surfaceDark};
 
   --_color-text-light: ${oklch(neutrals.textLight)};
-  --_color-text-dark: color-mix(in oklch, var(--_color-bg-source) var(--color-tune-dark-text-mix), oklch(0.99 0 none));
+  --_color-text-dark: ${textDark};
 
   --_color-text-muted-light: ${oklch(neutrals.textMutedLight)};
   --_color-text-muted-dark: color-mix(in oklch, var(--_color-text-dark) var(--color-tune-dark-muted-mix), var(--_color-bg-dark));`;
@@ -239,8 +293,8 @@ function formatIdentityInternals(name, identity, onColor, config) {
 }
 
 function formatIdentityPublic(name, onColor) {
-  const colorToken = `  --color-${name}: light-dark(var(--_color-${name}-light), var(--_color-${name}-dark));`;
-  const onToken = onColor ? `\n  --color-${name}-ink: light-dark(var(--_color-on-${name}-light), var(--_color-on-${name}-dark));` : "";
+  const colorToken = `  --color-${name}: ${overridePair(name, `var(--_color-${name}-light)`, `var(--_color-${name}-dark)`)};`;
+  const onToken = onColor ? `\n  --color-${name}-ink: ${overridePair(`${name}-ink`, `var(--_color-on-${name}-light)`, `var(--_color-on-${name}-dark)`)};` : "";
   return colorToken + onToken;
 }
 
@@ -254,17 +308,25 @@ function formatFunctionalFamilies(identities, onColors, role, heading) {
     // Border and solid reference the dark identity var. Hover stays resolved
     // so runtime CSS matches the color pair validated by the build-time model.
     const darkVar = `var(--_color-${name}-dark)`;
+    // Surfaces are aesthetic (non-WCAG) source/background mixes, so they are the
+    // only family variants emitted as a live color-mix() with a runtime source
+    // quota. Contrast-adapted variants stay build-time literals: a runtime
+    // override would silently invalidate the checked pair.
+    const surfaceLight = surfaceExpression(name, "surface", "light");
+    const surfaceDark = surfaceExpression(name, "surface", "dark");
+    const surfaceStrongLight = surfaceExpression(name, "surface-strong", "light");
+    const surfaceStrongDark = surfaceExpression(name, "surface-strong", "dark");
     return `  /* ${name}: ${identity.role} — direct pair, surfaces, text, fills, borders */
 ${formatIdentityPublic(name, onColors[name])}
-  --color-${name}-surface: light-dark(${oklch(light.surface)}, ${oklch(dark.surface)});
-  --color-${name}-surface-strong: light-dark(${oklch(light.surfaceStrong)}, ${oklch(dark.surfaceStrong)});
-  --color-${name}-text: light-dark(${oklch(light.text)}, ${oklch(dark.text)});
-  --color-${name}-text-strong: light-dark(${oklch(light.textStrong)}, ${oklch(dark.textStrong)});
-  --color-${name}-solid: light-dark(${oklch(light.solid)}, ${darkVar});
-  --color-${name}-solid-hover: light-dark(${oklch(light.solidHover)}, ${oklch(dark.solidHover)});
-  --color-${name}-solid-text: light-dark(${oklch(light.onSolid)}, ${oklch(dark.onSolid)});
-  --color-${name}-border: light-dark(${oklch(light.border)}, ${darkVar});
-  --color-${name}-border-strong: light-dark(${oklch(light.borderStrong)}, ${oklch(dark.borderStrong)});`;
+  --color-${name}-surface: ${overridePair(`${name}-surface`, surfaceLight, surfaceDark)};
+  --color-${name}-surface-strong: ${overridePair(`${name}-surface-strong`, surfaceStrongLight, surfaceStrongDark)};
+  --color-${name}-text: ${overridePair(`${name}-text`, oklch(light.text), oklch(dark.text))};
+  --color-${name}-text-strong: ${overridePair(`${name}-text-strong`, oklch(light.textStrong), oklch(dark.textStrong))};
+  --color-${name}-solid: ${overridePair(`${name}-solid`, oklch(light.solid), darkVar)};
+  --color-${name}-solid-hover: ${overridePair(`${name}-solid-hover`, oklch(light.solidHover), oklch(dark.solidHover))};
+  --color-${name}-solid-text: ${overridePair(`${name}-solid-text`, oklch(light.onSolid), oklch(dark.onSolid))};
+  --color-${name}-border: ${overridePair(`${name}-border`, oklch(light.border), darkVar)};
+  --color-${name}-border-strong: ${overridePair(`${name}-border-strong`, oklch(light.borderStrong), oklch(dark.borderStrong))};`;
   });
 
   return `\n  /* ─── ${heading} ───────────────────────────────────────────────────
@@ -342,7 +404,7 @@ function formatScale(name, scale) {
   return lightSteps
     .map(([step, color]) => {
       const darkColor = scale.dark[step];
-      return `  --color-${name}-${step}: light-dark(${oklch(color)}, ${oklch(darkColor)});`;
+      return `  --color-${name}-${step}: ${overridePair(`${name}-${step}`, oklch(color), oklch(darkColor))};`;
     })
     .join("\n");
 }
@@ -356,11 +418,14 @@ function formatAliases(aliases, onColors, identities) {
      Alternative names for existing colors, not additional palette choices. */
 ${entries
     .map(([alias, target]) => {
-      const lines = [`  /* ${alias} → ${target} */`, `  --color-${alias}: var(--color-${target});`];
-      if (Object.hasOwn(onColors, target)) lines.push(`  --color-${alias}-ink: var(--color-${target}-ink);`);
+      // The alias references its target's resolved per-theme value and keeps its
+      // own per-theme override on top, so mapping and precedence both hold.
+      const targetToken = `var(--color-${target})`;
+      const lines = [`  /* ${alias} → ${target} */`, `  --color-${alias}: ${overridePair(alias, targetToken)};`];
+      if (Object.hasOwn(onColors, target)) lines.push(`  --color-${alias}-ink: ${overridePair(`${alias}-ink`, `var(--color-${target}-ink)`)};`);
       if (Object.hasOwn(identities, target)) {
         for (const suffix of functionalSuffixes) {
-          lines.push(`  --color-${alias}-${suffix}: var(--color-${target}-${suffix});`);
+          lines.push(`  --color-${alias}-${suffix}: ${overridePair(`${alias}-${suffix}`, `var(--color-${target}-${suffix})`)};`);
         }
       }
       return lines.join("\n");
@@ -415,15 +480,15 @@ function formatHueVariants(config, identities) {
 
     if (variants.length === 2) {
       const [warm, cool] = sortHueTemperatureVariants(variants);
-      css += `  --color-${name}-warm: light-dark(${oklch(warm.color)}, ${oklch(warm.darkColor)});\n`;
-      css += `  --color-${name}-cool: light-dark(${oklch(cool.color)}, ${oklch(cool.darkColor)});\n`;
+      css += `  --color-${name}-warm: ${overridePair(`${name}-warm`, oklch(warm.color), oklch(warm.darkColor))};\n`;
+      css += `  --color-${name}-cool: ${overridePair(`${name}-cool`, oklch(cool.color), oklch(cool.darkColor))};\n`;
       continue;
     }
 
     for (const variant of variants) {
       const direction = variant.shift >= 0 ? "plus" : "minus";
       const amount = Math.abs(variant.shift);
-      css += `  --color-${name}-hue-${direction}-${amount}: light-dark(${oklch(variant.color)}, ${oklch(variant.darkColor)});\n`;
+      css += `  --color-${name}-hue-${direction}-${amount}: ${overridePair(`${name}-hue-${direction}-${amount}`, oklch(variant.color), oklch(variant.darkColor))};\n`;
     }
   }
 

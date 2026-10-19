@@ -276,6 +276,15 @@ export function createVerificationCore() {
   const STATUS_BELOW_MINIMUM = "below-minimum";
   const STATUS_UNMEASURED = "unmeasured";
 
+  // Exploration catalog: a separate, bounded, advisory set of opaque cross-color pairs on the
+  // guaranteed base tokens. It never enters the primary catalog, coverage or exit policy. It uses
+  // TEXT/on-color semantics (kind "on-color", DOM property "color"), reusing the existing on-color
+  // target and the 4.5 text minimum: no new WCAG threshold is invented and 3:1 is never a body pass.
+  const EXPLORATION_NAMESPACE = "exploration"; // id segment: a distinct namespace, never the DOM property
+  const EXPLORATION_KIND = "on-color";
+  const EXPLORATION_PROPERTY = "color";
+  const MAX_EXPLORATION_FAMILIES = 24;
+
   function pairId(theme, property, foreground, background) {
     return `${theme}|${property}|${foreground}|${background}`;
   }
@@ -315,6 +324,53 @@ export function createVerificationCore() {
     return pairs;
   }
 
+  // One guaranteed opaque base color per family, the only colors the exploration catalog reads:
+  // each identity's base fill and each decorative's base fill. The neutral canvas/surface are added
+  // by the caller; never an arbitrary consumer pair, never a token the generator does not guarantee.
+  function explorationBaseTokens(identities = DEFAULT_IDENTITIES, decoratives = []) {
+    const families = [];
+    for (const name of identities) families.push({ family: name, token: `--color-${name}` });
+    for (const name of decoratives) families.push({ family: `decorative:${name}`, token: `--color-${name}` });
+    return families;
+  }
+
+  /**
+   * Bounded, deterministic exploration catalog for one scheme: every supported (non-self) pair over
+   * `canvas`, `surface` and the base color of each of the first `MAX_EXPLORATION_FAMILIES` families.
+   * There is no arbitrary pair cap: all supported pairs are compared (<= 26 colors -> <= 26*25). The
+   * families beyond the family cap are declared in `omittedFamilies`. Ids reuse the same
+   * theme/property/fg/bg schema under a distinct `exploration` namespace, so they can never collide
+   * with a primary pair id. `kind`/`property` give text/on-color semantics; the caller owns the
+   * thresholds (on-color target, 4.5 text minimum) and treats the result as advisory data only.
+   */
+  function explorationPairsFor(scheme, identities = DEFAULT_IDENTITIES, decoratives = []) {
+    const families = explorationBaseTokens(identities, decoratives);
+    const included = families.slice(0, MAX_EXPLORATION_FAMILIES);
+    const omittedFamilies = families.slice(MAX_EXPLORATION_FAMILIES).map((entry) => entry.family);
+    // canvas + surface are always compared, alongside each included family's base color.
+    const colors = [{ token: "--color-bg" }, { token: "--color-surface" }];
+    for (const entry of included) colors.push({ token: entry.token });
+
+    const pairs = [];
+    for (const foreground of colors) {
+      for (const background of colors) {
+        if (foreground.token === background.token) continue; // no self pair
+        pairs.push({
+          id: pairId(scheme, EXPLORATION_NAMESPACE, foreground.token, background.token),
+          label: `${scheme} ${EXPLORATION_NAMESPACE} ${foreground.token} on ${background.token}`,
+          foreground: foreground.token,
+          background: background.token,
+          kind: EXPLORATION_KIND,
+          property: EXPLORATION_PROPERTY,
+          theme: scheme,
+          warning: true,
+          exploration: true,
+        });
+      }
+    }
+    return { pairs, omittedFamilies };
+  }
+
   function pairTarget(config, scheme, kind) {
     if (kind === "on-color") return config.contrast.onColor;
     if (kind === "ui") return config.contrast.ui;
@@ -342,16 +398,37 @@ export function createVerificationCore() {
     const identities = isRecord(roles.identities) ? Object.keys(roles.identities) : DEFAULT_IDENTITIES;
     const decoratives = isRecord(roles.decoratives) ? Object.keys(roles.decoratives) : [];
     const scope = { contrast };
-    const build = (scheme) => pairsFor(scheme, identities, decoratives).map((pair) => ({
+    const decorate = (scheme, pairs) => pairs.map((pair) => ({
       ...pair,
       target: pairTarget(scope, scheme, pair.kind),
       minimum: minimumForKind(pair.kind),
     }));
+    const build = (scheme) => decorate(scheme, pairsFor(scheme, identities, decoratives));
+    const buildExploration = (scheme) => {
+      const { pairs, omittedFamilies } = explorationPairsFor(scheme, identities, decoratives);
+      return { pairs: decorate(scheme, pairs), omittedFamilies };
+    };
+    const lightExploration = buildExploration("light");
+    const darkExploration = buildExploration("dark");
     return {
       config: { contrast },
       identities,
       decoratives,
       pairs: { light: build("light"), dark: build("dark") },
+      // Optional, additive exploration surface: bounded data for the report formatter. It never
+      // changes the primary `pairs`, coverage or exit policy and is explicitly advisory. The id
+      // namespace is distinct from every primary pair; the kind/property are text/on-color semantics.
+      explorationPairs: { light: lightExploration.pairs, dark: darkExploration.pairs },
+      explorationScope: {
+        namespace: EXPLORATION_NAMESPACE,
+        kind: EXPLORATION_KIND,
+        property: EXPLORATION_PROPERTY,
+        maxFamilies: MAX_EXPLORATION_FAMILIES,
+        minimum: minimumForKind(EXPLORATION_KIND),
+        advisory: true,
+        omittedFamilies: { light: lightExploration.omittedFamilies, dark: darkExploration.omittedFamilies },
+        note: "tutte le coppie non-self su canvas, surface e il colore base delle prime famiglie: semantiche testo/on-color (minimo 4.5), esplorative e non certificative, mai parte della copertura primary",
+      },
     };
   }
 
@@ -497,6 +574,7 @@ export function createVerificationCore() {
   return {
     // Verification contract (plan §5.1.1).
     pairsFor,
+    explorationPairsFor,
     pairTarget,
     warningStatus,
     parseComputedColor,

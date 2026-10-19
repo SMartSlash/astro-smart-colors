@@ -246,6 +246,18 @@ function sessionPayload(session) {
       baseline: typeof css.baseline === "string" ? css.baseline : "",
       tuning,
       tuningSupport: ["absent", "supported", "unsupported"].includes(css.tuningSupport) ? css.tuningSupport : (tuning === null ? "absent" : "supported"),
+      // Additive passthrough only: the payload never carries the full `generated` string (it is
+      // already the report meta node). `source`/`status`/`production`/`digest` describe where the
+      // measured baseline came from; the runner tolerates nulls, so legacy payloads stay valid.
+      source: css.source === "output" || css.source === "generated-candidate" ? css.source : null,
+      status: ["current", "stale", "absent", "empty"].includes(css.status) ? css.status : null,
+      production: css.production === true,
+      digest: css.digest && typeof css.digest === "object"
+        ? {
+          generated: typeof css.digest.generated === "string" ? css.digest.generated : null,
+          baseline: typeof css.digest.baseline === "string" ? css.digest.baseline : null,
+        }
+        : null,
     },
     config: session && typeof session.config === "object" && session.config !== null ? session.config : null,
     model: session && typeof session.model === "object" && session.model !== null ? session.model : { diagnostics: [], errors: [], warnings: [] },
@@ -284,6 +296,11 @@ function namespaceReport(engine, report) {
     measurements: (report.measurements ?? []).map((measurement) => ({ ...measurement, engine, scenarioId: namespaceScenario(engine, measurement.scenarioId) })),
     unsupported: (report.unsupported ?? []).map((entry) => ({ ...entry, id: namespaceScenario(engine, entry.id), engine })),
     errors: (report.errors ?? []).map((error) => ({ ...error, engine, scenarioId: error.scenarioId == null ? null : namespaceScenario(engine, error.scenarioId) })),
+    // Exploration is additive and advisory: it is namespaced like the primary data but kept in its
+    // own arrays so it never enters `measurements`, primary coverage or the exit policy.
+    explorations: (report.explorations ?? []).map((measurement) => ({ ...measurement, engine, scenarioId: namespaceScenario(engine, measurement.scenarioId) })),
+    explorationErrors: (report.explorationErrors ?? []).map((error) => ({ ...error, engine, scenarioId: error.scenarioId == null ? null : namespaceScenario(engine, error.scenarioId) })),
+    explorationCoverage: report.explorationCoverage ?? null,
   };
 }
 
@@ -330,6 +347,11 @@ function buildRun(parts) {
     coverage: parts.coverage ?? null,
     unsupported: parts.unsupported ?? [],
     errors: parts.errors ?? [],
+    // Exploration aggregation: separate from the primary measurements/coverage above; never merged
+    // into them, so it can neither confirm nor block the primary verdict.
+    explorations: parts.explorations ?? [],
+    explorationErrors: parts.explorationErrors ?? [],
+    explorationCoverage: parts.explorationCoverage ?? null,
     notes: parts.notes ?? [],
     partial: Boolean(parts.partial),
     // Planned matrix for every requested engine (the CLI's requested-coverage metadata), distinct from
@@ -621,6 +643,9 @@ export async function runAutomation(session, options = {}) {
   const measurements = [];
   const scenarioRecords = [];
   const unsupported = [];
+  const explorations = [];
+  const explorationErrors = [];
+  const explorationCoverages = [];
   const expectedPairs = {};
   const executedPairs = {};
   const expectedScenarioIds = [];
@@ -642,6 +667,9 @@ export async function runAutomation(session, options = {}) {
     measurements.push(...report.measurements);
     unsupported.push(...report.unsupported);
     errors.push(...report.errors);
+    if (Array.isArray(report.explorations)) explorations.push(...report.explorations);
+    if (Array.isArray(report.explorationErrors)) explorationErrors.push(...report.explorationErrors);
+    if (report.explorationCoverage) explorationCoverages.push(report.explorationCoverage);
     // The adapter's own `expected` is never trusted for the identity set: a measurement with an
     // unknown scenario id is left for core.coverage to reject as unexpected, not silently absorbed.
     Object.assign(executedPairs, report.executed.pairs);
@@ -656,6 +684,16 @@ export async function runAutomation(session, options = {}) {
 
   const expectedList = expectedScenarioIds.map((id) => ({ id, pairIds: Array.isArray(expectedPairs[id]) ? expectedPairs[id] : [] }));
   const coverage = core.coverage(expectedList, measurements);
+
+  // Exploration coverage is aggregated only from the engines that reported it; it is never folded
+  // into `coverage`, so an exploration shortfall cannot change the primary status or the exit code.
+  const explorationCoverage = explorationCoverages.length === 0 ? null : {
+    expected: explorationCoverages.reduce((total, entry) => total + (Number.isFinite(entry.expected) ? entry.expected : 0), 0),
+    measured: explorationCoverages.reduce((total, entry) => total + (Number.isFinite(entry.measured) ? entry.measured : 0), 0),
+    unmeasured: explorationCoverages.reduce((total, entry) => total + (Number.isFinite(entry.unmeasured) ? entry.unmeasured : 0), 0),
+    omittedFamilies: [...new Set(explorationCoverages.flatMap((entry) => Array.isArray(entry.omittedFamilies) ? entry.omittedFamilies : []))],
+    complete: explorationCoverages.every((entry) => entry.complete === true),
+  };
 
   // Only the environment phases can make a run unavailable. A launched engine that produced no report
   // or a failure report is incomplete; an engine whose documents are all unsupported stays unsupported.
@@ -683,6 +721,7 @@ export async function runAutomation(session, options = {}) {
     expected: { scenarios: expectedScenarioIds, pairs: expectedPairs },
     executed: { scenarios: executedScenarioIds, pairs: executedPairs },
     scenarios: scenarioRecords, measurements, coverage, unsupported, errors, notes, partial, measuredAt,
+    explorations, explorationErrors, explorationCoverage,
     planned, requestedEngines,
   });
 }

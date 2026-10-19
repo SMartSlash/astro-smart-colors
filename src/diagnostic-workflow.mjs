@@ -14,9 +14,11 @@
  * - `report` writes only the two HTML artifacts (never CSS/palette/config/tuning);
  * - `check`, `init` and `audit` never reach this module.
  */
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { AUTOMATION_OVERALL_TIMEOUT_MS, runAutomation, uniqueRejections } from "./browser-audit.mjs";
-import { acceptDiagnosticOutput, assertDiagnosticInputsUnchanged, createDiagnosticSession } from "./diagnostic-session.mjs";
+import { containsUnsupportedResources } from "./diagnostic-runtime.mjs";
+import { acceptDiagnosticOutput, applyDiagnosticOutput, assertDiagnosticInputsUnchanged, createDiagnosticSession } from "./diagnostic-session.mjs";
 import { DEFAULT_CONFIG_FILE } from "./load-config.mjs";
 import { writeContrastReport } from "./report-artifact.mjs";
 import { proposalImproves, publishedProposal, reportCandidates, reportOverlapScenario, reportScenario, structuralChanges } from "./report-data.mjs";
@@ -79,21 +81,28 @@ function parseColor(value) {
  * Returns `{ session, analysis, captured, run, publication, problems, coverage, proposals,
  * rejectedSources, warnings, suggestions, strictInvalid, exitCode }`. Browser-injectable through
  * `provider` (SC-05), so the paths are testable without Playwright. `off` performs zero discovery:
- * `runAutomation` short-circuits before the provider is ever touched.
+ * `runAutomation` short-circuits before the provider is ever touched. An optional `onProgress(phase)`
+ * callback receives stable phase names (`analysis`, `generation`, `automation`, `publication`) as it
+ * starts each real phase; it is presentation only and can never alter the result or the exit policy.
  */
 export async function runDiagnosticWorkflow(options = {}) {
-  const { root, command, automation, browsers, configFile, provider, timeoutMs, overallTimeoutMs: overallTimeoutOption, ...analysisOptions } = options;
+  const { root, command, automation, browsers, configFile, provider, timeoutMs, overallTimeoutMs: overallTimeoutOption, onProgress, ...analysisOptions } = options;
   const resolvedRoot = path.resolve(root ?? process.cwd());
   const resolvedCommand = command === "report" ? "report" : "build";
   const mode = automation ?? "auto";
 
   if (!AUTOMATION_MODES.includes(mode)) throw usageError(`Unknown automation mode ${mode}. Expected one of ${AUTOMATION_MODES.join(", ")}.`);
 
+  // Phase progress is presentation only: a throwing callback must never alter the result or the exit
+  // policy, so every emission is guarded. `onProgress` is never forwarded into the analysis options.
+  const emitProgress = (phase) => { try { onProgress?.(phase); } catch { /* presentation only */ } };
+
   // One shared budget for the whole automation of this workflow: the main run plus every proposal
   // trial share the same deadline, so candidates can never multiply the wall-clock indefinitely.
   const overallTimeoutMs = Number.isFinite(overallTimeoutOption) && overallTimeoutOption > 0 ? overallTimeoutOption : AUTOMATION_OVERALL_TIMEOUT_MS;
   const deadline = Date.now() + overallTimeoutMs;
 
+  emitProgress("analysis");
   const { session, analysis, captured } = await createDiagnosticSession({ root: resolvedRoot, configFile, automation: mode, ...analysisOptions });
   const tuningPath = captured.files.tuning;
   const strictInvalid = analysis.errors.length > 0;
@@ -105,6 +114,7 @@ export async function runDiagnosticWorkflow(options = {}) {
   let writeOutcome = null;
   if (resolvedCommand === "build" && !strictInvalid) {
     if (typeof analysis.applyValidatedOutput !== "function") throw usageError("The session analysis is missing its internal write capability; no CSS was written.");
+    emitProgress("generation");
     await assertDiagnosticInputsUnchanged(resolvedRoot, captured);
     writeOutcome = await analysis.applyValidatedOutput();
   }
@@ -120,10 +130,18 @@ export async function runDiagnosticWorkflow(options = {}) {
     acceptance = await acceptDiagnosticOutput(resolvedRoot, captured, analysis);
   }
 
+  // Build measures the NEW output: the intentional write is the accepted baseline, so the browser
+  // audit describes the bytes just written, not the pre-write capture. `report` never writes, so it
+  // keeps the captured on-disk output (or the declared candidate when absent) as its baseline.
+  if (resolvedCommand === "build" && !strictInvalid && writeOutcome && typeof writeOutcome.css === "string") {
+    applyDiagnosticOutput(session, analysis, captured, acceptance, { written: writeOutcome.css });
+  }
+
   // A strict-invalid model disables automation. The browser list must NOT be forwarded in that
   // case: `runAutomation` rejects an explicit list combined with mode off, which would abort before
   // the HTML artifacts are written. The requested mode/browsers are kept as metadata instead.
   const effectiveMode = strictInvalid ? "off" : mode;
+  if (effectiveMode !== "off") emitProgress("automation");
   const run = await runAutomation(session, {
     root: resolvedRoot,
     mode: effectiveMode,
@@ -162,6 +180,7 @@ export async function runDiagnosticWorkflow(options = {}) {
   // Final input guard before publication: our own accepted output is allowed through, anything else
   // blocks the write so no artifact describes a state that no longer exists.
   await assertDiagnosticInputsUnchanged(resolvedRoot, captured);
+  emitProgress("publication");
   const publication = await writeContrastReport({
     root: resolvedRoot,
     report: session,
@@ -341,6 +360,17 @@ async function verifyProposals({ root, mode, browsers, provider, timeoutMs, dead
   const failures = states.flatMap((state) => state.tuned).filter((row) => row.status !== "pass");
   if (failures.length === 0) return { proposals: [], rejectedSources: [] };
 
+  // Proposals are only verifiable when the measured baseline is the expected CSS: a stale, empty or
+  // unsupported actual baseline describes different bytes than the candidate's own generation, so a
+  // before/after comparison would be apples-to-oranges. Never promote a candidate on a divergent actual.
+  if (!coherentBaseline(session)) {
+    return { proposals: [], rejectedSources: [{
+      id: "baseline",
+      file: session?.files?.output ?? null,
+      reason: "baseline misurata diversa dal CSS atteso (stale, vuoto o non supportato): nessuna proposta può essere promossa su un actual differente; l'audit delle coppie correnti resta invariato",
+    }] };
+  }
+
   const rejectedSources = [];
   const budgetRejection = (id, file) => ({ id, file: file ?? null, reason: "budget automazione esaurito: proposta non verificata e non promossa; l'audit delle coppie correnti resta invariato" });
   // No budget left before the solver: do not start it. A proposal trial is optional and can never make
@@ -411,14 +441,39 @@ function covered(candidateRun) {
     && candidateRun.engines.every((engine) => engine.status === "complete");
 }
 
+// A candidate trial may only be promoted when the current run measured the same CSS origin as the
+// candidate's own generation: the measured baseline must byte-equal the expected output, be non-empty
+// and be resource-supported. A stale/empty/unsupported actual fails closed and promotes nothing.
+function coherentBaseline(session) {
+  const css = session?.css ?? {};
+  return typeof css.baseline === "string"
+    && css.baseline !== ""
+    && css.baseline === css.generated
+    && css.baselineSupport !== "unsupported";
+}
+
+// A candidate session measures the candidate's own generated CSS in isolation, so it is declared as
+// a generated candidate with its own digests: never presented as an output and never production.
 function candidateCss(session, candidate) {
   const baseline = typeof candidate.css === "string" ? candidate.css : session.css.baseline;
   const tuning = candidate.tuningCss === undefined ? session.css.tuning : candidate.tuningCss;
+  const tuningSupportValue = candidate.tuningCss === undefined ? session.css.tuningSupport : (tuning === null ? "absent" : "supported");
   return {
+    ...session.css,
+    generated: baseline,
     baseline,
+    source: "generated-candidate",
+    status: "absent",
+    production: false,
+    digest: { generated: sha256Hex(baseline), baseline: sha256Hex(baseline) },
+    baselineSupport: containsUnsupportedResources(baseline) ? "unsupported" : "supported",
     tuning,
-    tuningSupport: candidate.tuningCss === undefined ? session.css.tuningSupport : (tuning === null ? "absent" : "supported"),
+    tuningSupport: tuningSupportValue,
   };
+}
+
+function sha256Hex(value) {
+  return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
 // Ordered final selections (engine/theme/preference) are produced by `finalSelections`; the

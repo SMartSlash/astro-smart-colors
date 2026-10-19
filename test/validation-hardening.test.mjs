@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { generateColorTokens } from "../src/generate-colors.mjs";
+import { getDeclarations, resolveThemeColor } from "./css-resolver.mjs";
 
 const COLOR = "oklch(.62 .02 32)";
 const OVERFLOW = "oklch(.62 .02 1e308turn)";
@@ -176,16 +177,27 @@ test("legacy UI constructor declaration uses the default dark blend, not inherit
   assert.equal(declarations.get("--_color-constructor-source"), "oklch(0.62 0.16 32)");
   assert.equal(declarations.get("--_color-constructor-dark-generated"),
     "color-mix(in oklch, var(--_color-constructor-source) var(--color-tune-constructor-dark-mix, 81%), oklch(1 0 none))");
-  assert.equal(declarations.get("--color-constructor"),
-    "light-dark(var(--_color-constructor-light), var(--_color-constructor-dark))");
-  assert.equal(declarations.get("--color-constructor-ink"),
-    "light-dark(var(--_color-on-constructor-light), var(--_color-on-constructor-dark))");
-  assert.equal(declarations.get("--color-brand"), "var(--color-constructor)");
-  assert.equal(declarations.get("--color-brand-ink"), "var(--color-constructor-ink)");
-  for (const suffix of ["surface", "surface-strong", "text", "text-strong", "solid", "solid-hover", "solid-text", "border", "border-strong"]) {
-    assert.equal(declarations.has(`--color-constructor-${suffix}`), true);
-    assert.equal(declarations.get(`--color-brand-${suffix}`), `var(--color-constructor-${suffix})`);
+  // The public pair resolves to its internals and exposes its own per-theme override.
+  const semantic = getDeclarations(report.css);
+  for (const scheme of ["light", "dark"]) {
+    assert.deepEqual(resolveThemeColor(semantic, "--color-constructor", scheme), resolveThemeColor(semantic, `--_color-constructor-${scheme}`, scheme), `--color-constructor ${scheme}`);
+    assert.deepEqual(resolveThemeColor(semantic, "--color-constructor-ink", scheme), resolveThemeColor(semantic, `--_color-on-constructor-${scheme}`, scheme), `--color-constructor-ink ${scheme}`);
   }
+  const baseOverride = new Map(semantic);
+  baseOverride.set("--color-tune-constructor-dark", "oklch(0.3 0.04 10)");
+  assert.deepEqual(resolveThemeColor(baseOverride, "--color-constructor", "dark"), { l: 0.3, c: 0.04, h: 10 });
+  // The alias maps to its target in every theme and keeps its own override on top.
+  for (const suffix of ["", "-ink", "-surface", "-surface-strong", "-text", "-text-strong", "-solid", "-solid-hover", "-solid-text", "-border", "-border-strong"]) {
+    assert.equal(semantic.has(`--color-constructor${suffix}`), true);
+    assert.equal(semantic.has(`--color-brand${suffix}`), true);
+    for (const scheme of ["light", "dark"]) {
+      assert.deepEqual(resolveThemeColor(semantic, `--color-brand${suffix}`, scheme), resolveThemeColor(semantic, `--color-constructor${suffix}`, scheme), `brand${suffix}→constructor${suffix} ${scheme}`);
+    }
+  }
+  const aliasOverride = new Map(semantic);
+  aliasOverride.set("--color-tune-brand-surface-dark", "oklch(0.2 0.05 300)");
+  assert.deepEqual(resolveThemeColor(aliasOverride, "--color-brand-surface", "dark"), { l: 0.2, c: 0.05, h: 300 });
+  assert.deepEqual(resolveThemeColor(aliasOverride, "--color-constructor-surface", "dark"), resolveThemeColor(semantic, "--color-constructor-surface", "dark"));
 });
 
 test("missing optional constructor token skips its decorative color and alias", async (t) => {
@@ -221,11 +233,18 @@ test("declared decorative constructor emits its pair and alias without phantom f
   assert.equal(Object.hasOwn(report.config.roles.identities, "constructor"), false);
   assert.deepEqual(publicColorNames(declarations, "constructor"), ["--color-constructor", "--color-constructor-ink"]);
   assert.deepEqual(publicColorNames(declarations, "brand"), ["--color-brand", "--color-brand-ink"]);
-  assert.equal(declarations.get("--color-constructor"),
-    "light-dark(var(--_color-constructor-light), var(--_color-constructor-dark))");
-  assert.match(declarations.get("--color-constructor-ink"), /^light-dark\(oklch\([^)]*\), oklch\([^)]*\)\)$/);
-  assert.equal(declarations.get("--color-brand"), "var(--color-constructor)");
-  assert.equal(declarations.get("--color-brand-ink"), "var(--color-constructor-ink)");
+  // The decorative pair resolves to its internals; the alias maps to it; both keep a per-theme override.
+  const semantic = getDeclarations(report.css);
+  for (const scheme of ["light", "dark"]) {
+    assert.deepEqual(resolveThemeColor(semantic, "--color-constructor", scheme), resolveThemeColor(semantic, `--_color-constructor-${scheme}`, scheme), `decorative ${scheme}`);
+    assert.deepEqual(resolveThemeColor(semantic, "--color-brand", scheme), resolveThemeColor(semantic, "--color-constructor", scheme), `alias ${scheme}`);
+    assert.deepEqual(resolveThemeColor(semantic, "--color-brand-ink", scheme), resolveThemeColor(semantic, "--color-constructor-ink", scheme), `alias ink ${scheme}`);
+  }
+  const tuned = new Map(semantic);
+  tuned.set("--color-tune-constructor-dark", "oklch(0.2 0.05 300)");
+  assert.deepEqual(resolveThemeColor(tuned, "--color-constructor", "dark"), { l: 0.2, c: 0.05, h: 300 });
+  tuned.set("--color-tune-brand-dark", "oklch(0.4 0.06 200)");
+  assert.deepEqual(resolveThemeColor(tuned, "--color-brand", "dark"), { l: 0.4, c: 0.06, h: 200 });
   assert.equal(report.warnings.some((warning) => warning.includes("Missing decorative")), false);
 });
 

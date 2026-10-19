@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { defaultSmartColorsConfig } from "../src/defaults.mjs";
 import { formatContrastReportHtml, prepareContrastReport } from "../src/format-report-html.mjs";
-import { createLocalPresenter, formatContrastPreviewHtml } from "../src/format-report-preview.mjs";
+import { createLocalPresenter, formatContrastPreviewHtml, localPresenterSource } from "../src/format-report-preview.mjs";
 import { writeContrastReport } from "../src/report-artifact.mjs";
 
 const MARKER = "<!-- smart-colors-report:v1 -->";
@@ -528,10 +528,10 @@ const markupOf = (html) => html.slice(0, html.indexOf("<script"));
 
 // A test-only DOM good enough for the presenter: createElement/appendChild/insertBefore/
 // querySelector plus a `role="status"` region and a frames container under the host.
-function presenterDom() {
+function presenterDom(payload) {
   const makeElement = (tag) => ({
     tagName: tag, className: "", textContent: "", attributes: {}, children: [], parentNode: null,
-    style: { setProperty() {} },
+    style: { props: {}, setProperty(name, value) { this.props[name] = String(value); } },
     get firstChild() { return this.children[0] ?? null; },
     setAttribute(name, value) { this.attributes[name] = String(value); },
     getAttribute(name) { return Object.hasOwn(this.attributes, name) ? this.attributes[name] : null; },
@@ -553,7 +553,8 @@ function presenterDom() {
     if (selector.includes("frames")) return frames;
     return null;
   };
-  return { host, frames, document: { getElementById: (id) => id === "smart-colors-diagnostic" ? host : null, createElement: makeElement } };
+  const payloadNode = payload === undefined ? null : Object.assign(makeElement("script"), { textContent: JSON.stringify(payload) });
+  return { host, frames, document: { getElementById: (id) => id === "smart-colors-diagnostic" ? host : (id === "smart-colors-payload" ? payloadNode : null), createElement: makeElement } };
 }
 
 test("a diagnostic session preview embeds one hashed script, an inert payload and no inline handler", () => {
@@ -567,10 +568,16 @@ test("a diagnostic session preview embeds one hashed script, an inert payload an
   assert.match(cspOf(html), /default-src 'none'/);
   assert.doesNotMatch(cspOf(html), /unsafe-eval|unsafe-hashes/);
   assert.doesNotMatch(markupOf(html), /\son[a-z]+\s*=/i, "no inline event handler in markup");
-  assert.doesNotMatch(markupOf(html), /<(?:link|img|object|embed|svg|input|form)\b|https?:\/\//i);
+  // Native form controls are the guided workbench: they are allowed and required, while
+  // external/embedded resources and remote URLs stay forbidden.
+  assert.doesNotMatch(markupOf(html), /<(?:link|img|object|embed|svg|iframe)\b|https?:\/\//i);
+  assert.match(markupOf(html), /<form\b/);
+  assert.match(markupOf(html), /<input\b/);
+  assert.match(markupOf(html), /<select\b/);
   assert.doesNotMatch(source, /innerHTML|insertAdjacentHTML|outerHTML|document\.write/);
   assert.doesNotMatch(source, /\beval\s*\(|new Function\b|\bfetch\s*\(|XMLHttpRequest|WebSocket/);
   assert.ok(!source.includes("</"), "no closing-tag sequence inside the hashed script");
+  assert.doesNotThrow(() => new Function(source), "the concatenated runtime, presenter and view factory must parse as one classic script");
 });
 
 test("the payload stays inert JSON and never lets embedded CSS close the block or leak markup", () => {
@@ -589,66 +596,185 @@ test("the payload stays inert JSON and never lets embedded CSS close the block o
   assert.equal(payload.config.roles.identities.primary.token, "primary");
   assert.ok(!Object.hasOwn(payload, "automation"), "automation must stay out of the local payload");
   assert.ok(!Object.hasOwn(payload, "samples"), "model samples must stay out of the local payload");
+  assert.equal(payload.css.baselineSupport, "supported", "a legacy payload derives the same conservative support state");
+  assert.equal(payload.paletteSource, null, "a legacy array palette is never forwarded as captured bytes");
+  assert.ok(!Object.hasOwn(payload, "palette"), "the legacy palette array stays out of the payload");
 });
 
-test("the local presenter is serialized self-contained and renders rows, status and scope", () => {
+test("the payload forwards the captured palette block byte-for-byte and keeps it inert", () => {
+  const css = ":root {}\n@property --palette-brand { syntax: \"<color>\"; inherits: true; initial-value: oklch(0.56 0.14 255); role: ui; dark-blend: 80; }\n";
+  const declaration = `@property --palette-brand { initial-value: oklch(0.56 0.14 255); /* </script> */ }`;
+  const palette = {
+    css, path: "src/styles/tokens/palette.css", sha256: "d".repeat(64),
+    sources: [{ token: "--palette-brand", value: "oklch(0.56 0.14 255)", role: "ui", darkBlend: 80, declaration }],
+  };
+  const html = preview(diagSession({ paletteSource: palette, css: { baseline: ":root{}", tuning: null, tuningSupport: "absent", baselineSupport: "unsupported" } }));
+  const text = payloadBlock(html);
+  assert.ok(!text.includes("<"), "every < must stay escaped in the inert block");
+  const payload = JSON.parse(text);
+  assert.deepEqual(payload.paletteSource, palette, "the captured palette bytes and provenance must survive unchanged under paletteSource");
+  assert.equal(payload.css.baselineSupport, "unsupported", "a declared baselineSupport is retained");
+});
+
+test("the session preview leads with the workbench, keeps the raw source archive after it and the resolved gallery inside the technical archive", () => {
+  const design = designFixture();
+  design.tokens["--color-orphan"] = { sources: ["--palette-brand"], recipe: "scale", usage: "Passo di scala senza coppia", controls: {} };
+  const html = preview(diagSession({ design }));
+  const bancoIndex = html.indexOf('id="banco"');
+  const paletteIndex = html.indexOf('id="palette"');
+  const diagnostaIndex = html.indexOf('id="diagnostica"');
+  const usiIndex = html.indexOf('id="usi"');
+  assert.ok(bancoIndex >= 0 && paletteIndex > bancoIndex, "the guided workbench leads, the raw source archive follows it");
+  assert.ok(diagnostaIndex > paletteIndex && usiIndex > diagnostaIndex, "the technical archive encloses the resolved gallery");
+  assert.match(html, /id="smart-colors-workbench"/);
+  // The raw source metadata stays in a closed native detail, not on the primary surface.
+  assert.match(html, /<details class="is-detail wb-palette-details"><summary>Dettagli tecnici della palette sorgente<\/summary>/);
+  assert.match(html, /<details id="diagnostica" class="preview-technical"><summary>Diagnostica e archivio completo<\/summary>/);
+  assert.match(html, /<details class="is-detail archive-gallery"><summary>Apri l'archivio dei campioni risolti \(stime, non verifiche\)<\/summary>/);
+  // The archive gallery must not dominate: the summary line precedes the model samples.
+  assert.ok(html.indexOf("archive-gallery") < html.indexOf("Famiglia <code>--color-primary</code>"), "the resolved gallery sits inside the archive detail");
+  assert.match(html, /Senza JavaScript/);
+  assert.match(html, /La ricerca è limitata alla <strong>minima variazione di luminosità<\/strong>/);
+  assert.match(html, /il fit di gamut può ridurre il chroma/);
+  assert.match(html, /ricerca globale del colore più vicino in ΔE/);
+  assert.match(html, /nessun abbinamento verificato/);
+  // Fully native controls, and neutral headings whose theme/variant come from the controller.
+  assert.match(html, /<select id="smart-colors-workbench-source"/);
+  assert.match(html, /<select id="smart-colors-workbench-pair"/);
+  assert.match(html, /<input id="smart-colors-workbench-theme-light" type="radio"/);
+  assert.match(html, /<input id="smart-colors-workbench-comparison-themes" type="radio"/);
+  assert.match(html, /<button type="submit"[^>]*id="smart-colors-workbench-submit"[^>]*>Aggiorna il confronto<\/button>/);
+  assert.match(html, /<textarea id="smart-colors-workbench-export-text"/);
+  assert.match(html, /<h3 id="smart-colors-workbench-left-title"[^>]*>Tema chiaro<\/h3>/);
+  assert.match(html, /<h3 id="smart-colors-workbench-right-title"[^>]*>Tema scuro<\/h3>/);
+  // The redundant restore/reset-all duplicate is gone: reset-all appears once, in controls scope.
+  assert.doesNotMatch(html, /Ripristina<\/button>/);
+  assert.equal((html.match(/Azzera tutto il tuning<\/button>/g) ?? []).length, 1);
+  assert.match(html, /Ambito: solo i controlli pubblici dichiarati per i due token della coppia selezionata/);
+});
+
+test("the hashed session script always integrates the mandatory workbench runtime and view factory", () => {
+  const html = preview(diagSession());
+  const source = runtimeScript(html);
+  assert.match(source, /SMART_COLORS_WORKBENCH_RUNTIME_V1/, "the mandatory runtime must be concatenated into the hashed script");
+  assert.match(source, /__smartColorsWorkbench/);
+  assert.match(source, /createContrastWorkbenchView/);
+});
+
+test("the local presenter is serialized self-contained and renders problems, scope and raw details", () => {
   const factory = new Function("return (" + createLocalPresenter.toString() + ");")();
   const dom = presenterDom();
   let listener = null;
+  const hits = [];
+  // A stub factory stands in for designer-language.mjs: the presenter must consume it, never
+  // re-implement the vocabulary, and never touch innerHTML for the sample colors.
+  const language = {
+    pairTitle: (foreground, background, property) => { hits.push(["pairTitle", foreground, background, property]); return "TITOLO " + foreground; },
+    themeLabel: (theme) => { hits.push(["themeLabel", theme]); return theme === "dark" ? "scuro" : "chiaro"; },
+    variantLabel: (variant) => (variant === "tuned" ? "con tuning" : "generato"),
+    roleLabel: (role) => String(role),
+  };
   const report = {
     preference: { active: "light", unmeasured: ["dark"] },
     coverage: { complete: false },
     executed: { scenarios: ["baseline-light-light"] },
-    measurements: [{ pairId: "light|color|--color-primary-text|--color-primary-surface", scenarioId: "baseline-light-light", ratio: 4.44, minimum: 4.5, target: 4.6, status: "below-target", error: null }],
+    scenarios: [{ id: "baseline-light-light", variant: "baseline", theme: "light", preference: "light", status: "measured" }],
+    measurements: [
+      { pairId: "light|color|--color-primary-text|--color-primary-surface", scenarioId: "baseline-light-light", foreground: "oklch(0.4 0.1 350)", background: "oklch(0.95 0.02 90)", ratio: 4.44, minimum: 4.5, target: 4.6, status: "below-target", error: null },
+      { pairId: "light|color|--color-text|--color-bg", scenarioId: "baseline-light-light", foreground: "oklch(0.28 0.007 3.68)", background: "oklch(0.95 0.01 86)", ratio: 12.6, minimum: 4.5, target: 7, status: "pass", error: null },
+    ],
     errors: [{ phase: "measure", cause: "computed-empty", message: "x" }],
-    unsupported: [{ id: "baseline-dark-dark", reason: "forced-colors is active" }],
+    unsupported: [{ id: "baseline-dark-light", reason: "forced-colors is active" }],
   };
   const controller = { status: () => ({ state: "incomplete", report }), subscribe: (fn) => { listener = fn; return () => {}; } };
-  const presenter = factory({ document: dom.document, controller });
+  const presenter = factory({ document: dom.document, controller, language });
   assert.ok(presenter, "the presenter must attach to the host");
   const panel = dom.host.children.find((child) => child.className === "local-rows");
   assert.ok(panel, "the presenter must create its own panel before the frames container");
   assert.equal(panel.children[0].tagName, "h3");
   assert.equal(panel.children[0].textContent, "Misure locali di questo browser");
   const scope = panel.children.find((child) => child.className === "local-scope");
-  assert.match(scope.textContent, /Provenienza: browser-local/);
-  assert.match(scope.textContent, /copertura: incompleta/);
-  assert.match(scope.textContent, /preferenza non misurata: dark/);
-  const scroll = panel.children.find((child) => child.className === "local-table-scroll");
+  assert.match(scope.textContent, /Verifica locale di questo browser, separata dal modello e dall'automazione/);
+  assert.match(scope.textContent, /Preferenza attiva: light/);
+  assert.match(scope.textContent, /l'altra preferenza di sistema \(dark\) non è misurata: è un'altra preferenza, non un tema/);
+  const combos = panel.children.find((child) => child.className === "local-combos");
+  assert.match(combos.children[0].textContent, /generato · chiaro: 2 misurate · 1 sotto il target/);
+  // Problems come before the raw data, carrying variant, theme, the designer title and the sample.
+  const grid = panel.children.find((child) => child.className === "local-problems");
+  assert.equal(grid.children.length, 1, "only the below-target pair is a problem");
+  const card = grid.children[0];
+  assert.equal(card.children[0].textContent, "Misurato in questo browser · generato · chiaro");
+  assert.equal(card.children[1].textContent, "TITOLO --color-primary-text");
+  const visual = card.children[2];
+  assert.equal(visual.style.props["--sample-fg"], "oklch(0.4 0.1 350)");
+  assert.equal(visual.style.props["--sample-bg"], "oklch(0.95 0.02 90)");
+  assert.deepEqual(visual.children.map((child) => child.className), ["pair-title", "pair-text"]);
+  assert.match(card.children[3].textContent, /^Sotto il target · 4,44:1$/);
+  assert.match(card.children[4].textContent, /Minimo applicato 4,50:1 · target 4,60:1/);
+  const tokenDetail = card.children[5];
+  assert.equal(tokenDetail.children[0].textContent, "Token esatti");
+  assert.match(tokenDetail.children[1].textContent, /--color-primary-text su --color-primary-surface · proprietà color/);
+  assert.match(card.children[6].textContent, /rivedi la palette sorgente/);
+  assert.ok(hits.some(([method]) => method === "pairTitle"), "the presenter must use the injected designer language");
+  assert.ok(hits.some(([method]) => method === "themeLabel"), "the presenter must use the injected theme label");
+  // Raw measurements live inside a native details, with a valid caption, headers and scroller.
+  const details = panel.children.find((child) => child.className === "local-details");
+  assert.equal(details.children[0].tagName, "summary");
+  const scroll = details.children[1];
+  assert.equal(scroll.className, "local-table-scroll");
   assert.equal(scroll.getAttribute("role"), "region");
   const table = scroll.children[0];
   const head = table.children.find((child) => child.tagName === "thead");
   assert.deepEqual(head.children[0].children.map((cell) => cell.textContent), ["Scenario", "Coppia", "Rapporto", "Minimo", "Target", "Esito", "Nota"]);
   assert.ok(head.children[0].children.every((cell) => cell.getAttribute("scope") === "col"));
   const body = table.children.find((child) => child.tagName === "tbody");
-  const row = body.children[0];
-  assert.equal(row.children[0].getAttribute("scope"), "row");
-  assert.equal(row.children[1].textContent, "--color-primary-text su --color-primary-surface (color, tema light)");
-  assert.equal(row.children[2].textContent, "4,44:1");
-  assert.equal(row.children[2].getAttribute("data-ratio"), "4.44");
-  assert.equal(row.children[2].getAttribute("data-minimum"), "4.5");
-  assert.equal(row.children[2].getAttribute("data-target"), "4.6");
-  assert.equal(row.children[3].textContent, "4,50:1");
-  assert.equal(row.children[4].textContent, "4,60:1");
-  assert.equal(row.children[5].textContent, "Sotto il target");
-  const errorsHeading = panel.children.filter((child) => child.tagName === "h3").map((child) => child.textContent);
-  assert.deepEqual(errorsHeading, ["Misure locali di questo browser", "Scenari non supportati", "Errori della verifica locale"]);
+  assert.equal(body.children[0].children[0].getAttribute("scope"), "row");
+  assert.equal(body.children[0].children[2].textContent, "4,44:1");
+  assert.equal(body.children[0].children[2].getAttribute("data-ratio"), "4.44");
+  const headings = panel.children.filter((child) => child.tagName === "h3").map((child) => child.textContent);
+  assert.deepEqual(headings, ["Misure locali di questo browser", "Problemi nelle coppie misurate (1)", "Scenari non supportati", "Errori della verifica locale"]);
   assert.equal(listener instanceof Function, true);
   // A fresh subscriber snapshot must repaint the same panel without duplicating it.
   listener({ state: "pending", report: null });
   assert.equal(dom.host.children.filter((child) => child.className === "local-rows").length, 1);
 });
 
+test("the presenter degrades to technical wording when no designer language is available", () => {
+  const factory = new Function("return (" + createLocalPresenter.toString() + ");")();
+  const dom = presenterDom();
+  const report = {
+    preference: { active: "light", unmeasured: ["dark"] },
+    expected: { scenarios: ["baseline-light-light"], pairs: {} },
+    executed: { scenarios: ["baseline-light-light"] },
+    measurements: [{ pairId: "light|color|--color-a|--color-b", scenarioId: "baseline-light-light", foreground: "oklch(0.4 0.1 350)", background: "oklch(0.95 0.02 90)", ratio: 3.1, minimum: 4.5, target: 4.6, status: "below-minimum", error: null }],
+    errors: [], unsupported: [],
+  };
+  const controller = { status: () => ({ state: "complete", report }), subscribe: () => () => {} };
+  factory({ document: dom.document, controller });
+  const panel = dom.host.children.find((child) => child.className === "local-rows");
+  const card = panel.children.find((child) => child.className === "local-problems").children[0];
+  assert.equal(card.children[1].textContent, "--color-a su --color-b");
+  assert.equal(card.children[0].textContent, "Misurato in questo browser · baseline · light");
+  assert.match(panel.children.find((child) => child.className === "local-combos").children[0].textContent, /baseline · light: 1 misurate/);
+});
+
 test("a session preview stays useful without JavaScript and keeps the model out of any verified verdict", () => {
   const html = preview(diagSession());
-  assert.match(html, /<h1>Contrasto colori — anteprima<\/h1>/);
+  assert.match(html, /<h1>La tua palette, in uso\.<\/h1>/);
   assert.equal((html.match(/<h1>/g) ?? []).length, 1);
   assert.match(html, /<main id="contenuto">/);
-  assert.match(html, /Campioni dal modello \(senza browser\)/);
-  assert.match(html, /Campioni calcolati dal modello del generatore, senza browser/);
-  assert.match(html, /non ricevono un badge di verifica/);
+  // Three explicit channels, never one global verdict: model forecast, this browser, automation.
+  assert.match(html, /<strong>Modello<\/strong> Stima del modello/);
+  assert.match(html, /<strong>Questo browser<\/strong>/);
+  assert.match(html, /<strong>Automazione<\/strong> Automazione: disattivata o non richiesta/);
+  assert.doesNotMatch(html, /badge badge--dashed">Snapshot non verificato/);
+  assert.doesNotMatch(html, /class="verdict"/);
+  // One single family catalog, presented as a model forecast, with no verification badge.
+  assert.equal((html.match(/Famiglia <code>--color-primary<\/code>/g) ?? []).length, 1, "one single family catalog");
+  assert.doesNotMatch(html, /id="modello"/);
+  assert.doesNotMatch(html, /Campioni dal modello \(senza browser\)/);
+  assert.match(html, /stime del modello/);
   assert.doesNotMatch(html, /class="color-choice color-choice--suggested"/);
-  assert.match(html, /badge badge--dashed">Snapshot non verificato</);
   assert.match(html, /Verifica automatizzata/);
   assert.match(html, /Automazione disattivata/);
   assert.match(html, /Misure locali non eseguite: serve JavaScript nel browser/);
@@ -659,8 +785,11 @@ test("a session preview stays useful without JavaScript and keeps the model out 
 test("session markup follows the navigation, keeps a logical heading order and never moves focus", () => {
   const html = preview(diagSession());
   const anchors = [...html.match(/<nav aria-label="Sezioni dell’anteprima">([\s\S]*?)<\/nav>/)[1].matchAll(/href="#([a-z]+)"/g)].map((match) => match[1]);
-  assert.deepEqual(anchors, ["locale", "azione", "problemi", "modello", "palette", "varianti", "abbinamenti", "automazione"]);
-  assert.deepEqual([...html.matchAll(/<section id="([a-z]+)"/g)].map((match) => match[1]), anchors);
+  assert.deepEqual(anchors, ["banco", "palette", "diagnostica"]);
+  // Every navigation target exists; the workbench leads, the raw source archive follows, the technical archive closes.
+  for (const id of anchors) assert.ok(html.includes('id="' + id + '"'), "the navigation target #" + id + " must exist");
+  assert.ok(html.indexOf('id="banco"') < html.indexOf('id="palette"'), "the workbench leads the source archive");
+  assert.ok(html.indexOf('id="palette"') < html.indexOf('id="diagnostica"'), "the source archive precedes the technical archive");
   const levels = headingLevels(html);
   assert.equal(levels[0], 1);
   for (let index = 1; index < levels.length; index += 1) assert.ok(levels[index] - levels[index - 1] <= 1, `heading jump at ${index}: ${levels}`);
@@ -683,10 +812,16 @@ test("a diagnostic session escapes hostile identity and automation metadata", ()
   assert.match(html, /&lt;script&gt;&quot;&amp;/);
 });
 
-// Provisional preview budget pending orchestrator approval. The historical 120.000-byte
-// budget predates the embedded SC-04 runtime (fixed ~67 KB) and the exact CSS payload;
-// 220 KB covers the starter (~85 KB) and the extended palette (~161 KB) with headroom.
-const PREVIEW_BUDGET_BYTES = 220 * 1024;
+// Final preview budget, explicitly approved: 768 KiB (786.432 B). The preview keeps every
+// scope/coverage/engine/error/unsupported automation summary and accurate measurement counts, while
+// the wide measurement/exploration tables live only in the full static report (compact preview).
+// Measured (2026-10-18, mandatory workbench runtime + additive `session.paletteSource` + controller-
+// driven UI + explicit-value controls + controller-projected selection + verified proposal frames +
+// compact preview automation): starter 371.964 B, extended stress fixture 478.967 B (both asserted);
+// real root snapshot `report --automation=off` 691.487 B and automation-enabled (2.176 measurements)
+// 694.045 B (16 captured sources, 5.170 B of captured palette CSS). Both root artifacts stay inside
+// the budget; the stress fixture is the heaviest case asserted here.
+const PREVIEW_BUDGET_BYTES = 768 * 1024;
 
 function extendedSession() {
   const names = ["primary", "secondary", "info", "success", "warning", "danger", "accent", "neutral", "brand", "muted"];
@@ -709,12 +844,43 @@ function extendedSession() {
   });
 }
 
-test("a session preview stays inside the proposed size budget on the starter and the extended palette", () => {
+test("a session preview stays inside the mandatory offline budget on the starter and the stress palette", () => {
   const starter = Buffer.byteLength(preview(diagSession()), "utf8");
   const extended = Buffer.byteLength(preview(extendedSession()), "utf8");
-  assert.ok(starter <= PREVIEW_BUDGET_BYTES, `starter preview is ${starter} bytes, over the proposed budget`);
-  assert.ok(extended <= PREVIEW_BUDGET_BYTES, `extended preview is ${extended} bytes, over the proposed budget`);
-  assert.ok(extended > starter, "the extended palette must be the heavier measurement");
+  if (process.env.SMART_COLORS_PREVIEW_BUDGET_REPORT) {
+    console.log(`preview bytes: starter ${starter} · stress ${extended} · budget ${PREVIEW_BUDGET_BYTES}`);
+  }
+  assert.ok(starter <= PREVIEW_BUDGET_BYTES, `starter preview is ${starter} bytes, over the budget`);
+  assert.ok(extended <= PREVIEW_BUDGET_BYTES, `stress preview is ${extended} bytes, over the budget`);
+  assert.ok(extended > starter, "the stress palette must be the heavier measurement");
+});
+
+test("the session family catalog keeps technical tokens inside collapsed native details", () => {
+  const html = preview(diagSession());
+  assert.match(html, /<details class="is-detail"><summary>Token e soglie<\/summary>/);
+  const sample = html.match(/<li class="family-sample">([\s\S]*?)<\/li>/)[1];
+  assert.match(sample, /<details class="is-detail">/);
+  assert.doesNotMatch(sample.split("<details")[0], /--color-primary-text/, "the token line stays inside the collapsed detail");
+});
+
+test("the local presenter never writes markup and drops an unvalidated color", () => {
+  const factory = new Function("return (" + createLocalPresenter.toString() + ");")();
+  const dom = presenterDom();
+  const hostile = "</style><img src=x onerror=alert(1)>";
+  const report = {
+    preference: { active: "light", unmeasured: [] }, coverage: { complete: true }, executed: { scenarios: ["baseline-light-light"] },
+    scenarios: [{ id: "baseline-light-light", variant: "baseline", theme: "light", status: "measured" }],
+    measurements: [{ pairId: hostile, scenarioId: "baseline-light-light", foreground: hostile, background: hostile, ratio: 2.1, minimum: 4.5, target: 4.6, status: "below-minimum", error: null }],
+    errors: [], unsupported: [],
+  };
+  const controller = { status: () => ({ state: "complete", report }), subscribe: () => () => {} };
+  factory({ document: dom.document, controller });
+  const panel = dom.host.children.find((child) => child.className === "local-rows");
+  const card = panel.children.find((child) => child.className === "local-problems").children[0];
+  // An unvalidated color never reaches a style property and no sample figure is built.
+  assert.equal(card.children.length, 6, "no sample figure for an unvalidated color");
+  assert.equal(card.children[2].tagName, "p");
+  assert.doesNotMatch(createLocalPresenter.toString(), /innerHTML|insertAdjacentHTML|outerHTML|document\.write/);
 });
 
 test("the legacy snapshot preview never gains the session runtime", () => {
@@ -730,6 +896,10 @@ function panelOf(presenterReport) {
   factory({ document: dom.document, controller });
   return dom.host.children.find((child) => child.className === "local-rows");
 }
+function tableOf(panel) {
+  const details = panel.children.find((child) => child.className === "local-details");
+  return details.children[1].children[0];
+}
 
 test("the local ratio label never rounds a below-threshold value onto its own minimum", () => {
   const panel = panelOf({
@@ -740,13 +910,12 @@ test("the local ratio label never rounds a below-threshold value onto its own mi
       errors: [], unsupported: [],
     },
   });
-  const scroll = panel.children.find((child) => child.className === "local-table-scroll");
-  const body = scroll.children[0].children.find((child) => child.tagName === "tbody");
+  const body = tableOf(panel).children.find((child) => child.tagName === "tbody");
   const cell = body.children[0].children[2];
   assert.equal(cell.textContent, "< 4,5:1");
   assert.notEqual(cell.textContent, "4,50:1");
   assert.equal(cell.getAttribute("data-ratio"), "4.4999");
-  assert.match(panel.children.find((child) => child.className === "local-scope").textContent, /copertura: completa negli scenari locali eseguiti \(non universale\)/);
+  assert.match(panel.children.find((child) => child.className === "local-scope").textContent, /Preferenza attiva: light/);
 });
 
 test("zero local measurements still surface error causes and unsupported reasons", () => {
@@ -771,9 +940,8 @@ test("zero local measurements still surface error causes and unsupported reasons
 
 test("a complete automation run qualifies the preview header instead of a global pass", () => {
   const html = preview(diagSession({ automation: automationRun() }));
-  assert.match(html, /<span class="badge badge--outline">Snapshot verificato: coppie automatizzate negli ambienti eseguiti<\/span>/);
-  assert.match(html, /Verifica circoscritta ai motori e agli scenari automatizzati elencati/);
-  assert.doesNotMatch(html, /Snapshot verificato<\/span>/);
+  assert.match(html, /<span class="badge badge--outline">Verifica automatizzata completa negli ambienti eseguiti<\/span>/);
+  assert.match(html, /Automazione: copertura completa negli ambienti eseguiti \(motori e scenari elencati\), non universale\./);
   assert.match(html, /Copertura completa negli ambienti eseguiti \(i motori e gli scenari elencati qui sotto\), non universale/);
   assert.match(html, /<h4>Motori richiesti<\/h4>/);
   assert.match(html, /<code>chromium<\/code> 151\.0\.7922\.34 · Completa · eseguito/);
@@ -781,9 +949,10 @@ test("a complete automation run qualifies the preview header instead of a global
 
 test("an incomplete or partial automation run cannot render a positive preview header", () => {
   const html = preview(diagSession({ automation: automationRun({ partial: true, status: "incomplete", coverage: { complete: false, expectedCount: 1, measuredCount: 0 } }) }));
-  assert.match(html, /<span class="badge badge--dashed">Snapshot non verificato<\/span>/);
-  assert.match(html, /Nessuna conclusione positiva: l'automazione non copre tutte le coppie/);
-  assert.doesNotMatch(html, /Snapshot verificato/);
+  assert.doesNotMatch(html, /Verifica automatizzata completa negli ambienti eseguiti/);
+  assert.doesNotMatch(html, /badge badge--dashed">Snapshot non verificato/);
+  assert.doesNotMatch(html, /class="verdict"/);
+  assert.match(html, /Automazione: copertura parziale o incompleta/);
   assert.match(html, /Copertura parziale o incompleta/);
 });
 
@@ -807,8 +976,12 @@ test("automation engine and error details stay static, escaped and cause-complet
   assert.match(markup, /<code>firefox<\/code> · Non disponibile · non eseguito · fase <code>availability<\/code> — browser binary unavailable at \/opt\/firefox/);
   assert.match(markup, /<code>availability<\/code> · <code>binary-missing<\/code> — firefox: install it with pnpm exec playwright install firefox/);
   assert.match(markup, /<code>measure<\/code> · <code>runtime-run-failed<\/code> — preferenza dark: timeout · motore <code>chromium<\/code> · scenario <code>chromium\/baseline-dark-dark<\/code>/);
-  assert.match(markup, /<caption>Misure automatizzate per coppia<\/caption>/);
-  assert.match(markup, /<th scope="row"><code>--color-primary-text<\/code> su <code>--color-primary-surface<\/code><\/th><td>Chiaro<\/td><td><code>4\.5:1<\/code><\/td><td><code>4\.6:1<\/code><\/td><td>4,20:1<\/td><td>Sotto il minimo<\/td><td>1<\/td>/);
+  // Compact preview: the wide measurement/exploration tables move to the full report, while the
+  // failing measurement stays visible through accurate counts and an explicit link.
+  assert.doesNotMatch(markup, /<caption>Misure automatizzate per coppia<\/caption>/);
+  assert.match(markup, /<h4>Misure automatizzate \(1\)<\/h4>/);
+  assert.match(markup, /<ul class="automation-counts"><li><strong>1<\/strong> sotto il minimo<\/li><li><strong>0<\/strong> sotto il target<\/li><li><strong>0<\/strong> non misurate<\/li><li><strong>0<\/strong> raggiungono minimo e target<\/li><\/ul>/);
+  assert.match(markup, /<a href="smart-colors.html">Apri misure complete nel report<\/a>/);
   assert.match(markup, /<h4>Errori dell'automazione \(2\)<\/h4>/);
   assert.doesNotMatch(markup, /\/opt\/foo\.svg|https?:\/\//);
 });
@@ -837,26 +1010,421 @@ function previewGateCases() {
 test("a session preview never inherits a positive outcome while automation is not complete", () => {
   for (const [label, build] of previewGateCases()) {
     const html = preview(build());
-    assert.match(html, /badge badge--dashed">Snapshot non verificato/, label);
-    assert.doesNotMatch(html, /Snapshot verificato: coppie automatizzate/, label);
+    assert.doesNotMatch(html, /Verifica automatizzata completa negli ambienti eseguiti/, label);
+    assert.doesNotMatch(html, /Copertura completa negli ambienti eseguiti/, label);
+    assert.doesNotMatch(html, /Snapshot non verificato/, label);
     assert.doesNotMatch(html, /class="color-choice color-choice--suggested"/, label);
     assert.match(html, /Nessun colore suggerito/, label);
-    assert.match(html, /Nessuna conclusione positiva/, label);
+    assert.match(html, /<strong>Modello<\/strong>/, label);
+    assert.match(html, /Dettagli della verifica automatizzata \(tecnici\)|Nessuna verifica automatizzata inclusa/, label);
   }
 });
 
 test("a session preview with valid scenarios and complete automation may be positive", () => {
   const html = preview(sessionWithIssue({ automation: automationRun() }));
-  assert.match(html, /Snapshot verificato: coppie automatizzate negli ambienti eseguiti/);
+  assert.match(html, /Verifica automatizzata completa negli ambienti eseguiti/);
   assert.match(html, /class="color-choice color-choice--suggested"/);
-  assert.match(section(html, "azione"), /<h4>Correzione locale del primo piano<\/h4>/);
-  assert.doesNotMatch(html, /Nessuna conclusione positiva/);
+  assert.match(section(html, "correzioni"), /<h4>Correzione locale del primo piano<\/h4>/);
+  assert.doesNotMatch(html, /class="verdict"/);
 });
 
-test("a session preview verdict is non-positive while automation is not complete", () => {
+test("a session preview never claims a global verdict", () => {
   const gated = preview(sessionAllPass({ automation: automationRun({ status: "incomplete", partial: true, coverage: { complete: false, expectedCount: 1, measuredCount: 0 }, measurements: [] }) }));
-  assert.doesNotMatch(gated, /Esito positivo dello snapshot: 0 issue/);
-  assert.match(gated, /<p class="verdict">Esito non verificato o incompleto<\/p>/);
+  assert.doesNotMatch(gated, /class="verdict"/);
+  assert.doesNotMatch(gated, /Esito positivo dello snapshot/);
+  assert.doesNotMatch(gated, /Verifica automatizzata completa negli ambienti eseguiti/);
+  assert.match(gated, /Automazione: copertura parziale o incompleta/);
   const positive = preview(sessionAllPass({ automation: automationRun() }));
-  assert.match(positive, /<p class="verdict">Esito positivo dello snapshot: 0 issue<\/p>/);
+  assert.match(positive, /Verifica automatizzata completa negli ambienti eseguiti/);
+  assert.doesNotMatch(positive, /class="verdict"/);
+});
+
+// --- Reviewer fixes: provenance/scope correctness on a REAL session and honest local scoping. ---
+
+test("the source palette prints the exact token name and role from a real session", async () => {
+  const { createDiagnosticSession } = await import("../src/diagnostic-session.mjs");
+  // Self-contained fixture: a temporary directory with a minimal palette and no monorepo or CWD
+  // dependency. The session is created from that root only, and only this directory is removed.
+  const root = await mkdtemp(path.join(tmpdir(), "smart-colors-preview-"));
+  try {
+    await mkdir(path.join(root, "src/styles/tokens"), { recursive: true });
+    await writeFile(path.join(root, "src/styles/tokens/palette.css"), [
+      "@property --palette-canvas { syntax: \"<color>\"; inherits: true; initial-value: oklch(0.97 0.005 250); role: canvas; }",
+      "@property --palette-ink { syntax: \"<color>\"; inherits: true; initial-value: oklch(0.24 0.01 250); role: ink; }",
+      "@property --palette-brand { syntax: \"<color>\"; inherits: true; initial-value: oklch(0.56 0.14 255); role: ui; dark-blend: 80; }",
+      "@property --palette-success { syntax: \"<color>\"; inherits: true; initial-value: oklch(0.6 0.13 150); role: feedback; }",
+      "",
+    ].join("\n"));
+    // An identity keyed by `paletteName` must win over the palette annotation: the brand identity is
+    // declared as `feedback`, while the palette block says `ui`.
+    const config = {
+      ...defaultSmartColorsConfig,
+      roles: { ...defaultSmartColorsConfig.roles, identities: { brand: { token: "--palette-brand", role: "feedback" } } },
+    };
+    const { session } = await createDiagnosticSession({ root, config, automation: "off", suggest: false });
+    const html = preview(session);
+    // The exact source contract moved to the additive `session.paletteSource`; `session.palette`
+    // stays the legacy array the static report validates.
+    const source = session.paletteSource ?? session.palette;
+    assert.ok(source && Array.isArray(source.sources) && source.sources.length > 0, "the real session must expose palette sources");
+    assert.equal(source.path, "src/styles/tokens/palette.css");
+    assert.equal(typeof source.sha256, "string");
+    assert.equal(source.css, await readFile(path.join(root, "src/styles/tokens/palette.css"), "utf8"), "the captured CSS must be the exact palette bytes");
+    if (session.paletteSource) assert.ok(Array.isArray(session.palette), "the legacy palette array is preserved for the static report");
+    for (const entry of source.sources) {
+      const escaped = entry.token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      assert.match(html, new RegExp(`<code>${escaped}</code>`), `the exact token ${entry.token} must appear verbatim`);
+    }
+    // Raw source value and the real @property declaration are served statically, escaped.
+    // (No macro editor scope: only the selected pair's declared public controls are exposed.)
+    assert.match(html, /Valore sorgente dichiarato: <code>oklch\(0\.56 0\.14 255\)<\/code>/);
+    assert.match(html, /<code class="wb-declaration">@property --palette-brand \{ syntax: &quot;&lt;color&gt;&quot;; inherits: true; initial-value: oklch\(0\.56 0\.14 255\); role: ui; dark-blend: 80; \}<\/code>/);
+    assert.doesNotMatch(html, /--color--/, "the already-prefixed palette name must never be re-prefixed");
+    // The declared `@property` role is preserved; a differing configured role is shown separately
+    // and explicitly, never silently substituted as authored.
+    assert.match(html, /<code>--palette-brand<\/code> · ruolo dichiarato: interfaccia · ruolo effettivo \(config\): feedback/);
+    assert.match(html, /<code>--palette-canvas<\/code> · ruolo dichiarato: sfondo della pagina/);
+    // Real generator metadata: authored dark-blend 80 maps to 77.6% source / 22.4% white (percents,
+    // never multiplied), and the surface mix fractions 0.1/0.18 render as 10%/18% (×100, not 0.1%).
+    assert.match(html, /dark-blend 80 → source 77\.6% \/ white 22\.4%/);
+    assert.match(html, /mix 10% source \/ 90% base \(chiaro\), 18%\/82% \(scuro\), sostituibile da un controllo — regola di progetto, non WCAG/);
+    assert.doesNotMatch(html, /default 0[.,]/, "a fractional defaultMix is never shown as a fraction-percent");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("real integrity errors stay visible while an absent automation is not an error", () => {
+  const clean = preview(diagSession());
+  assert.doesNotMatch(clean, /Problemi di integrità o errori dello snapshot/, "an absent automation is not an integrity error");
+  const strict = preview(diagSession({ generationErrors: ["canvas non risolve un colore valido"] }));
+  assert.match(strict, /Problemi di integrità o errori dello snapshot/);
+  assert.match(strict, /canvas non risolve un colore valido/);
+  assert.ok(strict.indexOf("Problemi di integrità") < strict.indexOf('id="palette"'), "errors stay above the content");
+  const corrupt = preview(diagSession({ inputDigest: "not-a-digest" }));
+  assert.match(corrupt, /Problemi di integrità o errori dello snapshot/);
+  assert.match(corrupt, /Impronta SHA-256 degli input assente o non valida/);
+});
+
+test("the presenter combination list is honest about missing, unmeasured and unrun scenarios", () => {
+  const factory = new Function("return (" + createLocalPresenter.toString() + ");")();
+  const dom = presenterDom();
+  const report = {
+    preference: { active: "light", unmeasured: ["dark"] },
+    expected: { scenarios: ["baseline-light-light", "baseline-dark-light", "tuned-light-light", "tuned-dark-light"] },
+    executed: { scenarios: ["baseline-light-light", "tuned-light-light"] },
+    measurements: [
+      { pairId: "light|color|--color-a|--color-b", scenarioId: "baseline-light-light", ratio: 5, minimum: 4.5, target: 7, status: "below-target", error: null },
+      { pairId: "light|color|--color-a|--color-b", scenarioId: "tuned-light-light", ratio: null, minimum: 4.5, target: 7, status: "unmeasured", error: "computed-empty" },
+    ],
+    errors: [], unsupported: [{ id: "baseline-dark-light", reason: "forced-colors" }],
+  };
+  const controller = { status: () => ({ state: "incomplete", report }), subscribe: () => () => {} };
+  factory({ document: dom.document, controller });
+  const panel = dom.host.children.find((child) => child.className === "local-rows");
+  const combos = panel.children.find((child) => child.className === "local-combos").children.map((item) => item.textContent);
+  assert.match(combos[0], /baseline · light: 1 misurate · 1 sotto il target/);
+  assert.match(combos[1], /baseline · dark: non eseguita \(attesa\)/);
+  assert.match(combos[2], /tuned · light: nessuna misurata · 1 non misurate/);
+  assert.match(combos[3], /tuned · dark: non eseguita \(attesa\)/);
+  assert.doesNotMatch(panel.children.find((child) => child.className === "local-scope").textContent, /entrambi i temi/, "never claim both themes without evidence");
+});
+
+test("a non-text local problem shows a border indicator, deduped thresholds and exact tokens", () => {
+  const factory = new Function("return (" + createLocalPresenter.toString() + ");")();
+  const dom = presenterDom();
+  const report = {
+    preference: { active: "light", unmeasured: ["dark"] }, executed: { scenarios: ["baseline-light-light"] },
+    measurements: [{ pairId: "light|borderColor|--color-border-strong|--color-surface", scenarioId: "baseline-light-light", foreground: "oklch(0.6 0.1 30)", background: "oklch(0.95 0.02 90)", ratio: 2, minimum: 3, target: 3, status: "below-minimum", error: null }],
+    errors: [], unsupported: [],
+  };
+  const controller = { status: () => ({ state: "complete", report }), subscribe: () => () => {} };
+  factory({ document: dom.document, controller });
+  const panel = dom.host.children.find((child) => child.className === "local-rows");
+  const card = panel.children.find((child) => child.className === "local-problems").children[0];
+  const visual = card.children[2];
+  assert.deepEqual(visual.children.map((child) => child.className), ["pair-border", "pair-border pair-border--2", "pair-border pair-border--3"]);
+  assert.equal(visual.children[0].textContent, "", "a border pair must not render sample text");
+  assert.match(card.children[4].textContent, /^Soglia 3,00:1\.$/, "an equal minimum and target is not duplicated");
+  assert.match(card.children[5].children[1].textContent, /--color-border-strong su --color-surface · proprietà borderColor/);
+});
+
+test("the presenter re-renders when the controller publishes a new preference", () => {
+  const factory = new Function("return (" + createLocalPresenter.toString() + ");")();
+  const dom = presenterDom();
+  let listener = null;
+  const reportFor = (active) => ({ preference: { active, unmeasured: [active === "light" ? "dark" : "light"] }, executed: { scenarios: ["baseline-light-light"] }, measurements: [], errors: [], unsupported: [] });
+  const controller = { status: () => ({ state: "complete", report: reportFor("light") }), subscribe: (fn) => { listener = fn; return () => {}; } };
+  factory({ document: dom.document, controller });
+  const panel = dom.host.children.find((child) => child.className === "local-rows");
+  assert.match(panel.children[1].textContent, /Preferenza attiva: light/);
+  listener({ state: "complete", report: reportFor("dark") });
+  assert.match(panel.children[1].textContent, /Preferenza attiva: dark/);
+  assert.equal(dom.host.children.filter((child) => child.className === "local-rows").length, 1);
+});
+
+test("the presenter shows a neutral pending state without claiming results", () => {
+  const factory = new Function("return (" + createLocalPresenter.toString() + ");")();
+  const dom = presenterDom();
+  const controller = { status: () => ({ state: "running", report: null }), subscribe: () => () => {} };
+  factory({ document: dom.document, controller });
+  const panel = dom.host.children.find((child) => child.className === "local-rows");
+  assert.equal(panel.children[0].textContent, "Misure locali di questo browser");
+  assert.match(panel.children[1].textContent, /Nessuna misura locale disponibile/);
+  assert.equal(panel.children.some((child) => child.className === "local-problems"), false);
+});
+
+test("the combination list counts only finite ratios and reports missing pairs", () => {
+  const factory = new Function("return (" + createLocalPresenter.toString() + ");")();
+  const dom = presenterDom();
+  const report = {
+    preference: { active: "light", unmeasured: ["dark"] },
+    expected: { scenarios: ["baseline-light-light"], pairs: { "baseline-light-light": ["light|color|--color-a|--color-b", "light|color|--color-c|--color-d", "light|color|--color-e|--color-f"] } },
+    executed: { scenarios: ["baseline-light-light"] },
+    measurements: [
+      { pairId: "light|color|--color-a|--color-b", scenarioId: "baseline-light-light", ratio: 5, minimum: 4.5, target: 7, status: "pass", error: null },
+      { pairId: "light|color|--color-c|--color-d", scenarioId: "baseline-light-light", ratio: null, minimum: 4.5, target: 7, status: "unmeasured", error: "computed-empty" },
+    ],
+    errors: [], unsupported: [],
+  };
+  const controller = { status: () => ({ state: "incomplete", report }), subscribe: () => () => {} };
+  factory({ document: dom.document, controller });
+  const panel = dom.host.children.find((child) => child.className === "local-rows");
+  const combo = panel.children.find((child) => child.className === "local-combos").children[0].textContent;
+  assert.match(combo, /1 misurate/);
+  assert.match(combo, /1 non misurate/);
+  assert.match(combo, /1 mancanti/);
+  assert.doesNotMatch(combo, /3 misurate/);
+});
+
+test("an unmeasured local problem is labelled Non misurato and gets no sample", () => {
+  const factory = new Function("return (" + createLocalPresenter.toString() + ");")();
+  const dom = presenterDom();
+  const report = {
+    preference: { active: "light", unmeasured: ["dark"] }, executed: { scenarios: ["baseline-light-light"] },
+    measurements: [{ pairId: "light|color|--color-a|--color-b", scenarioId: "baseline-light-light", foreground: null, background: null, ratio: null, minimum: 4.5, target: 7, status: "unmeasured", error: "computed-empty" }],
+    errors: [], unsupported: [],
+  };
+  const controller = { status: () => ({ state: "complete", report }), subscribe: () => () => {} };
+  factory({ document: dom.document, controller });
+  const panel = dom.host.children.find((child) => child.className === "local-rows");
+  const card = panel.children.find((child) => child.className === "local-problems").children[0];
+  assert.match(card.children[0].textContent, /^Non misurato in questo browser · baseline · light$/);
+  // eyebrow, title, status, threshold, token details, next step — no sample figure.
+  assert.equal(card.children.length, 6);
+  assert.equal(card.children[2].tagName, "p");
+  assert.equal(panel.children.some((child) => child.className === "local-problems" && child.children[0].children.some((c) => c.className === "pair-visual")), false);
+});
+
+test("the read-only next step follows the variant without naming a specific file", () => {
+  const factory = new Function("return (" + createLocalPresenter.toString() + ");")();
+  const dom = presenterDom();
+  const report = {
+    preference: { active: "light", unmeasured: ["dark"] }, executed: { scenarios: ["baseline-light-light", "tuned-light-light"] },
+    measurements: [
+      { pairId: "light|color|--color-a|--color-b", scenarioId: "baseline-light-light", foreground: "oklch(0.4 0.1 350)", background: "oklch(0.95 0.02 90)", ratio: 3, minimum: 4.5, target: 4.6, status: "below-minimum", error: null },
+      { pairId: "light|color|--color-a|--color-b", scenarioId: "tuned-light-light", foreground: "oklch(0.4 0.1 350)", background: "oklch(0.95 0.02 90)", ratio: 3, minimum: 4.5, target: 4.6, status: "below-minimum", error: null },
+    ],
+    errors: [], unsupported: [],
+  };
+  const controller = { status: () => ({ state: "complete", report }), subscribe: () => () => {} };
+  factory({ document: dom.document, controller });
+  const panel = dom.host.children.find((child) => child.className === "local-rows");
+  const cards = panel.children.find((child) => child.className === "local-problems").children;
+  const baseline = cards[0].children[6].textContent;
+  const tuned = cards[1].children[6].textContent;
+  assert.match(baseline, /rivedi la palette sorgente/);
+  assert.match(tuned, /confronta prima il caso senza tuning/);
+  for (const text of [baseline, tuned]) assert.doesNotMatch(text, /palette\.css|colors-tuning\.css/);
+});
+
+test("the model catalog is separated from the local run and the first family is open", () => {
+  const html = preview(diagSession());
+  assert.match(html, /Fallback senza browser — stime del modello:/);
+  assert.match(html, /Sono previsioni, non verifiche/);
+  assert.match(html, /<details class="card family-strip" open>/);
+  assert.match(html, /Stima: <span class="contrast-value">/);
+  assert.doesNotMatch(html, /class="tier">AA</, "no AA pass badge in the model catalog");
+});
+
+// --- Frozen freeze: design provenance, real measured visuals, explorations, provenance metadata. ---
+
+function designFixture() {
+  return {
+    version: 1,
+    sources: [
+      { token: "--palette-brand", name: "brand", role: "ui", darkBlend: 80, darkMix: { mode: "explicit", sourcePercent: 77.6, whitePercent: 22.4 } },
+      { token: "--palette-canvas", name: "canvas", role: "canvas", darkBlend: 40, darkMix: { mode: "explicit", sourcePercent: 88.8, whitePercent: 11.2 } },
+      { token: "--palette-ink", name: "ink", role: "ink", darkBlend: null, darkMix: { mode: "adaptive", sourcePercent: 60, whitePercent: 40 } },
+      { token: "--palette-highlight", name: "highlight", role: "decorative", darkBlend: 10, darkMix: { mode: "explicit", sourcePercent: 97.2, whitePercent: 2.8 } },
+      { token: "--palette-success", name: "success", role: "feedback", darkBlend: 50, darkMix: { mode: "explicit", sourcePercent: 86, whitePercent: 14 } },
+    ],
+    recipes: { text: { kind: "contrast", basis: "contrast", usage: "family text" }, surface: { kind: "mix", basis: "design", usage: "tinted background" } },
+    tokens: {
+      "--color-primary-text": { sources: ["--palette-brand"], recipe: "text", usage: "Testo della famiglia", controls: { light: { override: "--color-tune-light-warmth" }, dark: { mix: "--color-tune-brand-dark-mix", defaultMix: 0.78 } } },
+      "--color-primary-surface": { sources: ["--palette-brand"], recipe: "surface", usage: "Sfondo tinto", controls: { light: { override: "--color-tune-dark-surface-mix" } } },
+    },
+  };
+}
+
+const designToolsStub = () => ({
+  surfaceRatio: (variant, theme) => (theme === "dark" ? (variant === "surface-strong" ? 0.28 : 0.18) : (variant === "surface-strong" ? 0.18 : 0.1)),
+  darkBlendMix: (value) => ({ sourcePercent: 100 - value * 0.28, whitePercent: value * 0.28 }),
+  describeToken: () => null,
+});
+
+test("the payload carries design as inert data without widening the executable config", () => {
+  const html = preview(diagSession({ design: designFixture() }));
+  const payload = JSON.parse(payloadBlock(html));
+  assert.equal(payload.schemaVersion, 1);
+  assert.equal(payload.design.version, 1);
+  assert.deepEqual(Object.keys(payload.config).sort(), ["contrast", "roles"]);
+  assert.ok(!payloadBlock(html).includes("<"), "the payload block stays tag-free inert JSON");
+});
+
+test("design metadata is escaped in the drawn-color panel", () => {
+  const hostile = "</style><img src=x onerror=alert(1)>";
+  const design = designFixture();
+  design.tokens["--color-primary-text"].usage = hostile;
+  design.sources[0].name = hostile;
+  const html = preview(diagSession({ design }));
+  assert.doesNotMatch(markupOf(html), /<img/);
+  assert.ok(!markupOf(html).includes(hostile));
+  assert.match(html, /&lt;img src=x/);
+});
+
+test("dark-blend is shown for every role from the shared factory values", () => {
+  const html = preview(diagSession({ design: designFixture() }));
+  assert.match(html, /<code>--palette-brand<\/code> · ui · dark-blend 80 → source 77\.6% \/ white 22\.4%/);
+  assert.match(html, /<code>--palette-canvas<\/code> · canvas · dark-blend 40 → source 88\.8% \/ white 11\.2%/);
+  assert.match(html, /<code>--palette-ink<\/code> · ink · dark-blend adattivo → source 60% \/ white 40%/);
+  assert.match(html, /<code>--palette-highlight<\/code> · decorative · dark-blend 10 → source 97\.2% \/ white 2\.8%/);
+  assert.match(html, /<code>--palette-success<\/code> · feedback · dark-blend 50 → source 86% \/ white 14%/);
+  assert.match(html, /Regola di progetto 10\/90 \(source↔white\), non una soglia WCAG/);
+});
+
+test("each sample exposes the public control, the recipe and the surface mix rule", () => {
+  const html = preview(diagSession({ design: designFixture() }));
+  assert.match(html, /--color-tune-brand-dark-mix \(default 78%\)/);
+  assert.doesNotMatch(html, /default 0[.,]/, "a fractional defaultMix is never shown as a fraction-percent");
+  assert.match(html, /--color-tune-light-warmth/);
+  assert.match(html, /mix 10% source \/ 90% base \(chiaro\), 18%\/82% \(scuro\), sostituibile da un controllo — regola di progetto, non WCAG/);
+  assert.match(html, /Ricetta di partenza \(generatore\): text \(contrast\)/);
+});
+
+test("the preview states the CSS source and never presents the model as the current output", () => {
+  const html = preview(diagSession({ css: { baseline: ":root{}", tuning: null, tuningSupport: "absent", source: "generated-candidate", status: "stale", digest: { generated: "a".repeat(64), baseline: "b".repeat(64) } } }));
+  assert.match(html, /CSS misurato: candidato generato/);
+  assert.match(html, /stato: non aggiornato/);
+  assert.match(html, /impronta misurata <code>bbbbbbbb<\/code>/);
+  assert.match(html, /Nessun modello è mostrato come stato attuale/);
+  assert.doesNotMatch(html, /\[object Object\]/, "the digest object is never stringified");
+});
+
+test("an absent generated candidate is stated explicitly and the measured digest is used", () => {
+  const html = preview(diagSession({ css: { baseline: "", tuning: null, tuningSupport: "absent", source: "generated-candidate", status: "absent", digest: { generated: "c".repeat(64), baseline: null } } }));
+  assert.match(html, /Il candidato generato è misurato dai byte catturati; nel progetto non esiste ancora un file di output/);
+  assert.match(html, /<code>cccccccc<\/code> \(atteso, non misurato\)/);
+  assert.doesNotMatch(html, /candidato generato è assente/, "an absent output is not an absent candidate");
+});
+
+test("the presenter source serializes the design tools factory self-contained", () => {
+  const source = localPresenterSource();
+  assert.match(source, /var createDesignTools = function createDesignTools/);
+  assert.match(source, /createLocalPresenter\(\{ controller: globalThis\.__smartColorsDiagnostic, document: document, language: language, tools: tools \}\)/);
+  assert.ok(!source.includes("</"));
+});
+
+test("the presenter builds measured visuals per theme and variant, and drops them while pending", () => {
+  const factory = new Function("return (" + createLocalPresenter.toString() + ");")();
+  const dom = presenterDom();
+  let listener = null;
+  const report = {
+    preference: { active: "light", unmeasured: ["dark"] },
+    executed: { scenarios: ["baseline-light-light", "tuned-dark-light"] },
+    measurements: [
+      { pairId: "light|color|--color-text|--color-bg", scenarioId: "baseline-light-light", foreground: "oklch(0.28 0.007 3.68)", background: "oklch(0.95 0.01 86)", ratio: 12.6, minimum: 4.5, target: 7, status: "pass", error: null },
+      { pairId: "dark|color|--color-text|--color-bg", scenarioId: "tuned-dark-light", foreground: "oklch(0.9 0.01 86)", background: "oklch(0.2 0.007 3.68)", ratio: 11.1, minimum: 4.5, target: 7, status: "pass", error: null },
+    ],
+    errors: [], unsupported: [],
+  };
+  const controller = { status: () => ({ state: "complete", report }), subscribe: (fn) => { listener = fn; return () => {}; } };
+  factory({ document: dom.document, controller, tools: designToolsStub() });
+  const panel = dom.host.children.find((child) => child.className === "local-rows");
+  const catalog = panel.children.find((child) => child.className === "local-catalog");
+  assert.ok(catalog, "the measured catalog is rendered");
+  const items = catalog.children[2].children.map((li) => li.children.map((child) => child.textContent).join(""));
+  assert.ok(items.some((text) => /Testo sulla pagina · baseline · light/.test(text)), "baseline light sample present");
+  assert.ok(items.some((text) => /Testo sulla pagina · tuned · dark/.test(text)));
+  listener({ state: "pending", report });
+  assert.equal(panel.children.some((child) => child.className === "local-catalog"), false, "no visuals while pending");
+});
+
+test("the presenter surfaces measured explorations and their coverage", () => {
+  const factory = new Function("return (" + createLocalPresenter.toString() + ");")();
+  const dom = presenterDom();
+  const report = {
+    preference: { active: "light", unmeasured: ["dark"] },
+    executed: { scenarios: ["overlap-light-light"] },
+    measurements: [],
+    explorations: [
+      { pairId: "light|color|--color-primary|--color-secondary", scenarioId: "overlap-light-light", foreground: "oklch(0.4 0.1 30)", background: "oklch(0.5 0.12 200)", ratio: 2.1, minimum: 4.5, target: 4.5, status: "below-minimum", error: null },
+    ],
+    explorationCoverage: { expected: 3, measured: 1, unmeasured: 2, complete: false },
+    errors: [], unsupported: [],
+  };
+  const controller = { status: () => ({ state: "complete", report }), subscribe: () => () => {} };
+  factory({ document: dom.document, controller, tools: designToolsStub() });
+  const panel = dom.host.children.find((child) => child.className === "local-rows");
+  const explorations = panel.children.find((child) => child.className === "local-explorations");
+  assert.ok(explorations, "explorations are rendered");
+  const scope = explorations.children[2].textContent;
+  assert.match(scope, /Copertura esplorativa parziale: 1 di 3 misurate · 2 non misurate/);
+  const first = explorations.children[3].children[0].textContent;
+  assert.match(first, /--color-primary su --color-secondary · Sotto il minimo 2,10:1 · minimo 4,50:1 · target 4,50:1/);
+  assert.equal(explorations.children[3].children[0].children.length, 0, "an exploration pair is text: no border/indicator visual");
+  assert.doesNotMatch(explorations.textContent ?? "", /raccomand|usabile per testo/);
+});
+
+test("every drawn color exposes token, sources, recipe and public control without inspection", () => {
+  const html = preview(diagSession({ design: designFixture() }));
+  const usi = html.match(/<section id="usi"[\s\S]*?<\/section>/)[0];
+  assert.match(usi, /<code>--color-primary-text<\/code>/);
+  assert.match(usi, /<code>--color-primary-surface<\/code>/);
+  assert.match(usi, /sorgenti: brand/);
+  assert.match(usi, /Ricetta di partenza \(generatore\): text \(contrast\)/);
+  assert.match(usi, /Ricetta di partenza \(generatore\): surface \(mix\)/);
+  assert.match(usi, /Controllo per personalizzare/);
+  assert.match(usi, /--color-tune-brand-dark-mix \(default 78%\)/);
+  assert.match(usi, /--color-tune-light-warmth/);
+  assert.doesNotMatch(usi, /--_color-/, "only public --color-tune-* control names, never an internal prefix");
+});
+
+test("for a tuned sample the start recipe is labelled generator and never claims the measured value", () => {
+  // A full surface override exists: the measured value stays authoritative and the recipe is only a
+  // starting point that an override can replace.
+  const design = designFixture();
+  design.tokens["--color-primary-surface"].controls = { dark: { override: "--color-tune-brand-dark-full" } };
+  const html = preview(diagSession({ design }));
+  const usi = html.match(/<section id="usi"[\s\S]*?<\/section>/)[0];
+  assert.match(usi, /Ricetta di partenza \(generatore\)/);
+  assert.match(usi, /sostituibile da un controllo/);
+  assert.match(usi, /Controllo per personalizzare — dark: --color-tune-brand-dark-full/);
+  assert.doesNotMatch(usi, /colore misurato deriva|il misurato deriva/);
+});
+
+test("exploration coverage mirrors the report fields and fails closed", () => {
+  const factory = new Function("return (" + createLocalPresenter.toString() + ");")();
+  const dom = presenterDom();
+  const report = {
+    preference: { active: "light", unmeasured: ["dark"] }, executed: { scenarios: [] }, measurements: [],
+    explorations: [],
+    explorationCoverage: { expected: ["a", "b"], measured: ["a"], unmeasured: ["b"], omittedFamilies: ["f1", "f2", "f3"], complete: true },
+    errors: [], unsupported: [],
+  };
+  const controller = { status: () => ({ state: "complete", report }), subscribe: () => () => {} };
+  factory({ document: dom.document, controller, tools: designToolsStub() });
+  const panel = dom.host.children.find((child) => child.className === "local-rows");
+  const scope = panel.children.find((child) => child.className === "local-explorations").children[2].textContent;
+  assert.match(scope, /Copertura esplorativa parziale: 1 di 2 misurate · 1 non misurate · 3 famiglie omesse/, "complete is fail-closed when a unit is unmeasured");
 });

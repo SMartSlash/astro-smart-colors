@@ -1,4 +1,11 @@
+import { createDesignerLanguage } from "./designer-language.mjs";
+import { createDesignTools } from "./design-recipes.mjs";
+
 export const MARKER = "<!-- smart-colors-report:v1 -->";
+// The report and the preview must name the same pair identically, so the shared lexicon is
+// instantiated once here instead of copying the labels into every renderer.
+const designer = createDesignerLanguage();
+const designTools = createDesignTools();
 const FILE_KEYS = ["palette", "config", "tuning", "output"];
 const STATUSES = {
   pass: "Target e minimo raggiunti",
@@ -127,6 +134,10 @@ const CSS = `
   .pair-list li { margin-block: var(--space-1); }
   .pair-list .contrast-value { display: inline; margin: 0; font-size: var(--text-base); }
   .pair-chip { display: inline-block; margin-inline-end: var(--space-2); padding: 0 .45rem; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--sample-bg, var(--soft)); color: var(--sample-fg, var(--ink)); }
+  .scope-note { border-inline-start: .35rem solid var(--line-strong); padding-inline-start: var(--space-3); color: var(--ink-soft); }
+  .preview-cta { font-weight: 650; }
+  .session-evidence { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr)); margin-block: var(--space-3); }
+  .session-evidence dd { margin-block-end: 0; color: var(--ink); }
   .baseline-note { border-inline-start: .3rem solid var(--line-strong); padding-inline-start: var(--space-3); color: var(--ink-soft); }
   .margin-note { font-size: var(--text-sm); color: var(--ink-muted); }
   .overlap-matrix { margin-block: var(--space-3); }
@@ -149,6 +160,10 @@ const CSS = `
   .palette-suggestions { padding-inline-start: 1.4rem; }
   .palette-suggestions li { margin-block: var(--space-3); }
   .palette-actions { margin-block-start: var(--space-1); color: var(--ink-soft); font-size: var(--text-sm); }
+  .sample-meta { margin-block-start: var(--space-2); color: var(--ink-soft); font-size: var(--text-xs); }
+  .design-note { border-inline-start: .35rem solid var(--accent); padding-inline-start: var(--space-3); }
+  .design-token { white-space: nowrap; }
+  .exploration-scope { border-inline-start: .35rem solid var(--line-strong); padding-inline-start: var(--space-3); color: var(--ink-soft); }
 }
 @layer layout {
   .shell { max-width: 76rem; margin-inline: auto; padding: var(--space-4) var(--space-4) var(--space-6); }
@@ -237,6 +252,160 @@ function provenanceValid(value) {
   return text(value) || (record(value) && Object.keys(value).length > 0);
 }
 
+// ---------------------------------------------------------------------------
+// Designer provenance metadata. The analysis owns the derivation rules; this
+// renderer only follows the registry it receives (source -> recipe -> public
+// token -> control). It never recomputes a recipe, a surface mix or a contrast.
+// ---------------------------------------------------------------------------
+
+const DESIGN_VERSION = 1;
+const MAX_EXPLORATION_FAMILIES = 24;
+const EXPLORATION_TOP_GROUPS = 6;
+
+function internalToken(value) {
+  return typeof value === "string" && value.startsWith("--_");
+}
+
+function publicToken(value) {
+  return text(value) && !internalToken(value);
+}
+
+function percentText(value) {
+  return finite(value) ? `${it(value, 2)}%` : null;
+}
+
+function darkBlendText(source) {
+  if (!record(source) || source.darkBlend === undefined || source.darkBlend === null) {
+    return "Automatico per ruolo (nessun dark-blend dichiarato: non equivale a 0)";
+  }
+  if (!finite(source.darkBlend) || source.darkBlend < 0 || source.darkBlend > 100) {
+    return "Non dichiarato o non valido";
+  }
+  return it(source.darkBlend, 2);
+}
+
+function darkMixText(source) {
+  // The shared factory owns the bounded white-wash mapping; the report only renders it.
+  const mix = record(source) && record(source.darkMix)
+    ? source.darkMix
+    : (record(source) && finite(source.darkBlend) ? designTools.darkBlendMix(source.darkBlend) : null);
+  if (!record(mix)) {
+    return record(source) && source.darkBlend !== undefined && source.darkBlend !== null
+      ? "Percentuali non dichiarate"
+      : "Automatico per ruolo (non = 0)";
+  }
+  if (text(mix.mode) && /^automatic/i.test(mix.mode) && !finite(mix.sourcePercent) && !finite(mix.whitePercent)) {
+    return "Automatico per ruolo (nessun dark-blend dichiarato: non equivale a 0)";
+  }
+  const parts = [];
+  if (text(mix.mode)) parts.push(`modo <code>${escape(mix.mode)}</code>`);
+  const sourcePercent = percentText(mix.sourcePercent);
+  const whitePercent = percentText(mix.whitePercent);
+  if (sourcePercent) parts.push(`sorgente ${sourcePercent}`);
+  if (whitePercent) parts.push(`bianco ${whitePercent}`);
+  return parts.length ? parts.join(" · ") : "Dichiarata, percentuali non disponibili";
+}
+
+function recipeLabel(key, recipes) {
+  if (!publicToken(key)) return "Nessuna ricetta dichiarata";
+  const recipe = record(recipes) && record(recipes[key]) ? recipes[key] : null;
+  const kind = recipe && text(recipe.kind) ? ` — ${escape(recipe.kind)}` : " — ricetta non dichiarata";
+  return `<code>${escape(key)}</code>${kind}`;
+}
+
+function mixPercentValue(value) {
+  if (!finite(value)) return null;
+  // Registry metadata stores the surface source quota as a 0–1 fraction; a value
+  // already expressed as a percentage (>1) is kept as declared.
+  return value > 1 ? value : value * 100;
+}
+
+function controlText(control) {
+  if (!record(control)) return "Predefinito";
+  const parts = [];
+  if (publicToken(control.override)) parts.push(`override <code>${escape(control.override)}</code>`);
+  const mix = publicToken(control.mix) ? `<code>${escape(control.mix)}</code>` : percentText(control.mix);
+  const defaultMix = mixPercentValue(control.defaultMix);
+  if (mix) parts.push(`mix ${mix}`);
+  if (defaultMix !== null) parts.push(`default ${it(defaultMix, 2)}%`);
+  return parts.length ? parts.join(" · ") : "Predefinito";
+}
+
+function designSources(design) {
+  return list(design.sources).filter((source) => record(source) && publicToken(source.token) && text(source.name) && text(source.role));
+}
+
+function designTokens(design) {
+  return Object.entries(record(design.tokens) ? design.tokens : {})
+    .filter(([token, definition]) => publicToken(token) && record(definition));
+}
+
+function sourceTokenList(source) {
+  return list(source && source.sources).filter(publicToken);
+}
+
+function designHtml(design) {
+  if (!record(design)) return "";
+  const sources = designSources(design);
+  const tokens = designTokens(design);
+  const recipes = record(design.recipes) ? design.recipes : {};
+  if (!sources.length && !tokens.length && !Object.keys(recipes).length) return "";
+  const version = design.version === undefined ? "non dichiarata" : escape(design.version);
+  const versionNote = design.version !== undefined && design.version !== DESIGN_VERSION
+    ? `<p class="notice">Versione del registry design non riconosciuta (${version}): i dati sono mostrati come dichiarati, senza interpretazione.</p>`
+    : "";
+  const tokensForSource = (sourceToken) => tokens.filter(([, definition]) => sourceTokenList(definition).includes(sourceToken));
+  const sourceRows = sources.map((source) => {
+    const linked = tokensForSource(source.token).map(([token]) => `<code>${escape(token)}</code>`);
+    return `<tr><th scope="row"><code>${escape(source.token)}</code></th><td>${escape(source.name)}</td><td><code>${escape(source.role)}</code></td><td>${escape(darkBlendText(source))}</td><td>${darkMixText(source)}</td><td>${linked.length ? linked.join("<br>") : "Nessun token pubblico dichiarato"}</td></tr>`;
+  });
+  const recipesForToken = (definition) => record(definition) && publicToken(definition.recipe) ? definition.recipe : null;
+  const recipeRows = Object.entries(recipes)
+    .filter(([key, recipe]) => publicToken(key) && record(recipe))
+    .map(([key, recipe]) => {
+      const linked = tokens.filter(([, definition]) => recipesForToken(definition) === key).map(([token]) => `<code>${escape(token)}</code>`);
+      return `<tr><th scope="row"><code>${escape(key)}</code></th><td>${escape(recipe.kind ?? "non indicato")}</td><td>${escape(recipe.usage ?? "non indicato")}</td><td>${escape(recipe.basis ?? "non indicata")}</td><td>${linked.length ? linked.join("<br>") : "Nessun token pubblico dichiarato"}</td></tr>`;
+    });
+  const tokenRows = tokens.map(([token, definition]) => {
+    // The registry helper is the single origin of the token binding: the report only
+    // renders what it returns and never re-derives a recipe, a mix or a control.
+    const lightTrace = designTools.describeToken(design, token, "light") ?? {};
+    const darkTrace = designTools.describeToken(design, token, "dark") ?? {};
+    const linkedSources = list(lightTrace.sources ?? definition.sources).filter(publicToken).map((source) => `<code>${escape(source)}</code>`);
+    const recipeKey = lightTrace.recipe ?? definition.recipe;
+    const recipe = record(recipes) && record(recipes[recipeKey]) ? recipes[recipeKey] : null;
+    const usage = lightTrace.usage ?? definition.usage ?? (recipe ? recipe.usage : null) ?? "non indicato";
+    const surfaceRule = recipeKey === "surface" || recipeKey === "surface-strong"
+      ? `<br><span class="margin-note">mix ${Math.round(designTools.surfaceRatio(recipeKey, "light") * 100)}% source / ${Math.round(100 - designTools.surfaceRatio(recipeKey, "light") * 100)}% base (chiaro), ${Math.round(designTools.surfaceRatio(recipeKey, "dark") * 100)}%/${Math.round(100 - designTools.surfaceRatio(recipeKey, "dark") * 100)}% (scuro) — regola di progetto, non WCAG</span>`
+      : "";
+    return `<tr><th scope="row" class="design-token"><code>${escape(token)}</code></th><td>${linkedSources.length ? linkedSources.join("<br>") : "Nessuna sorgente dichiarata"}</td><td>${recipeLabel(recipeKey, recipes)}${surfaceRule}</td><td>${escape(usage)}</td><td>${controlText(lightTrace.control)}</td><td>${controlText(darkTrace.control)}</td></tr>`;
+  });
+  return `<section aria-labelledby="design"><h2 id="design">Sorgenti, ricette e controlli</h2>
+<p class="scope-note">Questa sezione legge i metadati del registry della sessione: <strong>sorgenti e ricette sono le aspettative di partenza del generatore</strong>, non la formula certamente attiva. Il <strong>CSS misurato (baseline) resta la fonte finale</strong>: se l'output è obsoleto o un controllo full-color è attivo, la quota della ricetta non è necessariamente quella che disegna. Il report non applica override e non ricalcola contrasti.</p>
+<p class="design-note margin-note">Il <code>dark-blend</code> mescola bianco (al massimo 28%), non nero; quando è omesso resta la derivazione automatica del ruolo e non equivale a 0. Le percentuali non sono una soglia WCAG. I controlli sono opzioni di personalizzazione: i valori effettivi restano quelli del CSS misurato finché un controllo non è attivo; le superfici sono espressioni runtime (mix), non letterali risolti.</p>
+${versionNote}
+<h3>Sorgenti della palette</h3>
+${sources.length ? table("Sorgenti della palette (aspettative del generatore) e token pubblici collegati", ["Sorgente", "Nome", "Ruolo", "dark-blend", "Miscela dark", "Token pubblici"], sourceRows) : "<p>Nessuna sorgente valida dichiarata.</p>"}
+<h3>Ricette di partenza del generatore</h3>
+${recipeRows.length ? table("Ricette di partenza e token che le usano", ["Ricetta di partenza", "Tipo", "Uso", "Base", "Token pubblici"], recipeRows) : "<p>Nessuna ricetta valida dichiarata.</p>"}
+<h3>Token pubblici e controlli</h3>
+${tokenRows.length ? table("Traccia dei token pubblici misurati e dei controlli per personalizzarli", ["Token pubblico", "Sorgenti", "Ricetta di partenza", "Uso", "Controllo per personalizzare (chiaro)", "Controllo per personalizzare (scuro)"], tokenRows) : "<p>Nessun token pubblico valido dichiarato.</p>"}</section>`;
+}
+
+function sampleMeta(item) {
+  if (!record(item)) return "";
+  const parts = [];
+  if (text(item.label)) parts.push(`Nome: ${escape(item.label)}`);
+  if (!internalToken(item.foregroundToken) && text(item.foregroundToken) && !internalToken(item.backgroundToken) && text(item.backgroundToken)) {
+    parts.push(`Token: <code>${escape(item.foregroundToken)}</code> su <code>${escape(item.backgroundToken)}</code>`);
+  }
+  if (text(item.source) && !internalToken(item.source)) parts.push(`Sorgente: <code>${escape(item.source)}</code>`);
+  if (provenanceValid(item.provenance)) parts.push(`Provenienza: ${escape(item.provenance)}`);
+  if (text(item.rendered) && !internalToken(item.rendered)) parts.push(`Rendered: ${escape(item.rendered)}`);
+  else if (record(item.rendered)) parts.push(`Rendered: ${escape(printable(item.rendered))}`);
+  return parts.length ? `<p class="sample-meta">${parts.join(" · ")}</p>` : "";
+}
+
 function expectedStatus(item) {
   return item.ratio < item.minimum ? "below-minimum" : item.ratio < item.target ? "below-target" : "pass";
 }
@@ -252,6 +421,29 @@ function diagnosticValid(item) {
 
 export function status(item, valid = diagnosticValid(item)) {
   return valid ? STATUSES[item.status] : "Non verificato: dati mancanti, non validi o incoerenti";
+}
+
+// Human usage title for a token pair; the tokens stay visible beside it as provenance.
+function pairName(item) {
+  return designer.pairTitle(item.foregroundToken, item.backgroundToken);
+}
+
+// A lowercase lexicon fragment starts a table cell or a heading, not a sentence.
+function capitalized(value) {
+  const text = typeof value === "string" ? value : "";
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : text;
+}
+
+function themeText(scheme) {
+  return ["light", "dark"].includes(scheme) ? capitalized(designer.themeLabel(scheme)) : "";
+}
+
+// Minimum and project target are distinct thresholds; when the project sets them equal,
+// printing the same ratio twice is noise.
+function thresholds(item) {
+  return ratioValid(item.minimum) && ratioValid(item.target) && item.minimum === item.target
+    ? `Minimo e target: ${ratio(item.minimum)}`
+    : `Minimo: ${ratio(item.minimum)} · Target: ${ratio(item.target)}`;
 }
 
 function ratio(value) {
@@ -318,6 +510,7 @@ function pairSample(item, label, valid = diagnosticValid(item)) {
   const usable = fg && bg && ["text", "non-text"].includes(item.kind);
   return `<figure>${usable ? `<div class="pair-visual" aria-hidden="true" style="--sample-fg:${fg};--sample-bg:${bg}">${sampleVisual(item)}</div>` : "<p>Campione non disponibile: coppia non valida.</p>"}
 <figcaption><strong>${escape(label)}</strong>. Campione intenzionale ${item.kind === "non-text" ? "di bordo sullo sfondo" : "di testo sullo sfondo"}: può risultare illeggibile; i dati sono sulla UI neutra.${sampleScaleNote(item)}</figcaption></figure>
+${sampleMeta(item)}
 <dl><dt>Primo piano (foreground)</dt><dd><code>${escape(item.foregroundToken)}</code>: ${colorCode(item.foreground)}</dd>
 <dt>Sfondo (background)</dt><dd><code>${escape(item.backgroundToken)}</code>: ${colorCode(item.background)}</dd>
 <dt>Rapporto / minimo / target</dt><dd>${ratio(item.ratio)} / ${ratio(item.minimum)} / ${ratio(item.target)} — ${status(item, valid)}</dd></dl>`;
@@ -449,7 +642,7 @@ export function compactRatio(value, thresholds = []) {
 function compactPair(item, label, thresholds = [item.minimum, item.target]) {
   const fg = colorCss(item.foreground), bg = colorCss(item.background);
   return `<figure><div class="pair-visual" aria-hidden="true" style="--sample-fg:${fg};--sample-bg:${bg}">${sampleVisual(item)}</div>
-<figcaption><strong>${escape(label)}</strong><span class="contrast-value">${compactRatio(item.ratio, thresholds)}</span>${status(item)}</figcaption></figure>`;
+<figcaption><strong>${escape(label)}</strong><span class="contrast-value">${compactRatio(item.ratio, thresholds)}</span>${status(item)}</figcaption>${sampleMeta(item)}</figure>`;
 }
 
 function usageCategory(item) {
@@ -484,7 +677,7 @@ ${["light", "dark"].map((scheme) => {
     const attention = counts.filter((status) => status === "below-target").length;
     const state = !complete ? "unknown" : avoid ? "avoid" : attention ? "attention" : "pass";
     const label = !complete ? "Non verificato" : avoid ? `Da evitare: ${avoid}` : attention ? `Da migliorare: ${attention}` : "OK nelle coppie controllate";
-    return `<p><strong>${scheme === "light" ? "Chiaro" : "Scuro"}</strong><span class="usage-state usage-state--${state}">${label}</span>${complete ? `<span class="usage-count">${pairs.size} abbinamenti · ${avoid} sotto minimo · ${attention} sotto target</span>` : ""}</p>`;
+    return `<p><strong>${capitalized(designer.themeLabel(scheme))}</strong><span class="usage-state usage-state--${state}">${label}</span>${complete ? `<span class="usage-count">${pairs.size} abbinamenti · ${avoid} sotto minimo · ${attention} sotto target</span>` : ""}</p>`;
   }).join("")}
 <p>${advice}</p></article>`).join("")}</div>`;
 }
@@ -551,19 +744,20 @@ function overlapsHtml(view) {
   const themes = ["light", "dark"].filter((scheme) => view.entries.some(({ item }) => item.scheme === scheme));
   const matrix = (scheme) => {
     const columns = [...neutrals, ...baseColors];
-    return `<div class="overlap-matrix">${table(`Matrice sovrapposizioni — tema ${scheme === "light" ? "chiaro" : "scuro"}`, ["Primo piano ↓ / sfondo →", ...columns.map((token) => token.replace("--color-", ""))], baseColors.map((foreground) => `<tr><th scope="row"><code>${escape(foreground)}</code></th>${columns.map((background) => cell(scheme, foreground, background)).join("")}</tr>`))}</div>`;
+    const themeLabel = designer.themeLabel(scheme);
+    return `<div class="overlap-matrix">${table(`Matrice sovrapposizioni — tema ${themeLabel}`, ["Primo piano ↓ / sfondo →", ...columns.map((token) => token.replace("--color-", ""))], baseColors.map((foreground) => `<tr><th scope="row"><code>${escape(foreground)}</code></th>${columns.map((background) => cell(scheme, foreground, background)).join("")}</tr>`))}</div>`;
   };
   return `<p>Simulazioni sui colori opachi risolti dal browser, <strong>non problemi già presenti nei componenti</strong>. Il confronto include colori base su pagina/card e colori base tra loro; non include trasparenze o immagini.</p>
 <div class="grid">${["light", "dark"].map((scheme) => {
     const groups = view.groups.filter((group) => group[0].item.scheme === scheme);
-    if (!groups.length) return `<p>${scheme === "light" ? "Chiaro" : "Scuro"}: non verificato.</p>`;
+    if (!groups.length) return `<p>${capitalized(designer.themeLabel(scheme))}: non verificato.</p>`;
     const ranked = groups.map((group) => group.reduce((worst, entry) => entry.item.ratio < worst.item.ratio ? entry : worst))
       .sort((a, b) => b.item.ratio - a.item.ratio);
     const textSafe = ranked.filter(({ item }) => item.ratio >= 4.5);
     const largeOnly = ranked.filter(({ item }) => item.ratio >= 3 && item.ratio < 4.5);
     const avoid = ranked.filter(({ item }) => item.ratio < 3);
     const worst = ranked[ranked.length - 1];
-    return `<article class="card overlap-card"><h4>Tema ${scheme === "light" ? "chiaro" : "scuro"}</h4>
+    return `<article class="card overlap-card"><h4>Tema ${designer.themeLabel(scheme)}</h4>
 <p><strong>${textSafe.length}</strong> abbinamenti utilizzabili per testo normale · <strong>${largeOnly.length}</strong> solo per titoli grandi, bordi o icone · <strong>${avoid.length}</strong> da evitare.</p>
 <h5>Usabili per testo normale (almeno 4,5:1)</h5>
 ${overlapList(textSafe, [4.5])}
@@ -580,7 +774,7 @@ ${baseColors.length && themes.length ? `<p class="margin-note">Righe: colore in 
 ${themes.map((scheme) => {
     const groups = view.groups.filter((group) => group[0].item.scheme === scheme);
     if (!groups.length) return "";
-    const name = scheme === "light" ? "chiaro" : "scuro";
+    const name = designer.themeLabel(scheme);
     const rows = groups.map((group) => group.reduce((worst, entry) => entry.item.ratio < worst.item.ratio ? entry : worst));
     return `<h4>Tema ${name} — ${rows.length} abbinamenti</h4>${diagnosticTable(`Sovrapposizioni esplorative — tema ${name}`, rows)}`;
   }).join("")}</details>`;
@@ -619,7 +813,7 @@ function familyAtlas(entries, verified, options = {}) {
     const borderColor = border ? colorCss(border.foreground) : null;
     return `<div class="family-sample">
 <div class="family-visual" aria-hidden="true" style="--sample-fg:${foreground};--sample-bg:${background}${borderColor ? `;--sample-border:${borderColor}` : ""}"><span class="pair-text">Aa · Testo di esempio</span></div>
-<p class="family-title">${escape(title)}</p>
+<p class="family-title">${escape(title)}</p>${sampleMeta(item)}
 <ul>${meta(item)}${extra.map(meta).join("")}</ul>
 </div>`;
   };
@@ -639,8 +833,8 @@ function familyAtlas(entries, verified, options = {}) {
     const light = theme("light", name), dark = theme("dark", name);
     if (!light && !dark) return "";
     return `<article class="card family-card"><h4>Famiglia <code>--color-${escape(name)}</code></h4>
-${light ? `<p class="eyebrow">Tema chiaro</p><div class="family-list">${light}</div>` : ""}
-${dark ? `<p class="eyebrow">Tema scuro</p><div class="family-list">${dark}</div>` : ""}</article>`;
+${light ? `<p class="eyebrow">Tema ${designer.themeLabel("light")}</p><div class="family-list">${light}</div>` : ""}
+${dark ? `<p class="eyebrow">Tema ${designer.themeLabel("dark")}</p><div class="family-list">${dark}</div>` : ""}</article>`;
   }).join("");
   if (!cards) return "";
   const note = options.model
@@ -698,14 +892,14 @@ function variantShiftsHtml(shifts) {
     const source = colorCss(shift.source), variant = colorCss(shift.variantColor);
     if (!source || !variant) return "";
     const direction = shift.deltaL < 0 ? "più scura" : "più chiara";
-    return `<li><span class="variant-swatch" aria-hidden="true" style="--sample-color:${variant}"></span><code>${escape(shift.token)}</code> (tema ${shift.scheme === "light" ? "chiaro" : "scuro"}) rispetto a <code>${escape(shift.sourceToken)}</code>: ΔL ${it(shift.deltaL, 3)} · ΔC ${it(shift.deltaC, 3)} — la variante è ${direction} della sorgente.</li>`;
+    return `<li><span class="variant-swatch" aria-hidden="true" style="--sample-color:${variant}"></span><code>${escape(shift.token)}</code> (tema ${designer.themeLabel(shift.scheme)}) rispetto a <code>${escape(shift.sourceToken)}</code>: ΔL ${it(shift.deltaL, 3)} · ΔC ${it(shift.deltaC, 3)} — la variante è ${direction} della sorgente.</li>`;
   }).join("")}</ul>
 <h4>Come intervenire su palette.css</h4>
 <p>Questi sono gli scostamenti che nascono dalle scelte di sorgente, non da errori di contrasto. Sono indicazioni da valutare, <strong>non verifiche</strong>: dopo ogni modifica rigenera il report per confermare le coppie.</p>
 <ul class="palette-suggestions">${significant.map((shift) => {
     const sourceCode = colorCode(shift.source), variantCode = colorCode(shift.variantColor);
     const action = `La distanza è ampia: se la sorgente serve come riempimento o come accento grafico, valuta <code>role: decorative</code> e assegna testo e bordi a un’identità più vicina; se invece vuoi che il testo assomigli di più alla sorgente, avvicina la lightness di <code>${escape(shift.sourceToken)}</code> a quella della variante.`;
-    return `<li><span class="palette-swatch" aria-hidden="true" style="--sample-color:${colorCss(shift.variantColor)}"></span><code>${escape(shift.sourceToken)}</code> (tema ${shift.scheme === "light" ? "chiaro" : "scuro"}): sorgente ${sourceCode}, variante <code>${escape(shift.token)}</code> ${variantCode}.<span class="palette-actions">${action} Ogni modifica a palette.css cambia surface, bordi e solid della stessa identità in entrambi i temi.</span></li>`;
+    return `<li><span class="palette-swatch" aria-hidden="true" style="--sample-color:${colorCss(shift.variantColor)}"></span><code>${escape(shift.sourceToken)}</code> (tema ${designer.themeLabel(shift.scheme)}): sorgente ${sourceCode}, variante <code>${escape(shift.token)}</code> ${variantCode}.<span class="palette-actions">${action} Ogni modifica a palette.css cambia surface, bordi e solid della stessa identità in entrambi i temi.</span></li>`;
   }).join("")}${minor ? `<li class="margin-note">Altre ${minor} ${minor === 1 ? "variante" : "varianti"} restano oltre la soglia con uno scostamento contenuto: nessuna azione necessaria se l’uso previsto è quello misurato.</li>` : ""}</ul>`;
 }
 
@@ -779,11 +973,10 @@ function problemsHtml(groups, proposals, verified) {
     const after = view?.paired.find((check) => check.before.key === before.key)?.item;
     const context = (entry) => `${escape(entry.scenario.browser)} / ${escape(entry.scenario.scheme)} / ${escape(entry.scenario.preference)}`;
     const ratios = group.map(({ item }) => item.ratio);
-    const title = item.backgroundToken === "--color-surface" && item.foregroundToken === "--color-text-muted" ? "Testo secondario sulla superficie"
-      : item.backgroundToken === "--color-surface" && item.foregroundToken === "--color-tertiary-text" ? "Testo terziario sulla superficie" : item.label;
-    return `<article class="card problem-card"><p class="eyebrow">${item.scheme === "light" ? "Tema chiaro" : "Tema scuro"} · ${item.kind === "text" ? "Testo" : "Non testuale (bordo)"}</p>
-<h3>${escape(title)}</h3><p><code>${escape(item.foregroundToken)}</code> su <code>${escape(item.backgroundToken)}</code></p>
-<p>${item.status === "below-minimum" ? "Il contrasto è sotto il minimo richiesto." : "Il minimo è rispettato; manca il target di progetto."} Minimo: ${ratio(item.minimum)} · Target: ${ratio(item.target)}.</p>
+    const title = pairName(item);
+    return `<article class="card problem-card"><p class="eyebrow">Tema ${designer.themeLabel(item.scheme)} · ${item.kind === "text" ? "Testo" : "Non testuale (bordo)"}</p>
+<h3>${escape(title)}</h3><p class="margin-note">${escape(item.label)}</p><p><code>${escape(item.foregroundToken)}</code> su <code>${escape(item.backgroundToken)}</code></p>
+<p>${item.status === "below-minimum" ? "Il contrasto è sotto il minimo richiesto." : "Il minimo è rispettato; manca il target di progetto."} ${thresholds(item)}.</p>
 ${baselineNote(item, group)}
 <div class="comparison">${compactPair(item, "Attuale")}${after ? compactPair(after, "Con la correzione") : '<div><p class="status">Nessuna proposta verificata per questa coppia.</p><p>Il report non suggerisce un colore senza una verifica completa.</p></div>'}</div>
 ${view ? `<p><a href="#${view.id}">Usa la correzione ${proposals.indexOf(view) + 1}</a>. ${group.length} ${group.length === 1 ? "misura coperta" : "misure coperte"}.</p>` : ""}
@@ -912,6 +1105,7 @@ ${!issues.length && facts.length ? `<p>Nessuna issue nelle coppie misurate di qu
 ${issues.map((entry) => {
       const covered = proposals.filter((proposal) => proposal.covered.has(entry.key));
       return `<details><summary>Issue: ${escape(entry.item.label)} — ${status(entry.item, entry.valid)}</summary>
+<p><strong>${escape(pairName(entry.item))}</strong></p>
 ${pairSample(entry.item, "Coppia dello snapshot", entry.valid)}
 <p>${covered.length ? `Proposte verificate per questa coppia: ${covered.map((view) => `<a href="#${view.id}">${escape(view.proposal.title)}</a>`).join(", ")}.` : "Nessuna proposta verificata per questa coppia nello scenario."}</p></details>`;
     }).join("")}</article>`;
@@ -948,7 +1142,8 @@ export function validation(report, scenarios, entries) {
 /** True for the SC-03 diagnostic session (schemaVersion 1) rather than the legacy snapshot. */
 export function isDiagnosticSession(value) {
   return record(value) && value.schemaVersion === 1 && record(value.css)
-    && typeof value.css.baseline === "string" && record(value.model) && Array.isArray(value.samples);
+    && (typeof value.css.baseline === "string" || typeof value.css.generated === "string")
+    && record(value.model) && Array.isArray(value.samples);
 }
 
 /** Declared snapshot identity: stable id, tool version and captured inputs. */
@@ -959,7 +1154,45 @@ export function sessionIdentityHtml(value) {
   const inputs = list(value.inputs).filter((item) => record(item) && text(item.name));
   const present = inputs.filter((item) => item.present === true).length;
   const captured = inputs.length ? ` · Input catturati: ${present}/${inputs.length}` : "";
-  return `<p>Snapshot incorporato: <code>${snapshotId}</code> · Versione tool: <code>${toolVersion}</code>${captured}.</p>`;
+  const design = record(value.design) ? value.design : null;
+  const sourceCount = design ? designSources(design).length : 0;
+  const tokenCount = design ? designTokens(design).length : 0;
+  const designLine = design
+    ? ` · Design: v${escape(design.version ?? "non dichiarata")} · ${sourceCount} ${agree(sourceCount, "sorgente", "sorgenti")} · ${tokenCount} ${agree(tokenCount, "token pubblico", "token pubblici")}`
+    : "";
+  return `<p>Snapshot incorporato: <code>${snapshotId}</code> · Versione tool: <code>${toolVersion}</code>${captured}.${designLine}</p>`;
+}
+
+/**
+ * Explicit inventory of the evidence actually contained in this static document: a
+ * browser-free model estimate and the automated measurements limited to the engines and
+ * scenarios that ran. It states plainly that no browser-local measurement is included and
+ * points at the preview, so no reader mistakes this report for a local run.
+ */
+function sessionEvidenceHtml(value, prepared) {
+  if (!isDiagnosticSession(value)) return "";
+  const scope = record(prepared) && record(prepared.verification) ? prepared.verification.scope : null;
+  const samples = entriesFor(list(value.samples)).length;
+  const measurements = scope ? scope.measurements.length : 0;
+  const engines = scope ? scope.launched.length : 0;
+  const roles = record(value.config) && record(value.config.roles) ? value.config.roles : {};
+  // `roles.identities` is an array in a report snapshot and a record in a config layer; accept both.
+  const declared = Array.isArray(roles.identities)
+    ? roles.identities
+    : Object.entries(record(roles.identities) ? roles.identities : {}).map(([name, role]) => ({ name, role: record(role) ? role.role : role }));
+  const rolesLine = declared.filter((item) => record(item) && text(item.name))
+    .map((item) => `${escape(item.name)}: ${escape(designer.roleLabel(item.role))}`).join(" · ");
+  const modelNote = samples ? `${samples} ${agree(samples, "coppia prevista", "coppie previste")} — stima del modello, non una verifica` : "Nessun campione del modello in questa sessione";
+  const automationNote = scope
+    ? `${escape(automationScopeSentence(scope))}${measurements ? ` Misure incluse: ${measurements} in ${engines} ${agree(engines, "motore eseguito", "motori eseguiti")}.` : ""}`
+    : "Nessun dato di automazione dichiarato in questa sessione";
+  return `<p class="scope-note">Questa sessione contiene solo le evidenze dichiarate qui sotto. Nessun contrasto di questo browser è misurato in questo documento: <a href="smart-colors-preview.html">verifica i contrasti nel browser attivo</a> dalla preview diagnostica.</p>
+<dl class="session-evidence">
+<div><dt>Modello</dt><dd>${modelNote}</dd></div>
+<div><dt>Automazione</dt><dd>${automationNote}</dd></div>
+${rolesLine ? `<div><dt>Ruoli della palette</dt><dd>${rolesLine}</dd></div>` : ""}
+<div><dt>Verifica locale</dt><dd>Non inclusa in questo report statico; resta nella <a href="smart-colors-preview.html">preview diagnostica</a>.</dd></div>
+</dl>`;
 }
 
 const AUTOMATION_STATES = { pending: "In attesa", running: "In corso", complete: "Completa", incomplete: "Incompleta", unavailable: "Non disponibile", unsupported: "Non supportata", disabled: "Disattivata" };
@@ -988,11 +1221,126 @@ export function automationScope(value) {
   const status = text(run.status) ? run.status : "disabled";
   const complete = status === "complete" && coverageComplete && measurementErrors.length === 0 && !partial
     && launched.length > 0 && measurements.length > 0;
-  return { run, status, engines, errors, measurements, coverage, measurementErrors, environmentErrors, launched, coverageComplete, partial, complete, unsupported: list(run.unsupported).filter(record) };
+  return { run, status, engines, errors, measurements, coverage, measurementErrors, environmentErrors, launched, coverageComplete, partial, complete, unsupported: list(run.unsupported).filter(record),
+    explorations: list(run.explorations).filter(record), explorationCoverage: record(run.explorationCoverage) ? run.explorationCoverage : null };
 }
 
 function automationStateLabel(state) {
   return AUTOMATION_STATES[state] ?? (text(state) ? state : "Stato non indicato");
+}
+
+function explorationMeasurementValid(item) {
+  return record(item) && text(item.pairId) && ratioValid(item.minimum) && ratioValid(item.target)
+    && finite(item.ratio) && ratioValid(item.ratio);
+}
+
+function explorationFamily(item) {
+  return text(item.family) ? item.family : "famiglia non indicata";
+}
+
+function countValue(value) {
+  if (Array.isArray(value)) return value.length;
+  return finite(value) ? value : null;
+}
+
+function namesValue(value) {
+  return list(value).filter(text);
+}
+
+/** Exploration coverage is separate from the expected/executed pair coverage of the verified run. */
+function explorationCoverageView(value) {
+  if (!record(value)) return null;
+  const unmeasuredNames = namesValue(value.unmeasured);
+  const unmeasured = countValue(value.unmeasured);
+  const omittedFamilies = namesValue(value.omittedFamilies);
+  const expected = countValue(value.expected);
+  const measured = countValue(value.measured);
+  return {
+    expected,
+    measured,
+    unmeasured,
+    unmeasuredNames,
+    omittedFamilies,
+    omittedCount: countValue(value.omittedFamilies),
+    // Fail closed: an explicit true, no declared missing unit and coherent counts.
+    complete: value.complete === true && (unmeasured ?? 0) === 0
+      && (expected === null || measured === null || measured <= expected),
+  };
+}
+
+function explorationTier(ratio) {
+  // Same reference thresholds the static overlap section uses: normal text starts at 4.5:1,
+  // 3:1–4.5:1 is only large text, borders and icons, below 3:1 is not a usable pairing.
+  return ratio >= 4.5 ? 0 : ratio >= 3 ? 1 : 2;
+}
+
+function explorationRows(items) {
+  const groups = new Map();
+  for (const item of items) {
+    const key = JSON.stringify([item.pairId, item.minimum, item.target]);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item);
+  }
+  return [...groups.values()].map((group) => {
+    const worst = group.reduce((current, item) => {
+      if (!finite(item.ratio)) return current;
+      return !finite(current.ratio) || item.ratio < current.ratio ? item : current;
+    }, group[0]);
+    return { measurement: worst, count: group.length };
+  }).sort((a, b) => {
+    const first = finite(a.measurement.ratio) ? a.measurement.ratio : -1;
+    const second = finite(b.measurement.ratio) ? b.measurement.ratio : -1;
+    return explorationTier(first) - explorationTier(second) || second - first;
+  });
+}
+
+function explorationCell(measurement) {
+  const parts = pairParts(measurement.pairId);
+  return parts
+    ? `<code>${escape(parts.foreground)}</code> su <code>${escape(parts.background)}</code>`
+    : `<code>${escape(measurement.pairId == null ? "coppia non indicata" : measurement.pairId)}</code>`;
+}
+
+function explorationTable(caption, rows) {
+  return table(caption, ["Coppia", "Tema", "Rapporto (peggiore)", "Minimo", "Target", "Esito", "Misure"], rows.map(({ measurement, count }) => {
+    const parts = pairParts(measurement.pairId);
+    return `<tr><th scope="row">${explorationCell(measurement)}</th><td>${parts ? (themeText(parts.theme) || escape(parts.theme)) : "—"}</td><td>${ratio(measurement.ratio)}</td><td>${ratio(measurement.minimum)}</td><td>${ratio(measurement.target)}</td><td>${escape(automationMeasurementStatus(measurement))}</td><td>${count}</td></tr>`;
+  }));
+}
+
+// Single source for the exploration coverage sentence: the full report and the compact preview both
+// reuse it, so the compact mode never re-derives the same numbers with different wording.
+function explorationCoverageLine(coverage, itemsLength) {
+  if (!coverage) return "<p class=\"exploration-scope\">Copertura esplorativa non dichiarata: le misure presenti non vengono promosse a verifica.</p>";
+  const measured = coverage.measured ?? itemsLength;
+  const expected = coverage.expected;
+  const unmeasured = coverage.unmeasured;
+  return `<p class="exploration-scope">Copertura esplorativa ${coverage.complete ? "completa" : "parziale"}: ${measured === null ? "non dichiarata" : measured}${expected === null ? "" : ` di ${expected}`} misurate${unmeasured === null ? "" : ` · ${unmeasured} ${agree(unmeasured, "non misurata", "non misurate")}`}${coverage.omittedCount === null ? "" : ` · ${coverage.omittedCount} ${agree(coverage.omittedCount, "famiglia omessa", "famiglie omesse")}`}.</p>`;
+}
+
+// Exploratory overlaps are a separate channel: they never change the verified-pair coverage,
+// never become an issue and never receive an accessibility certification.
+function explorationHtml(run) {
+  const raw = list(run.explorations).filter(record);
+  const items = raw.filter(explorationMeasurementValid);
+  const coverage = explorationCoverageView(run.explorationCoverage);
+  if (!raw.length && !coverage) return "";
+  const families = [...new Set(items.map(explorationFamily))];
+  const visibleFamilies = families.slice(0, MAX_EXPLORATION_FAMILIES);
+  const omittedFamilies = families.slice(MAX_EXPLORATION_FAMILIES);
+  const scoped = items.filter((item) => visibleFamilies.includes(explorationFamily(item)));
+  const rows = explorationRows(scoped);
+  const top = rows.slice(0, EXPLORATION_TOP_GROUPS);
+  const rest = rows.slice(EXPLORATION_TOP_GROUPS);
+  const coverageLine = explorationCoverageLine(coverage, items.length);
+  return `<h4>Esplorazioni di sovrapposizione (${items.length} misure, canale separato)</h4>
+<p>Coppie esplorative fuori dalle coppie previste e dalle misure automatiche principali. Restano una simulazione scoped per tema, proprietà e colori misurati: non sono un problema accertato, non attivano correzioni automatiche e non sostituiscono un audit di accessibilità. Gli abbinamenti sono ordinati per fascia d'uso: testo normale (almeno 4,5:1), poi solo titoli grandi, bordi e icone (3:1–4,5:1), poi da evitare (sotto 3:1).</p>
+${coverageLine}
+${top.length ? explorationTable("Primi abbinamenti esplorativi", top) : "<p>Nessuna misura esplorativa valida.</p>"}
+${rest.length ? `<details><summary>Altre ${rest.length} coppie esplorative</summary>${explorationTable("Altre coppie esplorative", rest)}</details>` : ""}
+${coverage && coverage.unmeasuredNames.length ? `<h5>Coppie non misurate</h5><ul>${coverage.unmeasuredNames.map((name) => `<li><code>${escape(name)}</code></li>`).join("")}</ul>` : ""}
+${coverage && coverage.omittedFamilies.length ? `<h5>Famiglie omesse dalla copertura</h5><ul>${coverage.omittedFamilies.map((name) => `<li><code>${escape(name)}</code></li>`).join("")}</ul>` : ""}
+${omittedFamilies.length ? `<p class="margin-note">${omittedFamilies.length} ${agree(omittedFamilies.length, "famiglia supera", "famiglie superano")} il limite di schema di ${MAX_EXPLORATION_FAMILIES} e resta fuori da questa sintesi: ${omittedFamilies.map((name) => `<code>${escape(name)}</code>`).join(", ")}.</p>` : ""}`;
 }
 
 function automationMeasurementStatus(item) {
@@ -1002,6 +1350,43 @@ function automationMeasurementStatus(item) {
   if (item.status === "below-minimum") return "Sotto il minimo";
   if (item.status === "unmeasured") return "Non misurata";
   return text(item.status) ? String(item.status) : "Esito non indicato";
+}
+
+// Counts reuse the exact status vocabulary of `automationMeasurementStatus` (an item with an error
+// counts as unmeasured). No second numerical engine and no HTML parsing: the compact preview only
+// summarises the same rows the full report renders as a table.
+function automationMeasurementCounts(measurements) {
+  const counts = { total: measurements.length, pass: 0, belowTarget: 0, belowMinimum: 0, unmeasured: 0, other: 0 };
+  for (const item of measurements) {
+    if (text(item.error)) { counts.unmeasured += 1; continue; }
+    const status = typeof item.status === "string" ? item.status : "";
+    if (status === "pass") counts.pass += 1;
+    else if (status === "below-target") counts.belowTarget += 1;
+    else if (status === "below-minimum") counts.belowMinimum += 1;
+    else if (status === "unmeasured") counts.unmeasured += 1;
+    else counts.other += 1;
+  }
+  return counts;
+}
+
+function automationCountsHtml(counts) {
+  const rows = [
+    `<li><strong>${counts.belowMinimum}</strong> sotto il minimo</li>`,
+    `<li><strong>${counts.belowTarget}</strong> sotto il target</li>`,
+    `<li><strong>${counts.unmeasured}</strong> non misurate</li>`,
+    `<li><strong>${counts.pass}</strong> raggiungono minimo e target</li>`,
+  ];
+  if (counts.other) rows.push(`<li><strong>${counts.other}</strong> con esito non indicato</li>`);
+  return `<h4>Misure automatizzate (${counts.total})</h4>\n<ul class="automation-counts">${rows.join("")}</ul>`;
+}
+
+// Compact exploration block: same heading and coverage sentence as the full report, without the
+// bulky grouped tables or the itemised unmeasured/omitted name lists (their counts stay visible).
+function explorationSummaryHtml(run, items, coverage) {
+  const raw = list(run.explorations).filter(record);
+  if (!raw.length && !coverage) return "";
+  return `<h4>Esplorazioni di sovrapposizione (${items.length} misure, canale separato)</h4>
+${explorationCoverageLine(coverage, items.length)}`;
 }
 
 function countPairIds(pairs) {
@@ -1020,10 +1405,22 @@ function automationScopeSentence(scope) {
 }
 
 /** Static summary of the VerificationRun; never merged with the model or the local run. */
-export function automationHtml(value) {
+/** Static summary of the VerificationRun; never merged with the model or the local run.
+ *
+ * `options.compact === true` is the preview mode: it keeps the scope sentence, coverage facts, the
+ * engine list, the error list and the unsupported list, summarises the measurements with accurate
+ * counts (below-minimum, below-target, unmeasured, pass) and replaces only the bulky measurement and
+ * exploration tables with a link to the full report. The default (`compact` absent/false) emits the
+ * exact same full document as before, tables included.
+ */
+export function automationHtml(value, options = {}) {
   if (!record(value)) return "";
+  const compact = record(options) && options.compact === true;
   const scope = automationScope(value);
   const { run, status, engines, errors, measurements, launched, complete, measurementErrors, environmentErrors, unsupported } = scope;
+  const explorationItems = list(run.explorations).filter(explorationMeasurementValid);
+  const rawExplorations = list(run.explorations).filter(record);
+  const explorationCoverage = explorationCoverageView(run.explorationCoverage);
   const mode = text(run.mode) ? run.mode : "off";
   const expected = record(run.expected) ? run.expected : {};
   const executed = record(run.executed) ? run.executed : {};
@@ -1039,6 +1436,11 @@ export function automationHtml(value) {
   if (measurementErrors.length) facts.push(`<div><dt>Errori di misura</dt><dd>${measurementErrors.length}</dd></div>`);
   if (environmentErrors.length) facts.push(`<div><dt>Errori d&#39;ambiente</dt><dd>${environmentErrors.length}</dd></div>`);
   if (text(run.measuredAt)) facts.push(`<div><dt>Istante più recente</dt><dd>${escape(run.measuredAt)}</dd></div>`);
+  if (explorationCoverage || explorationItems.length) {
+    const measured = explorationCoverage?.measured ?? explorationItems.length;
+    const expected = explorationCoverage?.expected;
+    facts.push(`<div><dt>Esplorazioni</dt><dd>${measured}${finite(expected) ? ` di ${expected}` : ""} misurate · canale separato</dd></div>`);
+  }
 
   const enginesHtml = engines.length ? `<h4>Motori richiesti</h4>
 <ul class="automation-engines">${engines.map((engine) => {
@@ -1075,7 +1477,7 @@ export function automationHtml(value) {
     groups.get(key).push(measurement);
   }
   const shownGroups = [...groups.values()].slice(0, AUTOMATION_MAX_MEASUREMENT_GROUPS);
-  const measurementsHtml = measurements.length ? `<h4>Misure automatizzate (${measurements.length})</h4>
+  const fullMeasurementsHtml = measurements.length ? `<h4>Misure automatizzate (${measurements.length})</h4>
 <p class="margin-note">Raggruppate per coppia, minimo e target: è mostrato il rapporto peggiore fra i motori e gli scenari eseguiti, con soglie ed esito. Il run locale di un browser è nella preview, separato da queste misure.</p>
 ${table("Misure automatizzate per coppia", ["Coppia", "Tema", "Minimo", "Target", "Rapporto (peggiore)", "Esito", "Misure"], shownGroups.map((group) => {
     const worst = group.reduce((current, item) => (finite(item.ratio) && (!finite(current.ratio) || item.ratio < current.ratio) ? item : current), group[0]);
@@ -1083,14 +1485,24 @@ ${table("Misure automatizzate per coppia", ["Coppia", "Tema", "Minimo", "Target"
     const pairCell = parts
       ? `<code>${escape(parts.foreground)}</code> su <code>${escape(parts.background)}</code>`
       : `<code>${escape(worst.pairId == null ? "coppia non indicata" : worst.pairId)}</code>`;
-    const themeCell = parts ? (parts.theme === "light" ? "Chiaro" : parts.theme === "dark" ? "Scuro" : escape(parts.theme)) : "—";
+    const themeCell = parts ? (themeText(parts.theme) || escape(parts.theme)) : "—";
     return `<tr><th scope="row">${pairCell}</th><td>${themeCell}</td><td>${ratio(worst.minimum)}</td><td>${ratio(worst.target)}</td><td>${compactRatio(worst.ratio, [worst.minimum, worst.target])}</td><td>${escape(automationMeasurementStatus(worst))}</td><td>${group.length}</td></tr>`;
   }))}${groups.size > shownGroups.length ? `<p class="margin-note">Altre ${groups.size - shownGroups.length} coppie sono omesse da questa sintesi; il run completo resta nei dati strutturati.</p>` : ""}` : "";
+  // The compact mode reuses the same measurement rows for the counts and the same exploration
+  // coverage view; it only drops the wide tables, which the full report keeps.
+  const measurementsHtml = compact
+    ? (measurements.length ? automationCountsHtml(automationMeasurementCounts(measurements)) : "")
+    : fullMeasurementsHtml;
+  const explorationBlock = compact ? explorationSummaryHtml(run, explorationItems, explorationCoverage) : explorationHtml(run);
+  const omittedTables = compact && (measurements.length > 0 || rawExplorations.length > 0 || explorationCoverage !== null);
+  const fullReportLink = omittedTables
+    ? `<p class="margin-note"><a href="smart-colors.html">Apri misure complete nel report</a> per le tabelle complete delle misure automatizzate e delle esplorazioni, con soglie, esiti e conteggi per coppia.</p>`
+    : "";
 
   return `<h3>Verifica automatizzata (Playwright)</h3>
 <p>Misura separata dal modello e dalla verifica locale: usa i motori richiesti e non sostituisce né i campioni del modello né le misure di questo browser. <strong>${escape(automationScopeSentence(scope))}</strong></p>
 <dl>${facts.join("")}</dl>
-${enginesHtml}${errorsHtml}${unsupportedHtml}${measurementsHtml}`;
+${enginesHtml}${errorsHtml}${unsupportedHtml}${measurementsHtml}${explorationBlock}${fullReportLink}`;
 }
 
 function pairParts(pairId) {
@@ -1125,10 +1537,37 @@ export function sessionVerification(value) {
 // UTF-8 byte size without a build step; the pages measure the embedded CSS bytes.
 const utf8Bytes = (value) => typeof value === "string" ? new TextEncoder().encode(value).length : 0;
 
-/** Technical note on the CSS bytes embedded in the snapshot (baseline and tuning). */
+const CSS_STATUS_LABELS = { current: "Corrente", stale: "Obsoleto", absent: "Assente", empty: "Vuoto" };
+const CSS_SOURCE_LABELS = {
+  output: "Output reale catturato",
+  "generated-candidate": "Candidato generato (non misurato su disco)",
+};
+const SHA256 = /^[a-f\d]{64}$/i;
+
+function digestText(value) {
+  return typeof value === "string" && SHA256.test(value) ? `<code>${escape(value)}</code>` : "non fornito";
+}
+
+function digestField(css, key) {
+  if (record(css.digest) && typeof css.digest[key] === "string") return css.digest[key];
+  const direct = key === "generated" ? css.generatedDigest : css.baselineDigest;
+  return typeof direct === "string" ? direct : null;
+}
+
+/** Technical note on the CSS bytes embedded in the snapshot (generated model vs captured baseline). */
 export function cssEmbedHtml(value) {
   if (!record(value)) return "";
-  const baselineBytes = utf8Bytes(value.baseline);
+  const generated = typeof value.generated === "string" ? value.generated : null;
+  const captured = typeof value.baseline === "string" ? value.baseline : null;
+  const declaredSource = ["output", "generated-candidate"].includes(value.source) ? value.source : null;
+  const source = declaredSource ?? (captured === null && generated !== null ? "generated-candidate" : null);
+  // The contract states that the baseline is the captured output when it exists, even when empty;
+  // otherwise it is the generated candidate. Never present the candidate as an on-disk measurement.
+  const baseline = captured ?? (source === "generated-candidate" ? generated : null);
+  const status = ["current", "stale", "absent", "empty"].includes(value.status) ? value.status : null;
+  const production = value.production === true && status === "current" && source === "output" && utf8Bytes(baseline) > 0;
+  const statusLabel = status ? CSS_STATUS_LABELS[status] : "Non dichiarato";
+  const sourceLabel = source ? CSS_SOURCE_LABELS[source] : "Non dichiarata";
   const tuning = typeof value.tuning === "string" ? value.tuning : null;
   const support = ["absent", "supported", "unsupported"].includes(value.tuningSupport) ? value.tuningSupport : null;
   const tuningLine = tuning === null || support === "absent"
@@ -1136,8 +1575,30 @@ export function cssEmbedHtml(value) {
     : support === "unsupported"
       ? `Incorporato (${utf8Bytes(tuning)} byte) ma non valutato: contiene <code>@import</code> o <code>url()</code> non caricabili offline, quindi le misure del modello non lo coprono.`
       : `Incorporato: ${utf8Bytes(tuning)} byte.`;
-  return `<p>Le pagine misurano i byte CSS <strong>incorporati</strong> nel payload, non i file sul disco: rigenera dopo ogni modifica.</p>
-<dl><div><dt>Baseline incorporata</dt><dd>${baselineBytes} byte</dd></div><div><dt>Tuning</dt><dd>${tuningLine}</dd></div></dl>`;
+  const generatedLine = generated === null
+    ? "Non fornito dal modello."
+    : `${utf8Bytes(generated)} byte · SHA-256 ${digestText(digestField(value, "generated"))}`;
+  const baselineLine = baseline === null
+    ? "Non disponibile."
+    : `${utf8Bytes(baseline)} byte · SHA-256 ${digestText(digestField(value, "baseline"))}`;
+  const productionLine = production ? "Sì" : "No";
+  const warning = source === "generated-candidate"
+    ? "<p class=\"baseline-note\">La baseline mostrata è il candidato generato dal modello, non un file misurato su disco.</p>"
+    : status === "stale" && source === "output"
+      ? "<p class=\"baseline-note\">Stato obsoleto: la baseline è l'output reale catturato, non un candidato generato. Le previsioni del modello non sostituiscono quella misura.</p>"
+      : status === "absent"
+        ? "<p class=\"baseline-note\">Nessun output reale disponibile: la baseline non è una misura su disco.</p>"
+        : status === "empty"
+          ? "<p class=\"baseline-note\">L'output reale esiste ma è vuoto (0 byte): non è una baseline di produzione.</p>"
+          : "";
+  return `<p>Il report non scrive CSS e non ricalcola il contrasto: confronta il modello atteso con la baseline catturata al momento della generazione. La build misura dopo la scrittura.</p>
+<dl><div><dt>Modello atteso (generated)</dt><dd>${generatedLine}</dd></div>
+<div><dt>Baseline incorporata</dt><dd>${baselineLine}</dd></div>
+<div><dt>Stato dell'output</dt><dd>${escape(statusLabel)}</dd></div>
+<div><dt>Provenienza della baseline</dt><dd>${escape(sourceLabel)}</dd></div>
+<div><dt>Produzione</dt><dd>${productionLine}</dd></div>
+<div><dt>Tuning</dt><dd>${tuningLine}</dd></div></dl>
+${warning}`;
 }
 
 /** Internal snapshot preparation shared by renderers and report summaries; no I/O or contrast recalculation. */
@@ -1203,24 +1664,47 @@ export function formatContrastReportHtml(value) {
   const { report, scenarios, entries, problems, iso, digest, issues, errors, verified, proposals,
     groups, overlaps, variantShifts, tuningGroups, complete, rejectedSources, outcome, files } = prepared;
   const identity = session ? sessionIdentityHtml(session) : "";
+  const design = session ? designHtml(session.design) : "";
   const modelAtlas = session ? modelAtlasHtml(session.samples) : "";
   const automation = session ? automationHtml(session.automation) : "";
   const cssEmbed = session ? cssEmbedHtml(session.css) : "";
+  const entriesAtlas = familyAtlas(entries, verified);
   const verification = prepared.verification ?? null;
   const verificationLine = verification
     ? verification.verified
       ? "<p><strong>Copertura verificata:</strong> le coppie automatizzate sono complete negli ambienti eseguiti (motori e scenari elencati). Il modello resta una previsione, non una verifica.</p>"
       : "<p><strong>Copertura non verificata:</strong> l'automazione non copre tutte le coppie negli ambienti eseguiti; il modello resta una previsione, non una verifica.</p>"
     : "";
-  const sessionSection = modelAtlas || automation
-    ? `<section aria-labelledby="sessione"><h2 id="sessione">Campioni dal modello e verifica automatizzata</h2>
-<p>Questi risultati vengono dal modello del generatore e dall'automazione richiesta, non da misure locali di questo browser. Le misure locali sono nella <a href="smart-colors-preview.html">preview diagnostica</a>, che non modifica questo report statico.</p>
-${modelAtlas}${automation}</section>`
+  // The static document holds no browser-local measurement, so its headline is scoped to the
+  // snapshot and to the environments actually executed; the preview link is the primary way to
+  // check the active browser.
+  const scopeNote = session
+    ? `<p class="scope-note">L'esito sopra riguarda solo le coppie dello snapshot e l'automazione <strong>negli ambienti eseguiti</strong>: non è la misura di questo browser e non copre usi o stati non misurati. I metadati di design sono dichiarazioni del modello: il report li mostra senza applicare override.</p>`
     : "";
-  const sessionNav = sessionSection ? `<li><a href="#sessione">Campioni dal modello</a></li>` : "";
   const previewLink = session
-    ? `<p>La <a href="smart-colors-preview.html">preview diagnostica</a> mostra gli stessi campioni e aggiunge la verifica locale del browser, senza modificare questo report.</p>`
+    ? `<p class="preview-cta"><a href="smart-colors-preview.html">Apri la preview diagnostica e verifica i contrasti nel browser attivo</a> — stessi campioni, più la verifica locale; non modifica questo report statico.</p>`
     : "";
+  const sessionEvidence = session ? sessionEvidenceHtml(session, prepared) : "";
+  // One family catalog by default: the measured atlas wins when it exists, and the model
+  // estimate follows inside a native disclosure so the data survives without duplication.
+  const modelAtlasBlock = modelAtlas
+    ? entriesAtlas
+      ? `<details><summary>Campioni dal modello — previsioni senza browser</summary>${modelAtlas}</details>`
+      : modelAtlas
+    : "";
+  // Engines, causes and measurements are technical evidence: they stay in a native disclosure so a
+  // missing package or browser never dominates the designer's first reading.
+  const automationBlock = automation
+    ? `<details><summary>Verifica automatizzata (Playwright) — dettagli, cause e misure</summary>${automation}</details>`
+    : "";
+  const sessionSection = sessionEvidence
+    ? `<section aria-labelledby="sessione"><h2 id="sessione">Sessione diagnostica: ambito ed evidenze</h2>
+${sessionEvidence}
+${modelAtlasBlock}
+${automationBlock}</section>`
+    : "";
+  const sessionNav = sessionSection ? `<li><a href="#sessione">Sessione diagnostica</a></li>` : "";
+  const designNav = design ? `<li><a href="#design">Sorgenti e ricette</a></li>` : "";
   const cssDetails = cssEmbed
     ? `<details><summary>CSS incorporato nello snapshot</summary>
 <section aria-labelledby="css"><h2 id="css">CSS incorporato nello snapshot</h2>${cssEmbed}</section></details>`
@@ -1235,10 +1719,11 @@ ${modelAtlas}${automation}</section>`
 <style>${CSS}</style></head><body><div class="shell">
 <a class="skip" href="#contenuto">Vai al contenuto</a>
 <header><h1>Rapporto di contrasto</h1><p class="status overview">${outcome}</p>
+${scopeNote}
 <ul class="summary-facts"><li><strong>${groups.length}</strong> ${agree(groups.length, "problema distinto", "problemi distinti")}</li><li><strong>${complete.length}</strong> ${agree(complete.length, "correzione verificata", "correzioni verificate")}</li><li><strong>${entries.length}</strong> ${agree(entries.length, "coppia misurata", "coppie misurate")}</li><li><strong>${variantShifts === null ? "n.d." : variantShifts.length}</strong> ${agree(variantShifts?.length ?? 0, "variante da rivedere", "varianti da rivedere")}</li><li><strong>${scenarios.length}</strong> ${agree(scenarios.length, "scenario", "scenari")}</li></ul>
 <p>Generato il ${iso ? `<time datetime="${escape(report.generatedAt)}">${escape(report.generatedAt)}</time>` : escape(report.generatedAt)}.</p>
 ${identity}${verificationLine}${previewLink}<p><strong>Snapshot statico, non stato attuale del progetto.</strong> Rigenera il report dopo ogni modifica ai colori. Data, file e impronta sono nei dettagli tecnici.</p>
-<nav aria-label="Sezioni del rapporto"><ul><li><a href="#proposte">Correzione consigliata</a></li><li><a href="#problemi">Problemi e risultato atteso</a></li><li><a href="#usi">Colpo d’occhio sugli usi</a></li>${sessionNav}<li><a href="#tecnici">Dettagli tecnici</a></li></ul></nav></header>
+<nav aria-label="Sezioni del rapporto"><ul><li><a href="#proposte">Correzione consigliata</a></li><li><a href="#problemi">Problemi e risultato atteso</a></li><li><a href="#usi">Colpo d’occhio sugli usi</a></li>${designNav}${sessionNav}<li><a href="#tecnici">Dettagli tecnici</a></li></ul></nav></header>
 <main id="contenuto">
 ${verified ? "" : `<div class="notice"><p class="status">Nessuna conclusione positiva: dati assenti, non validi, incoerenti o errori impediscono di verificare lo snapshot.</p><ul>${[...problems, ...errors].map((item) => `<li>${escape(item)}</li>`).join("")}</ul></div>`}
 ${list(report.notes).length ? `<p>${escape(report.notes[0])}</p>` : ""}
@@ -1254,11 +1739,11 @@ ${tuningGroups.length ? `<p><strong>${tuningGroups.length} di ${groups.length}</
 ${usageHtml(entries, scenarios, verified)}
 <h3>Famiglie di colori: come appaiono nei componenti</h3>
 <p>Ogni famiglia mostra testo su callout, bottone e chip con i rapporti misurati: vedi subito se la variante regge nell’uso previsto.</p>
-${familyAtlas(entries, verified)}
+${entriesAtlas}
 ${variantShiftsHtml(variantShifts)}
 <h3>Se sovrapponi liberamente i colori base</h3>${overlapsHtml(overlaps)}
 <p>Su foto, gradienti o trasparenze, verifica il risultato sullo sfondo reale. Colori diversi per tonalità possono avere poco contrasto: non basta che sembrino diversi.</p></section>
-${sessionSection}<section aria-labelledby="tecnici"><h2 id="tecnici">Dettagli tecnici</h2><p>Non servono per leggere la correzione. Tutti i dati originali restano disponibili qui.</p>
+${design}${sessionSection}<section aria-labelledby="tecnici"><h2 id="tecnici">Dettagli tecnici</h2><p>Non servono per leggere la correzione. Tutti i dati originali restano disponibili qui.</p>
 <details><summary>Misure complete — ${scenarios.length} scenari, ${entries.length} controlli</summary>
 <section aria-labelledby="scenari"><h2 id="scenari">Scenari, misure e issue</h2><p>Ogni rapporto riguarda la coppia primo piano/sfondo indicata, non il colore isolato. Minimo e target sono distinti; i rapporti sono mostrati con la precisione completa del dato numerico fornito.</p>${scenariosHtml(scenarios, entries, proposals)}</section></details>
 <details><summary>Palette completa — fonte e colori risolti</summary>

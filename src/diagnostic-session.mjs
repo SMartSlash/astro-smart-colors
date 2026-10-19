@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { analyzeColorTokens } from "./generate-colors.mjs";
 import { DEFAULT_CONFIG_FILE, loadSmartColorsConfig, paletteNotFoundError } from "./load-config.mjs";
+import { parsePaletteWithDiagnostics } from "./parse-palette.mjs";
 import { captureReportInputs, reportSnapshot } from "./report-data.mjs";
 
 const { version: TOOL_VERSION } = createRequire(import.meta.url)("../package.json");
@@ -41,6 +42,9 @@ export async function createDiagnosticSession({ root = process.cwd(), configFile
     throw paletteNotFoundError({ palettePath: captured.files.palette, root, configFile });
   }
   const paletteCss = paletteInput[2];
+  // The palette source contract is built from the already-captured bytes (never a second read) so
+  // the session, its raw CSS and its per-token sources describe the same bytes the analysis saw.
+  const paletteSource = paletteSourceContract(paletteCss, captured.files.palette, paletteInput[4]);
   const analysis = await analyzeColorTokens({ root, config: selected, configFile, ...restOptions }, paletteCss);
   const snapshot = await reportSnapshot(root, analysis, captured);
   const tuning = tuningContent(captured);
@@ -50,16 +54,88 @@ export async function createDiagnosticSession({ root = process.cwd(), configFile
     toolVersion: TOOL_VERSION,
     snapshotId: randomUUID(),
     config: jsonClone(analysis.config),
+    // Additive source contract only. It never supersedes the legacy `snapshot.palette` array: report
+    // validation, the palette gallery and the proposal/variant views keep reading `session.palette`.
+    paletteSource,
     inputs: inputDescriptors(captured),
-    css: { baseline: analysis.css, tuning, tuningSupport: tuningSupport(tuning) },
+    css: applyDiagnosticOutput({ css: { tuning, tuningSupport: tuningSupport(tuning) } }, analysis, captured),
     model: { diagnostics: analysis.model.diagnostics, errors: analysis.errors, warnings: analysis.warnings },
     samples: nativeSamples(analysis),
     automation: automationRecord(automation),
   };
+  // `design` is owned by another module; forwarded verbatim when the analysis carries it.
+  if (analysis && analysis.design !== undefined) session.design = jsonClone(analysis.design);
   if (session.css.tuningSupport === "unsupported") {
     session.notes.push("Il tuning contiene @import o risorse esterne non supportate: le misure del modello non coprono il tuning attivo.");
   }
+  if (session.css.status === "empty") {
+    session.notes.push("L'output colore su disco è vuoto: nessun byte utilizzabile. Il candidato generato non viene mai sostituito e le misure restano non attendibili.");
+  }
+  if (session.css.baselineSupport === "unsupported" && session.css.status !== "empty") {
+    session.notes.push("Il CSS baseline (output reale) contiene @import o risorse esterne non supportate: gli scenari non saranno misurati.");
+  }
   return { session, analysis, captured };
+}
+
+/**
+ * Derive the additive `session.css` descriptor that separates the expected CSS from the measured one.
+ *
+ * `generated` is always the model output (`analysis.css`), never read from disk. `baseline` is the
+ * actual captured output bytes when the file is present (even when empty), otherwise the declared
+ * generated candidate — a present-but-empty output is never replaced by `generated`. `production`
+ * is true only when the on-disk output is the accepted, byte-identical production output (the caller's
+ * `acceptance.outputs` entry for `output` is honored when present, so a rejected sibling never blesses
+ * the CSS). `digest`
+ * gives the stable identity of both byte strings; `baselineSupport` is `unsupported` for an empty
+ * or `@import`/`url()`-referencing baseline, so it can never be read as a green pass. When `written`
+ * is provided (a `build` after its intentional write), the new bytes are the measured baseline.
+ * The helper only reads `captured.acceptedOutputs` semantics; it never writes CSS or inputs.
+ */
+export function applyDiagnosticOutput(session, analysis, captured, acceptance, options = {}) {
+  const generated = typeof analysis?.css === "string" ? analysis.css : "";
+  const written = options.written;
+  let baseline;
+  let source;
+  let status;
+  if (typeof written === "string") {
+    baseline = written;
+    source = "output";
+    status = baseline === generated ? "current" : "stale";
+  } else {
+    const input = Array.isArray(captured?.inputs) ? captured.inputs.find(([name]) => name === "output") : null;
+    const present = Boolean(input && input[3]);
+    const bytes = present && typeof input[2] === "string" ? input[2] : "";
+    if (!present) {
+      baseline = generated;
+      source = "generated-candidate";
+      status = "absent";
+    } else if (bytes.replace(/\s+/g, "") === "") {
+      baseline = bytes;
+      source = "output";
+      status = "empty";
+    } else {
+      baseline = bytes;
+      source = "output";
+      status = bytes === generated ? "current" : "stale";
+    }
+  }
+  const base = session && typeof session.css === "object" && session.css !== null ? session.css : {};
+  const acceptedOutput = acceptance && Array.isArray(acceptance.outputs)
+    ? acceptance.outputs.find((output) => output && output.name === "output")
+    : null;
+  const acceptedByOutput = acceptedOutput ? acceptedOutput.matches === true : null;
+  const descriptor = {
+    ...base,
+    generated,
+    baseline,
+    source,
+    status,
+    production: source === "output" && status === "current" && acceptedByOutput !== false,
+    digest: { generated: sha256Hex(generated), baseline: baseline === "" ? null : sha256Hex(baseline) },
+    baselineSupport: baseline === "" || scanUnsupported(baseline) ? "unsupported" : "supported",
+  };
+  if (session && typeof session === "object") session.css = descriptor;
+  return descriptor;
 }
 
 /**
@@ -134,6 +210,66 @@ function inputDescriptors(captured) {
   return captured.inputs.map(([name, file, , present, sha256]) => ({ name, path: file, present, sha256 }));
 }
 
+// ---------------------------------------------------------------------------
+// Palette source contract: the exact captured bytes plus one source per authored token.
+// ---------------------------------------------------------------------------
+
+// Length-preserving comment removal: every comment character except line breaks becomes a space,
+// so a position in the stripped text maps 1:1 onto the authored bytes. This mirrors the parser's
+// own stripping (parse-palette) so the contract describes exactly the bytes the parser evaluated.
+function stripCommentsInPlace(css) {
+  return css.replace(/\/\*[\s\S]*?\*\//g, (comment) => comment.replace(/[^\r\n]/g, " "));
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// The whole `@property --token { ... }` block for a typed palette, sliced from the original bytes.
+// Returns the exact declaration span and the exact `initial-value` color span, or null.
+function locatePropertyBlock(stripped, key) {
+  const block = new RegExp(`@property\\s+--${escapeRegExp(key)}\\s*\\{([^}]*)\\}`, "di").exec(stripped);
+  if (!block) return null;
+  const bodyStart = block.indices[1][0];
+  const initial = /initial-value:\s*(oklch\([^;]*\))\s*;/di.exec(stripped.slice(bodyStart, block.indices[1][1]));
+  if (!initial) return null;
+  return {
+    value: [bodyStart + initial.indices[1][0], bodyStart + initial.indices[1][1]],
+    declaration: [block.indices[0][0], block.indices[0][1]],
+  };
+}
+
+// Legacy `--token: oklch(...);` declarations. The last declaration wins, matching parse-palette's
+// overwrite-on-duplicate behavior for the legacy syntax. A legacy palette has no @property block,
+// so nothing is invented: `declaration` stays null and only the exact value text is retained.
+function locateLegacyDeclaration(stripped, key) {
+  const pattern = new RegExp(`(?<![\\w-])--${escapeRegExp(key)}\\s*:\\s*(oklch\\([^;]*\\))\\s*;`, "dgi");
+  let span = null;
+  let match;
+  while ((match = pattern.exec(stripped))) span = match.indices[1];
+  return span ? { value: [span[0], span[1]], declaration: null } : null;
+}
+
+// Build the additive `session.paletteSource` contract from captured bytes: the full raw CSS for a
+// static export, the source path and SHA-256, and one source per authored token in authored order
+// (unique). It is purely additive and never replaces the legacy `session.palette` array.
+function paletteSourceContract(css, file, sha256) {
+  const stripped = stripCommentsInPlace(css);
+  const parsed = parsePaletteWithDiagnostics(css);
+  const propertyMode = /@property\s+--/i.test(stripped);
+  const sources = Object.keys(parsed.authoredTokens).map((key) => {
+    const located = propertyMode ? locatePropertyBlock(stripped, key) : locateLegacyDeclaration(stripped, key);
+    return {
+      token: `--${key}`,
+      value: located ? css.slice(located.value[0], located.value[1]) : null,
+      role: Object.hasOwn(parsed.annotatedRoles, key) ? parsed.annotatedRoles[key] : null,
+      darkBlend: Object.hasOwn(parsed.annotatedDarkBlends, key) ? parsed.annotatedDarkBlends[key] : null,
+      declaration: located && located.declaration ? css.slice(located.declaration[0], located.declaration[1]) : null,
+    };
+  });
+  return { css, path: file, sha256: typeof sha256 === "string" ? sha256 : null, sources };
+}
+
 function tuningContent(captured) {
   const tuning = captured.inputs.find(([name]) => name === "tuning");
   return tuning?.[3] ? tuning[2] : null;
@@ -142,8 +278,18 @@ function tuningContent(captured) {
 // "absent" is valid; "unsupported" is explicit so an unevaluated tuning is never read as a pass.
 function tuningSupport(content) {
   if (content === null) return "absent";
-  const active = content.replace(/\/\*[\s\S]*?\*\//g, (comment) => comment.replace(/[^\r\n]/g, " "));
-  return UNSUPPORTED_TUNING.test(active) ? "unsupported" : "supported";
+  return scanUnsupported(content) ? "unsupported" : "supported";
+}
+
+// Conservative syntax scan shared by the tuning state and the baseline support: `@import`/`url()`
+// inside a comment never counts, anything else that references an external resource is flagged.
+function scanUnsupported(css) {
+  const active = css.replace(/\/\*[\s\S]*?\*\//g, (comment) => comment.replace(/[^\r\n]/g, " "));
+  return UNSUPPORTED_TUNING.test(active);
+}
+
+function sha256Hex(value) {
+  return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
 function jsonClone(value) {

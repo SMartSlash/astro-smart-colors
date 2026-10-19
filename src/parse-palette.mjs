@@ -117,11 +117,8 @@ function parsePropertyBlocks(css) {
       continue;
     }
 
-    if (role !== "ui" && role !== "feedback") {
-      errors.push(`${propName}: dark-blend is supported only for roles ui and feedback, received ${role}.`);
-      continue;
-    }
-
+    // Every role shares the same explicit rule: 0 keeps the source, 100 mixes in
+    // the bounded 28% white wash. Omitting the descriptor keeps the role default.
     annotatedDarkBlends[name] = darkBlend.number;
   }
 

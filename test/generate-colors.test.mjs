@@ -3,7 +3,7 @@ import test from "node:test";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+
 import { contrast, fitToSrgb, mixOklch as nativeMixOklch } from "../src/color-math.mjs";
 import { analyzeColorTokens, generateColorTokens } from "../src/generate-colors.mjs";
 import { parseOklch } from "../src/parse-palette.mjs";
@@ -987,13 +987,16 @@ test("explicit canvas/ink dark-blend resolves neutral and family text on the emi
   }
 });
 
-// Read-only: the repository root model must analyze cleanly with the new pipeline
-// and the child must never write the root output.
-test("the repository root model analyzes without issues and stays read-only", async (t) => {
-  const root = fileURLToPath(new URL("../../..", import.meta.url));
+// Use the shipped example in an isolated consumer: package tests must not depend
+// on the reference site's files or on the checkout's parent directories.
+test("the minimal example analyzes without issues and preserves existing output", async (t) => {
+  const palette = await readFile(new URL("../examples/minimal/src/styles/tokens/palette.css", import.meta.url), "utf8");
+  const root = await createProject(t, palette);
+  await generateColorTokens({ root });
   const output = path.join(root, "src/styles/tokens/colors.css");
   const before = await readFile(output, "utf8");
+  assert.ok(before.length > 0, "the consumer fixture has generated output");
   const analysis = await analyzeColorTokens({ root });
   assert.deepEqual(analysis.errors, []);
-  assert.equal(await readFile(output, "utf8"), before, "analysis must not write the root output");
+  assert.equal(await readFile(output, "utf8"), before, "analysis must not write the consumer output");
 });

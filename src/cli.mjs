@@ -1,11 +1,16 @@
 #!/usr/bin/env node
 import { pathToFileURL } from "node:url";
-import { arrow, badge, buildHeading, check, file, note, reportHeading, title, verificationComplete, warn } from "./cli-style.mjs";
+import { badge, check, cssNotice, cssState, file, measurementAvailable, note, provenance, title, verdict, verificationComplete, warn } from "./cli-style.mjs";
+import { createDesignerLanguage } from "./designer-language.mjs";
 import { compactRatio } from "./format-report-html.mjs";
 import { runDiagnosticWorkflow } from "./diagnostic-workflow.mjs";
 import { initSmartColors } from "./init.mjs";
 import { DEFAULT_CONFIG_FILE } from "./load-config.mjs";
 import { inspectTuningStatus } from "./report-data.mjs";
+
+// One shared, self-contained language instance for human usage names. The token-faithful fallback
+// for unknown cases lives in the helper, never as a copied table here.
+const designerLanguage = createDesignerLanguage();
 
 const VALID_COMMANDS = new Set(["build", "check", "init", "audit", "report"]);
 const BROWSERS = new Set(["chromium", "firefox", "webkit"]);
@@ -14,9 +19,26 @@ const AUTOMATION_MODES = new Set(["auto", "off", "required"]);
 // characters so a hostile palette, path or error string cannot inject ANSI/newlines. Clickable
 // file URLs and command lines are escaped but never truncated.
 const MAX_CONSOLE_TEXT = 160;
-const MAX_PROBLEM_LINES = 40;
+const MAX_SHOWN_PROBLEMS = 5;
 const MAX_DIAGNOSTIC_LINES = 40;
 const CONTROL_CHARS = /[\u0000-\u001f\u007f]/g;
+
+// Terminal layout: one compact labelled line per fact, so the terminal accompanies the work instead
+// of walling it. `CONT` is the continuation indent aligned under the labelled text.
+const LABEL_WIDTH = 10;
+const CONT = " ".repeat(LABEL_WIDTH + 2);
+// Stable order for the source/role breakdown in the subject line.
+const ROLE_ORDER = ["canvas", "ink", "ui", "feedback", "decorative"];
+// Stable, plain progress phases (no spinner, no invented percentages). The automation label must
+// not promise a browser run before discovery: `auto` only announces that the optional automation
+// is being checked.
+const STATUS_LABELS = {
+  analysis: "analisi palette",
+  generation: "generazione token",
+  automation: "controllo automazione opzionale",
+  publication: "anteprima e report",
+};
+const AUTOMATION_REQUIRED_LABEL = "verifica automatizzata richiesta";
 const USAGE = `Uso: smart-colors [build|check|init|audit|report] [opzioni]
 
 Comandi:
@@ -129,6 +151,13 @@ async function runInit({ root, configFile, dir, palette, tuning, yes }) {
     `  ${title("File creati")}`,
     ...rows.map(([createdPath, label]) => `    ${check()} ${file(safeText(createdPath).padEnd(width))}  ${note(`(${label})`)}`),
     "",
+    // The created list stays exact; this block explains the roles of the three files a designer
+    // touches, so the generated output is never edited by hand and the palette/tuning split is clear.
+    `  ${title("Come funziona")}`,
+    `    palette   ${file(safeText(generation.palettePath ?? created[0] ?? ""))} — la tua sorgente: qui modifichi colori e ruoli.`,
+    `    output    ${file(safeText(generation.outputPath ?? "src/styles/tokens/colors.css"))} — generato da build: non modificarlo a mano.`,
+    `    tuning    ${file(safeText(generation.tuningPath ?? created[1] ?? ""))} — rifiniture opzionali applicate a runtime.`,
+    "",
   ];
 
   // Guidance the init owner provides (for example a tuning file build would never read). Printed
@@ -171,8 +200,8 @@ async function runCheck({ root, configFile }) {
 
   const { warnings, suggestions } = report;
   lines.push(warnings.length === 0 && suggestions.length === 0
-    ? `    ${check()} Contrasto baseline: 0 errori, 0 avvisi, 0 suggerimenti.`
-    : `    ${warn()} Contrasto baseline: 0 errori, ${warnings.length} ${agree(warnings.length, "avviso", "avvisi")}, ${suggestions.length} ${agree(suggestions.length, "suggerimento", "suggerimenti")} ${note("(vedi dettagli su stderr)")}.`);
+    ? `    ${check()} Contrasti non misurati (stima del modello): 0 errori, 0 avvisi, 0 suggerimenti.`
+    : `    ${warn()} Contrasti non misurati (stima del modello): 0 errori, ${warnings.length} ${agree(warnings.length, "avviso", "avvisi")}, ${suggestions.length} ${agree(suggestions.length, "suggerimento", "suggerimenti")} ${note("(vedi dettagli su stderr)")}.`);
   if (tuning.activeCount > 0) {
     lines.push(`    ${warn()} Tuning runtime: ${tuning.activeCount} ${tuning.activeCount === 1 ? "override attivo" : "override attivi"} in ${file(safeText(tuning.path))} ${note("(da verificare con audit/report)")}.`);
   } else if (tuning.exists) {
@@ -211,7 +240,10 @@ function dimParenthetical(summary) {
   return match ? `${match[1]} ${note(match[2])}` : summary;
 }
 
-// Build and report share one pipeline; the exit policy and the summary come from the workflow.
+// Build and report share one pipeline; the exit policy and the verdict come from the workflow.
+// Progress lines are plain and streamed live as each real phase starts, so the terminal accompanies
+// the work without a spinner, a TUI or invented percentages. Only started phases ever reach stdout;
+// usage errors are resolved before the workflow and keep stdout empty.
 async function runWorkflow({ command, root, configFile, automation, browsers }) {
   const mode = automation ?? (command === "report" && browsers ? "required" : "auto");
   const result = await runDiagnosticWorkflow({
@@ -220,18 +252,19 @@ async function runWorkflow({ command, root, configFile, automation, browsers }) 
     command,
     automation: mode,
     browsers: browsers && browsers.length ? browsers : undefined,
+    onProgress: (phase) => console.log(`smart-colors · ${progressLabel(phase, mode)}`),
   });
 
-  // `result.production` is part of the workflow handoff (acceptDiagnosticOutput); no second
-  // analysis or I/O is performed here.
-  const production = result.command === "report" ? result.production ?? null : null;
-  const heading = result.command === "build" ? buildHeading(result) : reportHeading(result);
-
-  const lines = [`${badge()} ${heading}`, "", ...outcomeLines(result, production)];
+  const heading = result.command === "build" ? `${badge()} build` : `${badge()} report`;
+  const lines = [heading, "", ...outcomeLines(result)];
   console.log(`${lines.join("\n")}\n`);
 
-  // stderr is the raw technical channel: model warning/suggestion strings stay verbatim, then the
-  // deduplicated engine/run detail, never a repeat on stdout.
+  // stderr is the raw technical channel, shown once each: the blocking model errors (previously
+  // dropped here), the model warning/suggestion strings verbatim, then the deduplicated engine/run
+  // detail. Errors and warnings are disjoint, so nothing is duplicated across the two loops.
+  for (const error of boundedLines(result.analysis?.errors, MAX_DIAGNOSTIC_LINES, "errori")) {
+    console.error(`[smart-colors] ${error}`);
+  }
   for (const warning of result.warnings) console.warn(`[smart-colors] ${warning}`);
   for (const suggestion of result.suggestions) console.warn(`[smart-colors] Suggestion: ${suggestion}`);
   for (const detail of coverageDiagnostics(result)) console.warn(`[smart-colors] ${detail}`);
@@ -239,142 +272,191 @@ async function runWorkflow({ command, root, configFile, automation, browsers }) 
   process.exitCode = result.exitCode;
 }
 
-// esito -> problemi (grouped) -> copertura -> modello (una sola sintesi) -> due link -> azione.
-function outcomeLines(result, production) {
-  const lines = [];
-  lines.push(`  ${title("Esito")}`);
-  for (const line of esitoLines(result, production)) lines.push(`    ${line}`);
-  lines.push("", `  ${title("Problemi")}`);
-  for (const line of problemLines(result)) lines.push(`    ${line}`);
-  lines.push("", `  ${title("Copertura")}`);
-  for (const line of coverageLines(result)) lines.push(`    ${line}`);
-  lines.push("", `  ${title("Modello")}`);
-  for (const line of modelLines(result)) lines.push(`    ${line}`);
-  lines.push("", `  ${title("Link")}`);
-  for (const line of linkLines(result)) lines.push(`    ${line}`);
-  lines.push("", `  ${title("Prossimo passo")}`);
-  for (const line of nextStepLines(result)) lines.push(`    ${line}`);
-  return lines;
-}
-
-function esitoLines(result, production) {
-  const out = [];
-  if (result.command === "build") {
-    if (result.strictInvalid) {
-      const count = result.analysis.errors.length;
-      out.push(`${warn()} Contratto di contrasto non valido: ${count} ${agree(count, "errore", "errori")} nel modello. Nessun CSS scritto; i due HTML diagnostici sono pubblicati.`);
-    } else {
-      const outputs = result.writeOutcome?.outputs ?? [];
-      if (result.writeOutcome?.changed) {
-        out.push(`${check()} ${file(outputs.filter((output) => output.changed).map((output) => safeText(output.path)).join(", "))} rigenerato.`);
-      } else {
-        const paths = outputs.map((output) => safeText(output.path)).join(", ");
-        out.push(`${check()} ${file(paths)} ${outputs.length === 1 ? "è già aggiornato" : "sono già aggiornati"}.`);
-      }
-    }
-  } else {
-    out.push(`${check()} Nessun file CSS, palette, config o tuning è stato modificato.`);
-    if (result.strictInvalid) {
-      const count = result.analysis.errors.length;
-      out.push(`${warn()} Contratto di contrasto non valido: ${count} ${agree(count, "errore", "errori")} nel modello.`);
-    }
-    if (production && production.accepted === false && production.candidates.length) {
-      out.push(`${warn()} CSS assente o non aggiornato: i risultati si riferiscono a un candidato diagnostico, non alla produzione.`);
-    }
-  }
-  return out;
-}
-
-function problemLines(result) {
-  const lines = [];
-  const coverage = result.coverage;
-  if (result.problems.length) {
-    for (const problem of result.problems.slice(0, MAX_PROBLEM_LINES)) lines.push(`${warn()} ${problemLine(problem)}`);
-    if (result.problems.length > MAX_PROBLEM_LINES) lines.push(note(`…e altri ${result.problems.length - MAX_PROBLEM_LINES}; dettagli completi nel report.`));
-    lines.push(note("Sotto minimo: evita la coppia per l'uso indicato. Sotto target: minimo rispettato, manca il margine del progetto."));
-  } else if (coverage.measuredPairs === 0) {
-    // No browser measurement: surface the model once, never an "all clear" that was not measured.
-    if (result.modelProblems.length) {
-      lines.push(`${warn()} Nessuna coppia misurata nel browser: avvisi del modello (advisory), non una misura eseguita.`);
-      const model = result.modelProblems.slice(0, MAX_PROBLEM_LINES);
-      for (const problem of model) lines.push(`${note("MODELLO")} ${problemLine(problem)}`);
-      if (result.modelProblems.length > MAX_PROBLEM_LINES) lines.push(note(`…e altri ${result.modelProblems.length - MAX_PROBLEM_LINES}; dettagli completi nel report.`));
-    } else if ((coverage.launched ?? 0) > 0) {
-      lines.push(`${warn()} Verifica incompleta: nessuna coppia misurata nel browser benché un motore sia stato avviato. Non è un esito positivo.`);
-    } else {
-      lines.push(`${warn()} Nessuna coppia misurata nel browser e nessun avviso del modello nelle coppie dichiarate; non è una verifica eseguita.`);
-    }
-  } else if (!verificationComplete(result)) {
-    // Finite measurements that pass, but the coverage is partial: never a false positive verdict.
-    const missing = Number.isFinite(coverage.missingPairs) ? coverage.missingPairs : coverage.unmeasured;
-    lines.push(`${warn()} Verifica incompleta: le coppie misurate non mostrano problemi, ma la copertura è parziale (mancanti: ${missing}). Non è una certificazione.`);
-  } else {
-    lines.push(`${check()} Nessun problema nelle coppie misurate. Non è una certificazione dell'interfaccia completa.`);
-  }
-  return lines;
-}
-
-function problemLine(problem) {
-  const status = problem.status === "below-minimum" ? "SOTTO MINIMO" : "SOTTO TARGET";
-  const scheme = problem.scheme === "light" ? "chiaro" : "scuro";
-  return `${status} · ${scheme} · ${safeText(problem.foregroundToken)} su ${safeText(problem.backgroundToken)}: ${ratio(problem.ratio, [problem.minimum, problem.target])} (minimo ${ratio(problem.minimum)}, target ${ratio(problem.target)}).`;
-}
-
-// One synthesis of the model facts: counts only here, the grouped problem lines live in
-// "Problemi" and the raw warning/suggestion strings stay on stderr. No triple dump.
-function modelLines(result) {
-  const errors = result.analysis.errors.length;
-  const warnings = result.analysis.warnings.length;
-  const suggestions = result.analysis.suggestions.length;
-  const clean = errors === 0 && warnings === 0 && suggestions === 0;
-  return [clean
-    ? `${check()} Contrasto baseline: 0 errori, 0 avvisi, 0 suggerimenti.`
-    : `${warn()} Contrasto baseline: ${errors} ${agree(errors, "errore", "errori")}, ${warnings} ${agree(warnings, "avviso", "avvisi")}, ${suggestions} ${agree(suggestions, "suggerimento", "suggerimenti")} ${note("(vedi dettagli su stderr)")}.`];
-}
-
-function coverageLines(result) {
-  const coverage = result.coverage;
-  if (result.strictInvalid) {
-    const requested = result.requestedAutomation ?? {};
-    return [`Automazione non eseguita: contratto di contrasto del modello non valido (richiesta: modalità ${requested.mode ?? "n/d"}${requested.browsers ? `, browser ${requested.browsers.join(", ")}` : ""}). Gli HTML restano diagnostici.`];
-  }
-  if (coverage.status === "disabled" || coverage.mode === "off") {
-    return ["Automazione disattivata: nessuna misura browser inclusa; Playwright non è stato risolto."];
-  }
-  if (coverage.launched === 0) {
-    return zeroLaunchLines(result);
-  }
-  const engineNames = coverage.requestedEngines ?? coverage.engines.map((engine) => engine.name);
-  const engineText = coverage.engines.length
-    ? coverage.engines.map((engine) => `${safeText(engine.name)}${engine.version ? ` ${safeText(engine.version)}` : ""}${engine.launched ? "" : ` (${safeText(engine.status)})`}`).join(", ")
-    : (engineNames.length ? engineNames.map((name) => safeText(name)).join(", ") : "nessun motore");
-  const complete = verificationComplete(result);
-  const missing = Number.isFinite(coverage.missingPairs) ? coverage.missingPairs : coverage.unmeasured;
-  const counts = [
-    `Scenari attesi/eseguiti: ${coverage.expectedScenarios}/${coverage.executedScenarios}`,
-    `coppie attese/misurate: ${coverage.expectedPairs}/${coverage.measuredPairs}`,
-    `mancanti: ${missing}`,
-    `non supportate: ${coverage.unsupported}`,
-  ].join(" · ");
+// Contesto (oggetto) -> stato generazione -> stato verifica -> esito -> problemi -> link -> azione.
+function outcomeLines(result) {
   return [
-    `Automazione ${complete ? "completa negli ambienti eseguiti" : "parziale o incompleta"} · ${gridSummary(coverage, engineNames)} · motori: ${engineText}.`,
-    `${counts}.`,
+    ...subjectLines(result),
+    ...designLines(result),
+    ...generationLines(result),
+    ...verificationLines(result),
+    ...explorationLines(result),
+    esitoLine(result),
+    ...problemLines(result),
+    ...linkLines(result),
+    ...actionLines(result),
   ];
 }
 
-// Zero engines launched: name every selected engine with a brief reason, and never invent an
-// installer command (the person installs the package and the requested engines).
+// A stable, plain label per started phase. `auto` announces the optional automation check rather
+// than promising a browser verification that discovery may not deliver.
+function progressLabel(phase, mode) {
+  if (phase === "automation") return mode === "required" ? AUTOMATION_REQUIRED_LABEL : STATUS_LABELS.automation;
+  return STATUS_LABELS[phase] ?? phase;
+}
+
+// One compact labelled line per fact; the label is dimmed and padded so the values stay aligned.
+function block(label, text) {
+  return `  ${note(label.padEnd(LABEL_WIDTH))}${text}`;
+}
+
+// The effective config's roles, counted for the subject line. `focus` references an existing
+// identity rather than a separate authored colour, so it is not counted.
+function countRoles(roles = {}) {
+  const counts = new Map();
+  const bump = (role) => counts.set(role, (counts.get(role) ?? 0) + 1);
+  if (roles.canvas) bump("canvas");
+  if (roles.ink) bump("ink");
+  for (const def of Object.values(roles.identities ?? {})) bump(def?.role === "feedback" ? "feedback" : "ui");
+  for (const _def of Object.values(roles.decoratives ?? {})) bump("decorative");
+  return counts;
+}
+
+// Designer-facing subject: the effective palette/output paths and the source/role count.
+function subjectLines(result) {
+  const config = result.analysis?.config ?? {};
+  const counts = countRoles(config.roles);
+  const total = [...counts.values()].reduce((sum, count) => sum + count, 0);
+  const breakdown = ROLE_ORDER
+    .filter((role) => counts.has(role))
+    .map((role) => `${counts.get(role)} ${designerLanguage.roleLabel(role)}`)
+    .join(", ");
+  const sources = `${total} ${total === 1 ? "colore" : "colori"}${breakdown ? ` (${breakdown})` : ""}`;
+  return [
+    block("Palette", `${file(safeText(config.palette ?? "src/styles/tokens/palette.css"))} · ${sources}`),
+    block("Output", file(safeText(config.output ?? "src/styles/tokens/colors.css"))),
+  ];
+}
+
+// Brief, honest traceability of where the authored sources feed and where tuning applies. Optional
+// `analysis.design` tracing metadata is never dumped: the full controls live in the report/preview.
+function designLines(result) {
+  const output = safeText(result.analysis?.config?.output ?? "src/styles/tokens/colors.css");
+  return [block("Design", `le sorgenti della palette generano ${file(output)}; il tuning si applica nell'anteprima. Controlli completi nel report.`)];
+}
+
+// Exploratory overlaps never count toward the pass criteria or the exit code: they are only pointed
+// at (without a count) when the run exposes them, and never claimed when unavailable.
+function explorationLines(result) {
+  const explorations = result.run?.explorations;
+  const available = Array.isArray(explorations)
+    ? explorations.length > 0
+    : Boolean(explorations && typeof explorations === "object" && Object.keys(explorations).length > 0);
+  if (!available) return [];
+  return [block("Extra", "Abbinamenti esplorativi disponibili in anteprima (fuori dai criteri di esito).")];
+}
+
+// Generation status is a separate fact from the verification outcome: a successful write is never a
+// positive verification. `report` writes nothing by design and names the non-production candidate.
+function generationLines(result) {
+  if (result.command === "report") {
+    const lines = [block("Generato", "Nessun file CSS, palette, config o tuning è stato modificato.")];
+    const notice = cssNotice(cssState(result));
+    if (notice) lines.push(block("Nota", safeText(notice)));
+    return lines;
+  }
+  if (result.strictInvalid) {
+    return [block("Generato", "non eseguito: contratto non valido, nessun CSS scritto.")];
+  }
+  const outputs = result.writeOutcome?.outputs ?? [];
+  if (result.writeOutcome?.changed) {
+    const paths = outputs.filter((output) => output.changed).map((output) => safeText(output.path)).join(", ");
+    return [block("Generato", `${file(paths)} rigenerato.`)];
+  }
+  const paths = outputs.map((output) => safeText(output.path)).join(", ");
+  return [block("Generato", `${file(paths)} ${outputs.length === 1 ? "è già aggiornato" : "sono già aggiornati"}.`)];
+}
+
+// What was actually verified, with the provenance made explicit. Zero engines launched keeps its
+// honest per-engine reasons; a partial run is never reported as an executed verification.
+function verificationLines(result) {
+  if (result.strictInvalid) {
+    return [block("Verifica", "STIMA DEL MODELLO · Automazione non eseguita: contratto di contrasto del modello non valido; i due HTML diagnostici sono pubblicati.")];
+  }
+  // A partial run still has real measurements: it stays MISURATO and declares its incomplete coverage.
+  if (measurementAvailable(result)) {
+    if (verificationComplete(result)) {
+      return [block("Verifica", `MISURATO · ${gridSummary(result.coverage)} nel browser.`)];
+    }
+    const coverage = result.coverage;
+    const missing = Number.isFinite(coverage.missingPairs) ? coverage.missingPairs : coverage.unmeasured;
+    return [block("Verifica", `MISURATO · copertura incompleta: ${coverage.measuredPairs} coppie misurate, ${missing} mancanti.`)];
+  }
+  const coverage = result.coverage;
+  if (coverage.status === "disabled" || coverage.mode === "off") {
+    return [block("Verifica", "STIMA DEL MODELLO · Automazione disattivata: nessuna coppia misurata.")];
+  }
+  if ((coverage.launched ?? 0) === 0) {
+    return zeroLaunchLines(result);
+  }
+  const missing = Number.isFinite(coverage.missingPairs) ? coverage.missingPairs : coverage.unmeasured;
+  return [block("Verifica", `STIMA DEL MODELLO · verifica incompleta: copertura parziale (coppie mancanti: ${missing}).`)];
+}
+
+function esitoLine(result) {
+  const outcome = verdict(result);
+  return block("Esito", `${outcome.label} — ${outcome.detail}`);
+}
+
+// Short list: at most a few problems, always with human usage labels (token names and raw ratios
+// stay in the stderr/report detail) and always a pointer to the full set in the report.
+function problemLines(result) {
+  // A strict-invalid model is described by its blocking errors, not by the advisory superset.
+  if (result.strictInvalid) {
+    const count = result.analysis?.errors?.length ?? 0;
+    return [block("Problemi", `${count} ${count === 1 ? "errore bloccante" : "errori bloccanti"} nel modello; dettagli su stderr.`)];
+  }
+  // Availability (measuredPairs > 0) selects the measured facts; completeness only decides whether a
+  // clean result may be presented positively. A partial measured run keeps its measured problems, so
+  // a measured shortfall is never dropped in favour of an empty model list.
+  const available = measurementAvailable(result);
+  const problems = (available ? result.problems : result.modelProblems) ?? [];
+  const incomplete = available && !verificationComplete(result);
+  if (!problems.length) {
+    if (available) {
+      return [block("Problemi", incomplete
+        ? "nessuna coppia misurata sotto soglia, ma la copertura è incompleta: nessun esito positivo confermato."
+        : "nessuna coppia misurata sotto soglia.")];
+    }
+    return [block("Problemi", "nessun avviso del modello nelle coppie dichiarate.")];
+  }
+  const shown = problems.slice(0, MAX_SHOWN_PROBLEMS);
+  const header = `${problems.length} ${problems.length === 1 ? "coppia" : "coppie"} da rivedere (${provenance(result).toLowerCase()})${incomplete ? "; copertura incompleta" : ""}.`;
+  const lines = [block("Problemi", header)];
+  for (const problem of shown) lines.push(`${CONT}· ${problemText(problem)}`);
+  if (problems.length > shown.length) {
+    lines.push(`${CONT}…e altre ${problems.length - shown.length}; tutte nel report.`);
+  }
+  return lines;
+}
+
+// Human pair label + theme, the threshold-aware measured ratio, and the shortfall against the
+// distinct project target or reference minimum. Equal thresholds are shown once, never twice.
+function problemText(problem) {
+  const pair = designerLanguage.pairTitle(problem.foregroundToken, problem.backgroundToken);
+  const theme = designerLanguage.themeLabel(problem.scheme);
+  const measured = ratio(problem.ratio, [problem.minimum, problem.target]);
+  const threshold = problem.minimum === problem.target
+    ? `sotto la soglia ${ratio(problem.minimum)}`
+    : problem.status === "below-minimum"
+      ? `sotto il minimo ${ratio(problem.minimum)}`
+      : `sotto il target del progetto ${ratio(problem.target)}`;
+  return `${pair} (${theme}) — ${measured}, ${threshold}.`;
+}
+
+// Zero engines launched: name every selected engine with a brief reason. The install is the
+// project's responsibility, so no installer command is invented and no nag is shown in `auto`.
 function zeroLaunchLines(result) {
   const engines = (result.run.engines ?? []).filter((engine) => engine.launched !== true);
   const expected = expectedAbsenceReasons(result);
   const allExpected = engines.length > 0 && engines.every((engine) => expected.has(engine.reason));
+  const nativeNote = `${CONT}La verifica nativa è disponibile nell’anteprima.`;
 
-  // Expected optional absence (Playwright simply not installed): a brief stdout note, not a
-  // per-engine technical breakdown.
+  // Expected optional absence (Playwright simply not installed): a brief note, not a per-engine
+  // technical breakdown.
   if (result.mode !== "required" && allExpected) {
     return [
-      "Automazione opzionale non eseguita: Playwright non installato, misure browser non eseguite.",
-      "La verifica nativa è disponibile nell’anteprima.",
+      block("Verifica", "STIMA DEL MODELLO · Automazione opzionale non eseguita: Playwright non installato, misure browser non eseguite."),
+      nativeNote,
     ];
   }
 
@@ -383,7 +465,7 @@ function zeroLaunchLines(result) {
     ? engines.map((engine) => ({ name: engine.name, phase: engine.phase, cause: causes.get(engine.reason) ?? null }))
     : (result.coverage.requestedEngines ?? []).map((name) => ({ name, phase: null, cause: null }));
 
-  const lines = ["Automazione non eseguita: nessuno dei motori richiesti è stato avviato."];
+  const lines = [block("Verifica", "STIMA DEL MODELLO · nessuno dei motori richiesti è stato avviato.")];
   const groups = new Map();
   for (const engine of selected) {
     const brief = briefEngineReason(engine);
@@ -391,13 +473,13 @@ function zeroLaunchLines(result) {
     names.push(safeText(engine.name));
     groups.set(brief, names);
   }
-  for (const [brief, names] of groups) lines.push(`motori ${names.join(", ")}: ${brief}.`);
+  for (const [brief, names] of groups) lines.push(`${CONT}motori ${names.join(", ")}: ${brief}.`);
 
   if (result.mode === "required") {
-    lines.push("Azione: verifica l’installazione di Playwright e dei motori richiesti nel progetto (pacchetto e binari); il progetto gestisce l’installazione.");
-    lines.push("Nel frattempo apri l’anteprima generata: la verifica nativa misura i byte incorporati senza Playwright.");
+    lines.push(`${CONT}Azione: verifica l’installazione di Playwright e dei motori richiesti nel progetto (pacchetto e binari); il progetto gestisce l’installazione.`);
+    lines.push(`${CONT}Nel frattempo apri l’anteprima generata: la verifica nativa misura i byte incorporati senza Playwright.`);
   } else {
-    lines.push("La verifica nativa è disponibile nell’anteprima.");
+    lines.push(nativeNote);
   }
   return lines;
 }
@@ -447,9 +529,10 @@ function causeByReason(run) {
   return map;
 }
 
-function gridSummary(coverage, engineNames) {
-  const launched = coverage.engines.filter((engine) => engine.launched).length;
-  return `${launched} di ${engineNames.length} motori eseguiti`;
+function gridSummary(coverage) {
+  const launched = (coverage.engines ?? []).filter((engine) => engine.launched).length;
+  const expected = (coverage.requestedEngines ?? coverage.engines ?? []).length;
+  return `${launched} di ${expected} motori eseguiti`;
 }
 
 // Raw, deduplicated engine/run detail. Technical cause preserved; the install hint is only
@@ -512,25 +595,30 @@ function linkLines(result) {
   const previewUrl = pathToFileURL(result.publication.previewPath).href;
   const reportUrl = pathToFileURL(result.publication.reportPath).href;
   return [
-    `${arrow()} Anteprima: ${file(escapeControl(previewUrl))}`,
-    `${arrow()} Report:    ${file(escapeControl(reportUrl))}`,
+    block("Anteprima", file(escapeControl(previewUrl))),
+    block("Report", file(escapeControl(reportUrl))),
   ];
 }
 
-function nextStepLines(result) {
-  const lines = [`${arrow()} Apri l'anteprima nel browser.`];
-  // The regenerate command is a useful secondary step after an edit; `report` does not
-  // recycle an identical `report` invocation as its only next action.
-  if (result.command === "build") {
-    lines.push(`${note("Dopo una modifica rigenera:")} ${nextCommand(result)}`);
+// Exactly one next action. A strict-invalid model points at the palette; `build` points at the
+// regeneration command (with the effective root/config); `report` opens the preview without
+// recycling an identical report invocation.
+// The next action opens the preview first (the single primary step). Regeneration is a separate,
+// conditional secondary step: the `build` command (with root/config), never a `report`→`report`
+// tautology, and only when the generated CSS actually needs to be (re)written.
+function actionLines(result) {
+  const lines = [block("Fai ora", "Apri l'anteprima per vedere i campioni e verificare nel browser.")];
+  if (cssNeedsBuild(result)) {
+    lines.push(`${CONT}Quando il CSS è da (ri)generare: ${buildCommandFor(result.root, result.configFile)}`);
   }
   return lines;
 }
 
-function nextCommand(result) {
-  const parts = ["pnpm", "exec", "smart-colors", "report", "--root", shellQuote(commandText(result.root))];
-  if (result.configFile && result.configFile !== DEFAULT_CONFIG_FILE) parts.push("--config", shellQuote(commandText(result.configFile)));
-  return escapeControl(parts.join(" "));
+function cssNeedsBuild(result) {
+  if (result.strictInvalid) return true;
+  if (result.command !== "report") return false;
+  const shape = cssState(result).shape;
+  return shape === "stale" || shape === "absent" || shape === "empty";
 }
 
 function shellQuote(value) {
@@ -554,6 +642,14 @@ function escapeControl(value) {
 function safeText(value, max = MAX_CONSOLE_TEXT) {
   const escaped = escapeControl(value);
   return escaped.length > max ? `${escaped.slice(0, Math.max(0, max - 1))}…` : escaped;
+}
+
+// Bound a technical line list on stderr while preserving the first lines verbatim and naming the
+// remainder, so a hostile or huge error set can never become an unbounded wall.
+function boundedLines(lines, max, noun) {
+  const list = lines ?? [];
+  if (list.length <= max) return list;
+  return [...list.slice(0, max), `…e altri ${list.length - max} ${noun} (dettagli completi nel report).`];
 }
 
 // Command operands keep their visible characters (quoted by shellQuote) but lose control chars.

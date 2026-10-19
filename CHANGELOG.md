@@ -7,6 +7,215 @@ Releases are **git tags** on [`github.com/SMartSlash/astro-smart-colors`](https:
 pnpm add -D github:SMartSlash/astro-smart-colors#v0.4.0
 ```
 
+## Unreleased
+
+An **additive designer-contract** release in the development sources: it adds the
+designer provenance report, the public per-token tuning controls, the surface-mix
+knobs, the all-role `dark-blend` model and the optional exploratory-overlap
+channel. Existing token names, legacy macros and the `--color-tune-<id>-dark` /
+`--color-tune-<id>-dark-mix` escape hatches keep working; no existing generated
+value is renamed. The console and preview presentation changes below are part of
+the same unreleased sources. The version stays `0.4.0`, nothing is released,
+tagged or published, and these entries describe the in-development sources, not
+the `v0.4.0` tag.
+
+### Added
+
+- The uniform public per-token controls `--color-tune-<public-name>-light|dark`.
+  Every emitted public `--color-*` token reads its own pair: neutrals (`bg`,
+  `surface`, `text`, `text-muted`, `border-subtle`, `border-strong`,
+  `focus-ring`), controls, identity base and `ink`, the nine family variants
+  (`surface`, `surface-strong`, `border`, `border-strong`, `solid`,
+  `solid-hover`, `solid-text`, `text`, `text-strong`), decoratives and
+  `<decorative>-ink`, and enabled scale steps and hue variants. The generated
+  value stays the literal fallback (contrast already resolved at build time),
+  while the override replaces it at runtime and is **not** revalidated by
+  `smart-colors check`: re-measure the affected pairs after an override. A full
+  color wins over a recipe (including a surface mix knob); light and dark stay
+  independent.
+- Per-identity surface mix knobs
+  `--color-tune-<identity>-surface[-strong]-<theme>-mix`, with source-percentage
+  defaults `10%/18%` for `surface` and `18%/28%` for `surface-strong`
+  (light/dark). A full `--color-tune-<identity>-surface[-strong]-<theme>` color
+  wins over the mix knob, which wins over the generated default.
+- `dark-blend: 0…100` is accepted on all five palette roles. It is a bounded
+  white wash (`80` → 77.6% source + 22.4% white; `100` → 72% source + 28%
+  white), never a darkening toward black. Omitting it keeps the role's automatic
+  derivation and is not `0`; WCAG does not impose a 10/90 mix.
+- `session.design` metadata: `version: 1`, palette `sources`, derivation
+  `recipes` and public `tokens` with `sources`, `recipe`, `usage` and
+  light/dark `controls`. The static report traces source → recipe → use → control
+  through the shared `createDesignTools().describeToken()` helper and never
+  re-derives a recipe or a contrast.
+- Additive `session.css` provenance: `generated` (expected model), `baseline`
+  (actual captured output when present, even empty, otherwise the generated
+  candidate), `source: "output" | "generated-candidate"`,
+  `status: "current" | "stale" | "absent" | "empty"`, `production` and
+  generated/baseline digests. The report writes no CSS; a stale real file is not
+  relabeled as a candidate, and a candidate is not presented as an on-disk
+  measurement.
+- Optional `automation.explorations` and `explorationCoverage`
+  (`expected`, `measured`, `unmeasured`, `omittedFamilies`, `complete`) as a
+  separate exploratory-overlap channel. The static report shows the top scoped
+  pairings with ratio/minimum/target, ordered by usage band (normal text at
+  least 4.5:1, large text/borders/icons 3:1–4.5:1, avoid below 3:1), partial
+  missing units and omitted families (schema cap: 24 families); the rest stays in
+  a disclosure. The channel never changes verified-pair coverage, applies no
+  autofix and does not substitute an accessibility audit.
+- The starter `colors-tuning.css` is now a guided, fully commented panel:
+  legacy macros, the uniform per-token light/dark overrides for every category,
+  surface mixes, dark mixing plus the foundation dark controls
+  (`--color-tune-bg-dark` / `--color-tune-surface-dark`) and elevation. It
+  documents that the generated value is the fallback and the override is a
+  runtime change that must be re-measured. It never activates arbitrary palette
+  overrides or `--_color-*` internals.
+- The guided contrast workbench in the preview. The **source palette comes first**: the
+  exact captured `@property` declaration, the raw authored source value, the role and
+  `dark-blend`, with the captured palette path and SHA-256. The **declared** role is shown
+  first and the **effective** configured role only when it differs. The full source CSS is
+  selectable in a textarea and downloadable **manually** as `palette.css`; opening the
+  page writes nothing. The workbench follows it.
+- Real consumer specimens instead of painted RGB: every visible sample and every
+  measurement is a `var(--color-*)` consumer inside an isolated `iframe srcdoc`
+  (`sandbox="allow-same-origin"`, no scripts in the frame) that reads the embedded
+  baseline (and, when present, the saved tuning and the temporary draft — see
+  `src/contrast-workbench-runtime.mjs` and `src/contrast-workbench-view.mjs`). No
+  resolved RGB color is painted in place of the proof.
+- Three comparisons only: **temi** (`themes`, light vs dark), **baseline contro tuned**
+  (`tuning`) and **tuned contro draft** (`draft`). Each side reports the applied
+  theme/variant, the byte provenance (baseline, `output` vs generated candidate, the
+  `stale`/`absent`/`empty` states), the measured status and the minimum/target. The theme and
+  comparison radios and the two frame headings are projected from the runtime's own selection
+  and measured views, so the page cannot show a theme or variant other than the one measured.
+- Editable public tuning controls, scoped to the selected pair and theme. The form edits only
+  the public controls the design metadata declares for the **currently selected pair and
+  theme**: the full-color `--color-tune-<public-name>-light|dark` override and the surface-mix
+  percentage `--color-tune-<identity>-surface[-strong]-<theme>-mix`. They are temporary in-memory
+  drafts: applying them never writes the palette, the config, the tuning file or `colors.css`.
+  The seven known macro knobs (`--color-tune-light-warmth`, `--color-tune-dark-warmth`,
+  `--color-tune-dark-bg-mix`, `--color-tune-dark-surface-mix`, `--color-tune-dark-text-mix`,
+  `--color-tune-dark-muted-mix`, `--color-tune-surface-lightness-shift`) remain a
+  **runtime-only** API: `setOverride()`/`reset()` accept them, but the view does not render a
+  global macro editor.
+- Editing shows the draft. `setOverride()`, `reset()` and `applySuggestion()` switch the
+  displayed comparison to `draft` before the next measurement, so a successful public edit is
+  always visible; error paths never switch. A correction search that runs while a draft already
+  exists switches to the real draft view and awaits its frames before computing the candidate,
+  so a candidate is never verified against the saved-only view and then silently merged with a
+  hidden override.
+- Individual reset (**Azzera i controlli della coppia**), full reset (**Azzera tutto il
+  tuning** / **Ripristina**) and **Esporta CSS pubblico**. The export is the `:root { … }`
+  block of the temporary draft declarations, published in a readonly textarea with a
+  manual `colors-tuning.css` download. The export is recomputed from the current draft whenever
+  it changes, the download link is hidden while there is no draft, and the copy action recomputes
+  the draft and refuses to copy an empty export. The copy uses the clipboard when the browser
+  permits it and otherwise selects the text for a manual Cmd/Ctrl+C. Every download stays
+  a manual action; no file is written by the page.
+- A read-only correction search per side (**Suggerisci primo piano** / **Suggerisci
+  sfondo**). It is limited to the **minimum lightness** that satisfies the declared
+  thresholds on the 0..1 grid (step 0.0001), keeping chroma and hue fixed — not a global
+  perceptual nearest match and not a ΔE minimization. A candidate is verified in a real
+  CSS trial across the known pairs in **both themes** (the same pure core and DOM
+  collector as automation), including a regression check. The verified proposal is shown
+  **before** it is applied: the exact proposed `oklch(...)`, the before/after ratios against
+  the relevant minimum and target, the ΔL and a gamut note, plus two real `var(--color-*)`
+  consumer frames — **Attuale** and **Proposta** — rendered by the runtime at the same size as
+  the trial and failing closed if they do not reproduce the verified ratios. The draft and the
+  export are untouched until **Prova proposta**; the proposal is removed by any draft mutation,
+  a system preference change, or a new search. The candidate edits one theme's control, so the
+  targeted theme changes while the opposite theme is still re-measured as collateral and is not
+  claimed to change. A discarded or unverifiable candidate is disclosed, never applied.
+- `mount()` gains two **additive, optional** proposal containers (`proposalBefore`,
+  `proposalAfter`). When both are supplied the verified suggestion is rendered into them as a
+  real base/candidate comparison; when omitted the controller behaves exactly as before and
+  `state().suggestion.preview` stays `null`. The `preview` metadata is presentation-only and
+  never enters the serialized draft or the exported CSS.
+- Additive `session.paletteSource` object (exposed in the inert payload as
+  `payload.paletteSource`): `{ css, path, sha256, sources: [{ token, value, role, darkBlend,
+  declaration }] }`, where `declaration` is the exact captured `@property` block (or `null` in
+  legacy mode) and `role` is the **declared** role. It is strictly additive: the legacy
+  `session.palette` **array** (the resolved gallery the static report consumes) keeps its shape
+  and keeps driving the static report, and `paletteSource` does not replace it. The **effective**
+  configured role stays separate in `session.roles.identities[]` (keyed by `paletteName`) and is
+  shown only when it differs from the declared one.
+
+### Changed
+
+- The `build`/`report` console summary is rebuilt as one compact labelled line per
+  fact: **Palette** (colors and roles), **Output**, **Generato**, **Verifica**,
+  **Esito**, **Problemi**, **Anteprima**, **Report** and **Fai ora**. Generation is
+  shown as a fact separate from verification, so a successful write is never read as
+  a positive verification.
+- Live, plain progress lines are streamed as each real phase starts
+  (`smart-colors · analisi palette`, `generazione token`,
+  `controllo automazione opzionale` — `verifica automatizzata richiesta` in
+  `required` — and `anteprima e report`) — no spinner, no TUI and no invented
+  percentages. Only started phases reach stdout; a usage failure keeps stdout empty.
+- Provenance and completeness are separate facts. The **Verifica** line says
+  `MISURATO` for any real browser measurement — including a partial run, whose
+  incomplete coverage is stated on the same line — and `STIMA DEL MODELLO` only when
+  no pair was measured. A partial measured run keeps its measured problems instead
+  of falling back to the model list.
+- The single **Esito** verdict is `DA RIVEDERE` for any measured problem — below
+  minimum **or** below target — `OK` only for a complete, clean measurement,
+  `NON VERIFICATO` for a measured-but-partial clean run or when no engine started,
+  and `ERRORE` for a strict-invalid model.
+- **Fai ora** opens the preview first; regenerating the CSS is a separate,
+  conditional secondary step shown only when the output actually needs a build.
+- Problems use human usage names and the theme (a shared designer lexicon), capped
+  at five per run; token names and raw ratios stay in the stderr detail and in the
+  report. More model warnings still never certify a palette, and the project target
+  stays distinct from the reference minimum.
+- `init` prints a short **Come funziona** block naming the three files a designer
+  touches: the palette (your source), the generated output (do not edit by hand)
+  and the tuning file (optional runtime refinement).
+- `check` labels its model result as **Contrasti non misurati (stima del modello)**.
+- Blocking model errors are now also echoed once on stderr for `build`/`report`,
+  bounded and deduplicated with the rest of the technical detail.
+- The preview is re-organised **palette-first**: the source palette and roles, then the
+  guided contrast workbench on the real `var(--color-*)` frames, then the technical archive
+  of resolved samples, then the extended local browser verification (kept as a secondary
+  archive), then a **Correzioni e problemi** section only when there is something to correct
+  or review, and finally the technical data and the automation evidence. The workbench is
+  the main path; in the archive samples the first family is open and the rest are native
+  `<details>`, and the model samples are an **estimate**, never a verification.
+- The local verification section leads with the measured variant/theme combinations,
+  then the problems (up to eight cards by default, the rest behind a disclosure) and
+  keeps the raw per-pair table in a disclosure. Baseline and tuned runs stay
+  separate, both themes are measured under the **active** `prefers-color-scheme`
+  preference, and the other preference is declared unmeasured and explicitly **not**
+  a second theme.
+- The full report documents the evidence it contains per channel (model estimate and
+  automation in the executed environments), states that no browser-local
+  measurement is included, and keeps `script-src 'none'` with no script.
+- Both pages keep the read-only contract: the embedded runtime measures only the
+  in-memory DOM from the embedded CSS bytes, writes no project file, and both
+  artifacts stay snapshots to regenerate after any palette, config or tuning edit.
+- The static report adds a designer-provenance section, the generated-vs-baseline
+  CSS contract and the exploratory-overlap channel; it still keeps
+  `script-src 'none'`, emits zero scripts or iframes and recalculates no contrast.
+  Token metadata comes from the shared registry helper instead of copied rules.
+- The palette and tuning documentation now follows the full designer chain
+  **source → recipe → use → control → check actual**, including the all-role
+  `dark-blend` model and the legacy/new tuning precedence. Regenerate the CSS and
+  re-measure after any tuning change.
+- Migration: the new per-token and surface overrides change the emitted
+  declarations, so verifying the actual new CSS requires regenerating
+  `colors.css`. Byte parity with a pre-upgrade output is **not** preserved;
+  regenerate first, then re-measure with `report`/`audit`.
+- The preview artifact budget is **768 KiB (786432 bytes)**, replacing the former
+  **384 KiB (393216 bytes)**. The page carries the full palette source and its manual
+  download, the serialized interactive runtimes and the view factory, the measurement
+  frames, and the comparison/correction metadata. Current measurements stay around 675 KiB,
+  within the budget, and are reported as current values, not a guarantee.
+- The guided workbench is explicitly **not an accessibility audit** and **not a full
+  component catalog or an APG pattern gallery**: the specimen is a small demonstration
+  surface, the bench measures declared opaque token pairs only, it does not emulate the OS
+  color preference or `forced-colors`, and it fails closed on unsupported resources
+  (`@import`/`url()`), alpha and gradients. A palette/config/tuning edit still requires
+  regenerating `colors.css` and re-measuring before any earlier snapshot is treated as
+  current.
+
 ## 0.4.0 — 2026-10-18
 
 A **minor** bump on 0.x, following the same policy as 0.3.0: before 1.0, a new

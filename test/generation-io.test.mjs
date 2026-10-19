@@ -291,3 +291,27 @@ test("a palette path that is a directory stays an unambiguous read error, not a 
     return true;
   });
 });
+
+test("the internal analysis exposes a JSON-only design payload shared with the generator", async (t) => {
+  const root = await createProject(t);
+  const analysis = await analyzeColorTokens({ root });
+
+  assert.ok(analysis.design, "the analysis must expose the design metadata");
+  const payload = JSON.stringify(analysis.design);
+  assert.doesNotMatch(payload, /function/i, "the design payload must not carry callables");
+
+  const design = JSON.parse(payload);
+  assert.equal(design.version, 1);
+  // Every generated public family token has a binding that references a shared recipe.
+  assert.equal(design.tokens["--color-primary-surface"].recipe, "surface");
+  assert.equal(design.tokens["--color-status-text"].recipe, "text");
+  assert.equal(design.tokens["--color-tertiary"].recipe, "decorative");
+  for (const binding of Object.values(design.tokens)) {
+    assert.ok(binding.recipe == null || Object.hasOwn(design.recipes, binding.recipe), `unknown recipe ${binding.recipe}`);
+  }
+  // Sources are palette intents with a dark-mix provenance, not paint copies.
+  assert.deepEqual(design.sources.map((source) => source.name).sort(), ["canvas", "ink", "primary", "secondary", "status", "tertiary"]);
+  for (const source of design.sources) {
+    assert.deepEqual(Object.keys(source).sort(), ["darkBlend", "darkMix", "name", "role", "token"]);
+  }
+});

@@ -6,6 +6,7 @@ import path from "node:path";
 import { fitToSrgb, mixOklch, oklch } from "../src/color-math.mjs";
 import { generateColorTokens } from "../src/generate-colors.mjs";
 import { parseOklch } from "../src/parse-palette.mjs";
+import { getDeclarations, resolveThemeColor } from "./css-resolver.mjs";
 
 const OUTPUT_PATH = "src/styles/tokens/colors.css";
 const EMPTY_OUTPUT = ":root {}\n";
@@ -197,10 +198,10 @@ test("interleaved palette roles become contiguous families without sorting withi
   }
 });
 
-test("aliases keep the family suffix order and reference their targets instead of copying values", async (t) => {
+test("aliases keep the family suffix order and resolve to their target until overridden", async (t) => {
   const root = await createProject(t);
   const { css } = await generate(root, { aliases: ALIASES });
-  const tokens = values(css);
+  const declarations = getDeclarations(css);
   const expectedNames = [];
   for (const [alias, target] of Object.entries(ALIASES)) {
     const aliasNames = alias === "ornament" ? [`--color-${alias}`, `--color-${alias}-ink`] : familyNames(alias);
@@ -208,8 +209,17 @@ test("aliases keep the family suffix order and reference their targets instead o
     expectedNames.push(...aliasNames);
     assertContiguous(css, aliasNames);
     for (const [index, name] of aliasNames.entries()) {
-      assert.equal(value(tokens, name), `var(${targetNames[index]})`);
-      assert.ok(tokens.has(targetNames[index]), `Alias ${name} must reference a declared target.`);
+      const targetToken = targetNames[index];
+      assert.ok(declarations.has(targetToken), `Alias ${name} must reference a declared target.`);
+      // The alias maps to its target: identical resolved value per theme...
+      for (const scheme of ["light", "dark"]) {
+        assert.deepEqual(resolveThemeColor(declarations, name, scheme), resolveThemeColor(declarations, targetToken, scheme), `${name} ${scheme} must map to ${targetToken}`);
+      }
+      // ...and keeps its own per-theme override on top of the mapping.
+      const withOverride = new Map(declarations);
+      withOverride.set(`--color-tune-${name.slice("--color-".length)}-dark`, "oklch(0.2 0.05 300)");
+      assert.deepEqual(resolveThemeColor(withOverride, name, "dark"), { l: 0.2, c: 0.05, h: 300 }, `${name} dark override`);
+      assert.deepEqual(resolveThemeColor(withOverride, targetToken, "dark"), resolveThemeColor(declarations, targetToken, "dark"), `${targetToken} must be untouched`);
     }
   }
   assert.deepEqual(sectionDeclarations(css, "Aliases").map((entry) => entry.name), expectedNames);
@@ -267,15 +277,21 @@ for (const mode of ["relative", "static"]) {
     }
     assert.deepEqual(sectionDeclarations(enabled.css, "Optional numeric tonal steps").map((entry) => entry.name),
       ["--color-zeta-100", "--color-zeta-500", "--color-zeta-900"]);
-    assert.equal(value(tokens, "--color-zeta-500"), `light-dark(${oklch(fitToSrgb(light))}, ${oklch(fitToSrgb(dark))})`);
+    assert.equal(value(tokens, "--color-zeta-500"), `light-dark(var(--color-tune-zeta-500-light, ${oklch(fitToSrgb(light))}), var(--color-tune-zeta-500-dark, ${oklch(fitToSrgb(dark))}))`);
     for (const step of [100, 500, 900]) {
-      assert.match(value(tokens, `--color-zeta-${step}`), /^light-dark\(oklch\([^()]+\), oklch\([^()]+\)\)$/);
+      assert.match(value(tokens, `--color-zeta-${step}`), /^light-dark\(var\(--color-tune-zeta-\d+-light, oklch\([^()]+\)\), var\(--color-tune-zeta-\d+-dark, oklch\([^()]+\)\)\)$/);
     }
     // Hue distance wraps at 360deg: 2deg (-30) is nearer 240deg than 62deg (+30).
     for (const [suffix, shift] of [["warm", 30], ["cool", -30]]) {
       assert.equal(value(tokens, `--color-zeta-${suffix}`),
-        `light-dark(${oklch(fitToSrgb({ ...light, h: light.h + shift }))}, ${oklch(fitToSrgb({ ...dark, h: dark.h + shift }))})`);
+        `light-dark(var(--color-tune-zeta-${suffix}-light, ${oklch(fitToSrgb({ ...light, h: light.h + shift }))}), var(--color-tune-zeta-${suffix}-dark, ${oklch(fitToSrgb({ ...dark, h: dark.h + shift }))}))`);
     }
+    // A per-theme override on a scale step and a hue variant resolves as declared.
+    const advancedTuned = getDeclarations(enabled.css);
+    advancedTuned.set("--color-tune-zeta-500-dark", "oklch(0.2 0.05 300)");
+    advancedTuned.set("--color-tune-zeta-warm-light", "oklch(0.4 0.06 200)");
+    assert.deepEqual(resolveThemeColor(advancedTuned, "--color-zeta-500", "dark"), { l: 0.2, c: 0.05, h: 300 });
+    assert.deepEqual(resolveThemeColor(advancedTuned, "--color-zeta-warm", "light"), { l: 0.4, c: 0.06, h: 200 });
     assert.deepEqual(sectionDeclarations(enabled.css, "Hue variants").map((entry) => entry.name),
       ["--color-zeta-warm", "--color-zeta-cool"]);
     for (const [name, source] of Object.entries(LOGO_SOURCES)) {

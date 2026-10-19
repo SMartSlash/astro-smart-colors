@@ -7,6 +7,7 @@
  * no real browser, no network and no project file outside a tmp fixture is touched.
  */
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -18,6 +19,7 @@ import { generateColorTokens } from "../src/generate-colors.mjs";
 import { createVerificationCore } from "../src/verification-core.mjs";
 
 const core = createVerificationCore();
+const sha256 = (value) => createHash("sha256").update(value, "utf8").digest("hex");
 const PREFERENCES = ["light", "dark"];
 const VARIANTS = ["baseline", "tuned"];
 const THEMES = ["light", "dark"];
@@ -385,6 +387,63 @@ test("a config proposal verified with the same collector is published, and a non
   assert.equal(await readFile(path.join(root, PALETTE_PATH), "utf8"), PALETTE);
 });
 
+test("report measures the actual on-disk output and never substitutes the generated candidate", async (t) => {
+  const root = await fixture(t);
+  const FOREIGN = ":root { color-scheme: light dark; --color-bg: light-dark(rgb(7, 8, 9), rgb(10, 11, 12)); }\n";
+  await writeFile(path.join(root, OUTPUT_PATH), FOREIGN);
+  const { contract } = await resolved(root);
+  let seen = null;
+  const provider = createFakeProvider({ reportFor: (_engine, preference, payload) => { seen = payload; return runtimeReport(contract, preference); } });
+
+  const result = await runDiagnosticWorkflow({ root, command: "report", automation: "required", browsers: ["chromium"], provider });
+
+  assert.equal(result.session.css.source, "output");
+  assert.equal(result.session.css.status, "stale");
+  assert.equal(result.session.css.production, false);
+  assert.equal(result.session.css.baseline, FOREIGN);
+  assert.notEqual(result.session.css.baseline, result.session.css.generated);
+  assert.equal(result.session.css.digest.baseline, sha256(FOREIGN));
+  assert.ok(seen, "the browser payload must have been captured");
+  assert.equal(seen.css.baseline, FOREIGN, "the payload must carry the actual stale bytes");
+  assert.equal(seen.css.source, "output");
+  assert.equal(seen.css.status, "stale");
+  assert.equal(seen.css.production, false);
+  assert.equal(Object.hasOwn(seen.css, "generated"), false, "the runtime payload never embeds the generated CSS twice");
+  assert.equal(await readFile(path.join(root, OUTPUT_PATH), "utf8"), FOREIGN, "report never writes CSS");
+});
+
+test("build measures the freshly written output, not the pre-write capture", async (t) => {
+  const root = await fixture(t);
+  await writeFile(path.join(root, OUTPUT_PATH), "/* stale foreign output */\n");
+  const { analysis, contract } = await resolved(root);
+  let seen = null;
+  const provider = createFakeProvider({ reportFor: (_engine, preference, payload) => { seen = payload; return runtimeReport(contract, preference); } });
+
+  const result = await runDiagnosticWorkflow({ root, command: "build", automation: "required", browsers: ["chromium"], provider });
+
+  assert.equal(result.writeOutcome.css, analysis.css);
+  assert.equal(result.session.css.baseline, analysis.css, "build measures the new bytes");
+  assert.equal(result.session.css.status, "current");
+  assert.equal(result.session.css.source, "output");
+  assert.equal(result.session.css.production, true);
+  assert.equal(result.session.css.digest.baseline, result.session.css.digest.generated);
+  assert.ok(seen && seen.css.baseline === analysis.css, "the payload baseline is the written output");
+  assert.equal(await readFile(path.join(root, OUTPUT_PATH), "utf8"), analysis.css);
+});
+
+test("a stale actual baseline verifies no proposal and says why", async (t) => {
+  const root = await fixture(t, { tuning: WORKFLOW_TUNING });
+  const { contract } = await resolved(root);
+  const failingPairId = surfaceTextPair(contract).id;
+  await writeFile(path.join(root, OUTPUT_PATH), ":root { color-scheme: light dark; --color-bg: light-dark(rgb(1, 1, 1), rgb(2, 2, 2)); }\n");
+  const provider = createFakeProvider({ reportFor: (_engine, preference) => runtimeReport(contract, preference, { failingPairId }) });
+
+  const result = await runDiagnosticWorkflow({ root, command: "report", automation: "required", browsers: ["chromium"], provider });
+
+  assert.equal(result.proposals.length, 0, "no proposal on a divergent actual baseline");
+  assert.ok(result.rejectedSources.some((entry) => entry.id === "baseline" && /actual differente/.test(entry.reason)), JSON.stringify(result.rejectedSources));
+});
+
 test("a strict-invalid report with an explicit browser list still writes fresh HTML, imports no PW, exit 1", async (t) => {
   const root = await fixture(t, { palette: UNREACHABLE_PALETTE });
   await writeFile(path.join(root, "smart-colors.config.mjs"), "export default { contrast: { text: 21, maxIdentity: 21 } };\n");
@@ -532,4 +591,49 @@ test("proposal trials share the workflow budget and never make the current audit
   assert.equal(result.proposals.length, 0);
   assert.ok(result.rejectedSources.length >= 1, "the unverified proposal is declared, not silently dropped");
   assert.ok(result.rejectedSources.some((entry) => /budget|incompleta/.test(entry.reason)));
+});
+
+// ---------------------------------------------------------------------------
+// Progress phases: presentation-only, emitted only for real phases, never altering the result.
+// ---------------------------------------------------------------------------
+
+test("progress phases follow the executed phases and a throwing callback never alters the result", async (t) => {
+  const root = await fixture(t);
+  const contract = await resolvedContract(root);
+
+  // build off: analysis -> generation -> publication (no automation requested).
+  const buildOff = [];
+  const built = await runDiagnosticWorkflow({ root, command: "build", automation: "off", provider: createFakeProvider(), onProgress: (phase) => buildOff.push(phase) });
+  assert.deepEqual(buildOff, ["analysis", "generation", "publication"]);
+  assert.equal(built.exitCode, 0);
+
+  // report off: no generation phase because no CSS write is attempted.
+  const reportOff = [];
+  await runDiagnosticWorkflow({ root, command: "report", automation: "off", provider: createFakeProvider(), onProgress: (phase) => reportOff.push(phase) });
+  assert.deepEqual(reportOff, ["analysis", "publication"]);
+
+  // build auto with an unavailable environment: automation is requested, so its phase is emitted.
+  const buildAuto = [];
+  const unavailable = createFakeProvider({ open: { ok: false, phase: "discovery", cause: "playwright-not-found", message: "assente" } });
+  await runDiagnosticWorkflow({ root, command: "build", automation: "auto", provider: unavailable, onProgress: (phase) => buildAuto.push(phase) });
+  assert.deepEqual(buildAuto, ["analysis", "generation", "automation", "publication"]);
+
+  // report required with a complete run: automation runs, no generation.
+  const reportRequired = [];
+  const complete = createFakeProvider({ reportFor: (_engine, preference) => runtimeReport(contract, preference) });
+  await runDiagnosticWorkflow({ root, command: "report", automation: "required", browsers: ["chromium"], provider: complete, onProgress: (phase) => reportRequired.push(phase) });
+  assert.deepEqual(reportRequired, ["analysis", "automation", "publication"]);
+
+  // A strict-invalid model disables both the write and automation: only analysis and publication.
+  const invalid = await fixture(t, { palette: UNREACHABLE_PALETTE });
+  await writeFile(path.join(invalid, "smart-colors.config.mjs"), "export default { contrast: { text: 21, maxIdentity: 21 } };\n");
+  const invalidPhases = [];
+  const invalidResult = await runDiagnosticWorkflow({ root: invalid, command: "build", automation: "off", provider: createFakeProvider(), onProgress: (phase) => invalidPhases.push(phase) });
+  assert.equal(invalidResult.strictInvalid, true);
+  assert.deepEqual(invalidPhases, ["analysis", "publication"]);
+
+  // A throwing callback is swallowed: the result and the exit policy are untouched.
+  const guarded = await runDiagnosticWorkflow({ root, command: "build", automation: "off", provider: createFakeProvider(), onProgress: () => { throw new Error("presentation boom"); } });
+  assert.equal(guarded.exitCode, 0);
+  assert.equal(typeof guarded.publication.previewPath, "string");
 });

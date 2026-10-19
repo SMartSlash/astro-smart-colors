@@ -11,8 +11,24 @@ import { validateSmartColorsInput } from "./validate-config.mjs";
 import { validateOutputPaths } from "./output-paths.mjs";
 import { bestOnSolid, chooseForeground } from "./foreground-solver.mjs";
 import { contrastDiagnostic, diagnosticsRegress } from "./contrast-diagnostics.mjs";
+import { createDesignTools } from "./design-recipes.mjs";
 
-const MAX_DARK_BLEND_WHITE_RATIO = 0.28;
+// The shared recipe/knob registry is the single origin of the surface source
+// quotas and of the bounded dark-blend white cap. The generator, the CSS
+// formatter and the `analysis.design` metadata all read this same factory.
+const designTools = createDesignTools();
+const BLEND_WHITE = { l: 1, c: 0, h: null };
+
+// Explicit `dark-blend` on a non-functional role uses the same rule as an
+// identity: keep `sourcePercent` of the authored source and mix in the bounded
+// white. Omitting the descriptor never reaches this helper, so the role default
+// (adaptive for identities, the configured dark for canvas/ink/decorative) is
+// preserved exactly.
+function explicitDarkVariant(sourceColor, blend, relativeDark = true) {
+  const explicit = designTools.darkBlendMix(blend);
+  const mixed = mixOklch(sourceColor, BLEND_WHITE, explicit.sourcePercent / 100);
+  return relativeDark ? mixed : serializedColor(fitToSrgb(mixed));
+}
 
 // Internal inspection entry point, deliberately not a separate package export.
 // Input/I/O errors throw; contrast errors remain inspectable and never write CSS.
@@ -69,6 +85,7 @@ async function inspectColorTokens(options, strict, paletteSnapshot) {
     authoredTokens: parsedPalette.authoredTokens,
     css: formatColorsCss(model, mergedConfig),
     motionCss: mergedConfig.motion.enabled ? formatColorsMotionCss(model) : null,
+    design: model.design,
     diagnostics: model.diagnostics,
     proposals: advice.proposals,
     suggestions: advice.suggestions,
@@ -258,16 +275,24 @@ function buildColorModel(palette, config, annotatedDarkBlends = {}) {
   const darkOnColorContrast = Math.min(maxIdentityContrast, minOnColorContrast * darkRichness);
   const { derivation: deriv } = config;
 
-  const bgLight = serializedColor(fitToSrgb(palette[tokenKey(config.roles.canvas)]));
-  const inkSource = fitToSrgb(palette[tokenKey(config.roles.ink)]);
+  const canvasKey = tokenKey(config.roles.canvas);
+  const inkKey = tokenKey(config.roles.ink);
+  const canvasBlend = Object.hasOwn(annotatedDarkBlends, canvasKey) ? annotatedDarkBlends[canvasKey] : undefined;
+  const inkBlend = Object.hasOwn(annotatedDarkBlends, inkKey) ? annotatedDarkBlends[inkKey] : undefined;
+  const white = { l: 0.99, c: 0, h: null };
+
+  const bgLight = serializedColor(fitToSrgb(palette[canvasKey]));
+  const inkSource = fitToSrgb(palette[inkKey]);
   const relativeDark = deriv.dark.mode === "relative";
-  const bgDark = relativeDark
+  const defaultBgDark = relativeDark
     ? mixOklch(bgLight, { l: 0, c: 0, h: null }, deriv.dark.bgMixRatio / 100)
     : serializedColor(fitToSrgb({
       l: clamp(bgLight.l * deriv.dark.bgLightnessFactor, 0.08, 0.22),
       c: clamp(bgLight.c * 1.7, 0, 0.05),
       h: bgLight.h,
     }));
+  // An explicit canvas dark-blend replaces the role default with the shared rule.
+  const bgDark = canvasBlend == null ? defaultBgDark : explicitDarkVariant(bgLight, canvasBlend, relativeDark);
 
   const surfaceLightSource = {
     l: clamp(bgLight.l + Number(deriv.surface.lightShift.toFixed(4)), 0, 1),
@@ -275,27 +300,43 @@ function buildColorModel(palette, config, annotatedDarkBlends = {}) {
     h: bgLight.h,
   };
   const surfaceLight = relativeDark ? surfaceLightSource : serializedColor(fitToSrgb(surfaceLightSource));
-  const surfaceDark = relativeDark
+  const defaultSurfaceDark = relativeDark
     ? mixOklch(bgLight, { l: 0, c: 0, h: null }, deriv.dark.surfaceMixRatio / 100)
     : serializedColor(fitToSrgb({
       l: clamp(bgDark.l * deriv.surface.darkFactor, bgDark.l + 0.055, 0.36),
       c: clamp(bgDark.c * 1.15, 0, 0.06),
       h: bgDark.h,
     }));
+  // The neutral dark surface stays coherent with the chosen canvas: an explicit
+  // canvas blend washes its light source with the same bounded rule instead of
+  // reading the old un-blended dark.
+  const surfaceDark = canvasBlend == null ? defaultSurfaceDark : explicitDarkVariant(surfaceLightSource, canvasBlend, relativeDark);
 
   const textLight = serializedColor(ensureContrast(inkSource, [bgLight, surfaceLight], minTextContrast + 0.02, minTextContrast));
-  const white = { l: 0.99, c: 0, h: null };
-  const textDarkMixRatio = relativeDark
+  // The relative text mix only owns the dark text when neither foundation is
+  // explicit. With an explicit canvas or ink the running mix would target the
+  // wrong foundations, so the normal readability solver takes over and the value
+  // is materialized (literal) instead of an ignored color-mix().
+  const solverOwnsNeutralText = relativeDark && inkBlend == null && canvasBlend == null;
+  const textDarkMixRatio = solverOwnsNeutralText
     ? findAccessibleMixRatio(bgLight, white, [bgDark, surfaceDark], darkContrast.text + 0.02, deriv.dark.textMixRatio / 100, "toward-second")
     : null;
-  const textDarkSource = relativeDark
-    ? mixOklch(bgLight, white, textDarkMixRatio)
-    : fitToSrgb({
-      l: clamp(inkSource.l * deriv.dark.textLightnessFactor, 0.86, 0.96),
-      c: clamp(inkSource.c * 0.1, 0, 0.02),
-      h: inkSource.h,
-    });
-  const textDark = relativeDark ? textDarkSource : serializedColor(ensureContrast(textDarkSource, [bgDark, surfaceDark], darkContrast.text + 0.02, darkContrast.text));
+  const textDarkSource = inkBlend != null
+    ? explicitDarkVariant(inkSource, inkBlend, relativeDark)
+    : (relativeDark
+      ? mixOklch(bgLight, white, canvasBlend == null ? textDarkMixRatio : deriv.dark.textMixRatio / 100)
+      : fitToSrgb({
+        l: clamp(inkSource.l * deriv.dark.textLightnessFactor, 0.86, 0.96),
+        c: clamp(inkSource.c * 0.1, 0, 0.02),
+        h: inkSource.h,
+      }));
+  let textDark = textDarkSource;
+  let textDarkAdjusted = false;
+  if (!solverOwnsNeutralText) {
+    const resolved = serializedColor(ensureContrast(textDarkSource, [bgDark, surfaceDark], darkContrast.text + 0.02, darkContrast.text));
+    textDarkAdjusted = JSON.stringify(resolved) !== JSON.stringify(serializedColor(fitToSrgb(textDarkSource)));
+    textDark = resolved;
+  }
   const textMutedLight = serializedColor(ensureContrast(
     deriveMutedText(textLight, bgLight, minTextContrast + 0.02, deriv.muted.chromaFactor),
     [bgLight, surfaceLight],
@@ -369,19 +410,25 @@ function buildColorModel(palette, config, annotatedDarkBlends = {}) {
     const key = tokenKey(decorativeDef.token);
     if (!Object.hasOwn(palette, key)) continue;
     const source = palette[key];
+    const decorativeBlend = Object.hasOwn(annotatedDarkBlends, key) ? annotatedDarkBlends[key] : undefined;
 
     const lightPair = buildReadablePair(fitToSrgb(source), [bgLight, textLight], minOnColorContrast);
-    const darkSource = fitToSrgb({
-      l: clamp(lightPair.background.l * 0.72, 0.35, 0.65),
-      c: clamp(lightPair.background.c * 0.95, 0.02, lightPair.background.c),
-      h: lightPair.background.h,
-    });
+    // An explicit decorative dark-blend feeds the companions and the readability
+    // pipeline; omitting it keeps the existing dark derivation untouched.
+    const darkSource = decorativeBlend == null
+      ? fitToSrgb({
+        l: clamp(lightPair.background.l * 0.72, 0.35, 0.65),
+        c: clamp(lightPair.background.c * 0.95, 0.02, lightPair.background.c),
+        h: lightPair.background.h,
+      })
+      : fitToSrgb(explicitDarkVariant(source, decorativeBlend, true));
     const darkPair = buildReadablePair(darkSource, [bgDark, textDark], darkOnColorContrast);
 
     decoratives[name] = {
       source,
       light: serializedColor(lightPair.background),
       dark: serializedColor(darkPair.background),
+      darkBlend: decorativeBlend ?? null,
       role: "decorative",
     };
     onColors[name] = {
@@ -423,6 +470,8 @@ function buildColorModel(palette, config, annotatedDarkBlends = {}) {
       surfaceDark,
       textDarkMixRatio: textDarkMixRatio == null ? null : textDarkMixRatio * 100,
       textMutedDarkMixRatio: textMutedDarkMixRatio == null ? null : textMutedDarkMixRatio * 100,
+      canvasBlendMix: canvasBlend == null ? null : designTools.darkBlendMix(canvasBlend),
+      inkBlendMix: inkBlend == null ? null : designTools.darkBlendMix(inkBlend),
     },
     identities,
     decoratives,
@@ -431,6 +480,7 @@ function buildColorModel(palette, config, annotatedDarkBlends = {}) {
     scales,
     focus: { light: serializedColor(focusLight), dark: serializedColor(focusDark) },
   };
+  model.design = buildDesignMetadata(model, config, { textDarkAdjusted, canvasBlend, inkBlend });
 
   const contrastResult = validateGeneratedContrast(model, config);
   model.errors = contrastResult.errors;
@@ -438,6 +488,121 @@ function buildColorModel(palette, config, annotatedDarkBlends = {}) {
   model.warnings.push(...contrastResult.warnings);
 
   return model;
+}
+
+// Serializable, JSON-only derivation metadata: palette intents (sources), the
+// shared recipe registry (one copy, referenced by key) and a binding per public
+// colour token. It carries no per-scenario colour copies and no invented
+// thresholds; ratio-scoped paint already lives in the model. Consumers that only
+// hold this payload resolve a token with `describeToken(design, token, theme)`.
+function buildDesignMetadata(model, config, context) {
+  const recipes = designTools.recipes;
+  const sources = [];
+  const tokens = {};
+  const functionalSuffixes = ["surface", "surface-strong", "text", "text-strong", "solid", "solid-hover", "solid-text", "border", "border-strong"];
+
+  const explicitMix = (mix) => ({ mode: "explicit", sourcePercent: Number(mix.sourcePercent.toFixed(2)), whitePercent: Number(mix.whitePercent.toFixed(2)) });
+  const automaticMix = (sourcePercent) => sourcePercent == null
+    ? { mode: "automatic", sourcePercent: null, whitePercent: null }
+    : { mode: "automatic", sourcePercent: Number(sourcePercent.toFixed(2)), whitePercent: Number((100 - sourcePercent).toFixed(2)) };
+  const blendMix = (blend, sourcePercent) => blend == null ? automaticMix(sourcePercent) : explicitMix(designTools.darkBlendMix(blend));
+
+  const addSource = (token, name, role, darkBlend, darkMix) => sources.push({ token, name, role, darkBlend: darkBlend ?? null, darkMix });
+  const addToken = (token, recipe, sourceList, controls, extra) => {
+    tokens[token] = { sources: sourceList, recipe, usage: recipes[recipe]?.usage ?? null, controls, ...(extra ?? {}) };
+  };
+  const overrideControls = (name, mixByTheme) => {
+    const controls = {};
+    for (const theme of ["light", "dark"]) {
+      const control = { override: `--color-tune-${name}-${theme}` };
+      if (mixByTheme) {
+        control.mix = `--color-tune-${name}-${theme}-mix`;
+        control.defaultMix = mixByTheme[theme];
+      }
+      controls[theme] = control;
+    }
+    return controls;
+  };
+
+  // Foundation intents (canvas / ink) share the family dark-blend rule.
+  addSource(config.roles.canvas, "canvas", "canvas", context.canvasBlend ?? null, blendMix(context.canvasBlend, null));
+  addSource(config.roles.ink, "ink", "ink", context.inkBlend ?? null, blendMix(context.inkBlend, null));
+
+  for (const [name, identity] of Object.entries(model.identities)) {
+    addSource(config.roles.identities[name].token, name, identity.role, identity.darkBlend, blendMix(identity.darkBlend, identity.mixRatio));
+  }
+  for (const [name, decorative] of Object.entries(model.decoratives)) {
+    addSource(config.roles.decoratives[name].token, name, "decorative", decorative.darkBlend, blendMix(decorative.darkBlend, null));
+  }
+
+  const canvasToken = config.roles.canvas;
+  const inkToken = config.roles.ink;
+  const focusToken = config.roles.identities[config.roles.focus]?.token ?? config.roles.ink;
+
+  addToken("--color-bg", "neutral", [canvasToken], overrideControls("bg"));
+  addToken("--color-surface", "neutral", [canvasToken], overrideControls("surface"));
+  addToken("--color-text", "neutral-text", [inkToken], overrideControls("text"), { provenance: { adjusted: Boolean(context.textDarkAdjusted) } });
+  addToken("--color-text-muted", "neutral-text", [inkToken], overrideControls("text-muted"));
+  addToken("--color-focus-ring", "focus", [focusToken], overrideControls("focus-ring"));
+  addToken("--color-border-subtle", "neutral-text", [inkToken], overrideControls("border-subtle"));
+  addToken("--color-border-strong", "neutral-text", [inkToken], overrideControls("border-strong"));
+  addToken("--color-control-bg", "control", [canvasToken], overrideControls("control-bg"));
+  addToken("--color-control-border", "control", [inkToken], overrideControls("control-border"));
+  addToken("--color-control-bg-active", "control", [focusToken], overrideControls("control-bg-active"));
+  addToken("--color-control-border-active", "control", [focusToken], overrideControls("control-border-active"));
+  addToken("--color-control-active-text", "control", [inkToken], overrideControls("control-active-text"));
+  addToken("--color-control-focus-bg", "control", [focusToken], overrideControls("control-focus-bg"));
+  addToken("--color-control-focus-border", "control", [focusToken], overrideControls("control-focus-border"));
+  addToken("--color-control-icon-muted", "control", [inkToken], overrideControls("control-icon-muted"));
+
+  for (const [name, identity] of Object.entries(model.identities)) {
+    const list = [config.roles.identities[name].token];
+    addToken(`--color-${name}`, "identity", list, {
+      light: { override: `--color-tune-${name}-light` },
+      dark: { override: `--color-tune-${name}-dark`, mix: `--color-tune-${name}-dark-mix`, defaultMix: identity.mixRatio / 100 },
+    });
+    addToken(`--color-${name}-ink`, "ink", list, overrideControls(`${name}-ink`));
+    addToken(`--color-${name}-surface`, "surface", list, overrideControls(`${name}-surface`, { light: designTools.surfaceRatio("surface", "light"), dark: designTools.surfaceRatio("surface", "dark") }));
+    addToken(`--color-${name}-surface-strong`, "surface-strong", list, overrideControls(`${name}-surface-strong`, { light: designTools.surfaceRatio("surface-strong", "light"), dark: designTools.surfaceRatio("surface-strong", "dark") }));
+    addToken(`--color-${name}-text`, "text", list, overrideControls(`${name}-text`));
+    addToken(`--color-${name}-text-strong`, "text-strong", list, overrideControls(`${name}-text-strong`));
+    addToken(`--color-${name}-border`, "border", list, overrideControls(`${name}-border`));
+    addToken(`--color-${name}-border-strong`, "border-strong", list, overrideControls(`${name}-border-strong`));
+    addToken(`--color-${name}-solid`, "solid", list, overrideControls(`${name}-solid`));
+    addToken(`--color-${name}-solid-hover`, "solid-hover", list, overrideControls(`${name}-solid-hover`));
+    addToken(`--color-${name}-solid-text`, "solid-text", list, overrideControls(`${name}-solid-text`));
+    if (Object.hasOwn(model.scales, name)) {
+      for (const step of Object.keys(model.scales[name].light)) addToken(`--color-${name}-${step}`, "scale", list, overrideControls(`${name}-${step}`));
+    }
+    const hueVariants = config.scales?.hueVariants;
+    if (hueVariants?.enabled && hueVariants.applyTo?.includes(name)) {
+      for (const tokenName of hueTokenNames(name, hueVariants)) addToken(tokenName, "hue", list, overrideControls(tokenName.slice("--color-".length)));
+    }
+  }
+
+  for (const [name, decorative] of Object.entries(model.decoratives)) {
+    const list = [config.roles.decoratives[name].token];
+    addToken(`--color-${name}`, "decorative", list, overrideControls(name));
+    addToken(`--color-${name}-ink`, "decorative", list, overrideControls(`${name}-ink`));
+  }
+
+  for (const [alias, target] of Object.entries(config.aliases ?? {})) {
+    if (!Object.hasOwn(model.onColors, target)) continue;
+    const targetSources = tokens[`--color-${target}`]?.sources ?? [];
+    const mappedTo = `--color-${target}`;
+    addToken(`--color-${alias}`, "alias", targetSources, overrideControls(alias), { mappedTo });
+    addToken(`--color-${alias}-ink`, "alias", targetSources, overrideControls(`${alias}-ink`), { mappedTo: `${mappedTo}-ink` });
+    if (Object.hasOwn(model.identities, target)) {
+      for (const suffix of functionalSuffixes) addToken(`--color-${alias}-${suffix}`, "alias", targetSources, overrideControls(`${alias}-${suffix}`), { mappedTo: `${mappedTo}-${suffix}` });
+    }
+  }
+
+  return { version: 1, sources, recipes, tokens };
+}
+
+function hueTokenNames(name, hueVariants) {
+  if (hueVariants.shifts?.length === 2) return [`--color-${name}-warm`, `--color-${name}-cool`];
+  return (hueVariants.shifts ?? []).map((shift) => `--color-${name}-hue-${shift >= 0 ? "plus" : "minus"}-${Math.abs(shift)}`);
 }
 
 function buildContrastSuggestions(model, palette, authoredTokens, config, darkBlends, configFile, paletteCss) {
@@ -544,12 +709,9 @@ function identityColors(source, darkBlend, relativeDark) {
 }
 
 function resolveDarkMixRatio(source, darkBlend) {
-  if (darkBlend == null) {
-    return clamp(0.5 + source.l * 0.5, 0, 1);
-  }
-
-  const whiteRatio = (darkBlend / 100) * MAX_DARK_BLEND_WHITE_RATIO;
-  return 1 - whiteRatio;
+  const explicit = designTools.darkBlendMix(darkBlend);
+  if (explicit == null) return clamp(0.5 + source.l * 0.5, 0, 1);
+  return explicit.sourcePercent / 100;
 }
 
 function roundPercentage(value) {
@@ -568,8 +730,10 @@ function buildFunctionalFamily(source, background, neutralSurface, ink, contrast
   // On-solid readability uses the base (un-amplified) text target;
   // darkRichness applies to body text only, not to text-on-colour.
   const onSolidTextTarget = Math.min(contrastConfig.maxIdentity, (contrastConfig.baseText ?? contrastConfig.text) + 0.02);
-  const surface = serializedColor(fitToSrgb(mixOklch(source, background, scheme === "light" ? 0.1 : 0.18)));
-  const surfaceStrong = serializedColor(fitToSrgb(mixOklch(source, background, scheme === "light" ? 0.18 : 0.28)));
+  // Surface recipes read the shared registry, so the JS value, the emitted CSS
+  // colour-mix fallbacks and the metadata all quote the same source quota.
+  const surface = serializedColor(fitToSrgb(mixOklch(source, background, designTools.surfaceRatio("surface", scheme))));
+  const surfaceStrong = serializedColor(fitToSrgb(mixOklch(source, background, designTools.surfaceRatio("surface-strong", scheme))));
 
   const text = ensureContrast(
     fitContrastBand(source, background, { min: textTarget, max: contrastConfig.maxIdentity }),

@@ -993,19 +993,26 @@ function diagnosticSession(overrides = {}) {
   };
 }
 
-test("a diagnostic session renders a static model/automation section and links the preview", () => {
+test("a diagnostic session renders a scoped evidence section and links the preview as the primary action", () => {
   const html = render(diagnosticSession());
   assert.equal(html.split("\n")[0], "<!-- smart-colors-report:v1 -->");
   assert.doesNotMatch(html, /<script/i);
   assert.match(html, /href="smart-colors-preview\.html"/);
   assert.match(html, /Snapshot incorporato: <code>snap-123<\/code> · Versione tool: <code>0\.3\.0<\/code> · Input catturati: 1\/1\./);
-  assert.match(html, /<h2 id="sessione">Campioni dal modello e verifica automatizzata<\/h2>/);
+  // The headline is scoped to the snapshot and to the environments actually executed, and the
+  // static report never claims a browser-local measurement it does not contain.
+  assert.match(html, /class="scope-note">L'esito sopra riguarda solo le coppie dello snapshot e l'automazione <strong>negli ambienti eseguiti<\/strong>/);
+  assert.match(html, /class="preview-cta"><a href="smart-colors-preview\.html">Apri la preview diagnostica e verifica i contrasti nel browser attivo<\/a>/);
+  assert.match(html, /<h2 id="sessione">Sessione diagnostica: ambito ed evidenze<\/h2>/);
+  assert.match(html, /<dl class="session-evidence">/);
+  assert.match(html, /<dt>Modello<\/dt><dd>1 coppia prevista — stima del modello, non una verifica<\/dd>/);
+  assert.match(html, /<dt>Automazione<\/dt><dd>Automazione disattivata: nessuna misura browser è inclusa in questo snapshot\.<\/dd>/);
+  assert.match(html, /<dt>Verifica locale<\/dt><dd>Non inclusa in questo report statico/);
   assert.match(html, /Campioni calcolati dal modello del generatore, non da misure browser/);
-  assert.match(html, /Campioni dal modello/);
-  assert.match(html, /Verifica automatizzata \(Playwright\)/);
+  assert.match(html, /<details><summary>Verifica automatizzata \(Playwright\) — dettagli, cause e misure<\/summary>/);
   assert.match(html, /Automazione disattivata/);
   assert.match(html, /<h2 id="css">CSS incorporato nello snapshot<\/h2>/);
-  assert.match(html, /<a href="#sessione">Campioni dal modello<\/a>/);
+  assert.match(html, /<a href="#sessione">Sessione diagnostica<\/a>/);
   assert.doesNotMatch(html, /class="color-choice color-choice--suggested"/);
 });
 
@@ -1121,6 +1128,66 @@ test("an incomplete automation run with zero measurements still lists causes and
   assert.match(html, /<strong>Copertura non verificata:<\/strong>/);
 });
 
+test("automationHtml keeps the full tables by default and compact replaces them with accurate counts and a link", () => {
+  const run = automationRun({
+    partial: true,
+    measurements: [
+      { pairId: "light|color|--color-primary-text|--color-primary-surface", scenarioId: "chromium/light", engine: "chromium", minimum: 4.5, target: 4.6, ratio: 4.2, status: "below-minimum", error: null },
+      { pairId: "light|color|--color-primary-text|--color-primary-surface", scenarioId: "webkit/light", engine: "webkit", minimum: 4.5, target: 4.6, ratio: 4.4, status: "below-target", error: null },
+      { pairId: "dark|color|--color-primary-text|--color-primary-surface", scenarioId: "chromium/dark", engine: "chromium", minimum: 4.5, target: 4.6, ratio: null, status: "unmeasured", error: null },
+      { pairId: "dark|color|--color-primary-text|--color-primary-surface", scenarioId: "webkit/dark", engine: "webkit", minimum: 4.5, target: 4.6, ratio: 4.7, status: "pass", error: null },
+      { pairId: "light|color|--color-info-text|--color-info-surface", scenarioId: "chromium/info", engine: "chromium", minimum: 4.5, target: 4.6, ratio: null, status: null, error: "aborted" },
+    ],
+    explorations: [
+      { pairId: "light|color|--color-info-text|--color-info-surface", scenarioId: "chromium/light", engine: "chromium", minimum: 4.5, target: 4.6, ratio: 4.4, status: "below-target", error: null, family: "info" },
+    ],
+    explorationCoverage: { expected: 3, measured: 1, unmeasured: ["dark|color|--color-warning-text|--color-warning-surface"], omittedFamilies: ["muted"], complete: false },
+  });
+  const full = renderer.automationHtml(run);
+  assert.equal(full, renderer.automationHtml(run, {}), "the default mode is exact and additive");
+  assert.match(full, /<caption>Misure automatizzate per coppia<\/caption>/);
+  assert.match(full, /<caption>Primi abbinamenti esplorativi<\/caption>/);
+  assert.match(full, /<h5>Coppie non misurate<\/h5>/);
+  assert.doesNotMatch(full, /Apri misure complete nel report/);
+
+  const compact = renderer.automationHtml(run, { compact: true });
+  assert.doesNotMatch(compact, /<table\b/);
+  assert.doesNotMatch(compact, /Misure automatizzate per coppia/);
+  assert.doesNotMatch(compact, /Primi abbinamenti esplorativi/);
+  assert.doesNotMatch(compact, /Coppie non misurate/);
+  assert.doesNotMatch(compact, /Famiglie omesse dalla copertura/);
+  assert.match(compact, /<h4>Misure automatizzate \(5\)<\/h4>/);
+  assert.match(compact, /<li><strong>1<\/strong> sotto il minimo<\/li>/);
+  assert.match(compact, /<li><strong>1<\/strong> sotto il target<\/li>/);
+  assert.match(compact, /<li><strong>2<\/strong> non misurate<\/li>/, "an errored measurement counts as unmeasured");
+  assert.match(compact, /<li><strong>1<\/strong> raggiungono minimo e target<\/li>/);
+  assert.match(compact, /<h4>Esplorazioni di sovrapposizione \(1 misure, canale separato\)<\/h4>/);
+  assert.match(compact, /Copertura esplorativa parziale: 1 di 3 misurate/);
+  assert.match(compact, /<a href="smart-colors.html">Apri misure complete nel report<\/a>/);
+});
+
+test("automationHtml compact keeps engine, error and unsupported causes visible", () => {
+  const run = automationRun({
+    status: "incomplete", partial: true,
+    engines: [
+      { name: "chromium", launched: true, status: "incomplete", version: "151.0", executable: "/opt/chromium", phase: "measure", reason: "preferenza light: timeout" },
+      { name: "firefox", launched: false, status: "unavailable", version: null, executable: null, phase: "availability", reason: "browser binary unavailable at /opt/firefox" },
+    ],
+    measurements: [],
+    errors: [{ phase: "measure", cause: "runtime-run-failed", engine: "chromium", scenarioId: null, pairId: null, message: "preferenza light: timeout" }],
+    unsupported: [{ id: "chromium/baseline-dark-dark", reason: "forced-colors is active", engine: "chromium" }],
+    coverage: { complete: false, expectedCount: 1, measuredCount: 0, scenarios: [], duplicateScenarios: [], missingScenarios: ["chromium/baseline-light-light"], unexpectedScenarios: [], duplicates: [], unmeasured: [] },
+  });
+  const compact = renderer.automationHtml(run, { compact: true });
+  assert.match(compact, /<code>firefox<\/code> · Non disponibile · non eseguito · fase <code>availability<\/code> — browser binary unavailable at \/opt\/firefox/);
+  assert.match(compact, /<h4>Errori dell'automazione \(1\)<\/h4>/);
+  assert.match(compact, /<code>measure<\/code> · <code>runtime-run-failed<\/code> — preferenza light: timeout/);
+  assert.match(compact, /<h4>Scenari non supportati \(1\)<\/h4>/);
+  assert.match(compact, /<code>chromium\/baseline-dark-dark<\/code> — forced-colors is active/);
+  assert.doesNotMatch(compact, /<h4>Misure automatizzate/);
+  assert.doesNotMatch(compact, /Apri misure complete nel report/, "nothing was omitted, so no report link is needed");
+});
+
 test("a complete automation run scopes the verification sentence to the executed environments", () => {
   const html = render(diagnosticSession({ automation: automationRun() }));
   assert.match(html, /<strong>Copertura verificata:<\/strong> le coppie automatizzate sono complete negli ambienti eseguiti/);
@@ -1232,4 +1299,227 @@ test("prepareDiagnosticReport downgrades only, never mutates the session and nev
   assert.doesNotThrow(() => renderer.sessionVerification(session));
   assert.doesNotThrow(() => renderer.prepareDiagnosticReport(session));
   assert.equal(renderer.prepareDiagnosticReport(session).verified, true);
+});
+
+// ---------------------------------------------------------------------------
+// Static session report UX: a document of declared evidence, not a duplicated
+// dashboard. Data lives in native disclosures, one family catalog is visible by
+// default, and usage names replace duplicated token prose.
+// ---------------------------------------------------------------------------
+
+function measuredSession(overrides = {}) {
+  return diagnosticSession({
+    scenarios: [scenario({ diagnostics: [diagnostic({ label: "primary-text / family surface", foregroundToken: "--color-primary-text", backgroundToken: "--color-primary-surface", ratio: 4.2 })] })],
+    ...overrides,
+  });
+}
+
+test("the static session keeps its section order and every technical artifact inside a closed native disclosure", () => {
+  const html = render(measuredSession({ automation: automationRun() }));
+  const order = ["proposte", "problemi", "usi", "sessione", "tecnici"];
+  const positions = order.map((id) => html.indexOf(`id="${id}"`));
+  assert.ok(positions.every((position) => position > 0), "Every top-level section must be present");
+  assert.ok(positions.every((position, index) => index === 0 || position > positions[index - 1]), "Sections must follow the documented order");
+  for (const id of ["scenari", "palette", "esito", "limiti"]) {
+    assert.match(html, new RegExp(`<details><summary>[^<]*<\\/summary>\\s*<section aria-labelledby="${id}">`), `${id} must be a disclosure body`);
+  }
+  assert.match(html, /<details><summary>Verifica automatizzata \(Playwright\) — dettagli, cause e misure<\/summary>/);
+  assert.doesNotMatch(html, /<details[^>]*\bopen\b/, "No disclosure may start open");
+  for (const match of html.matchAll(/<details[^>]*><summary>([\s\S]*?)<\/summary>/g)) assert.ok(match[1].trim().length > 0, "Every disclosure needs a nonempty summary");
+});
+
+test("a session shows one family catalog by default and preserves the model estimate in a disclosure", () => {
+  const both = render(measuredSession());
+  // The measured atlas stays visible; the model estimate is preserved inside a native disclosure.
+  assert.match(both, /<details><summary>Campioni dal modello — previsioni senza browser<\/summary>/);
+  assert.equal((publicContent(both).match(/class="card family-card"/g) ?? []).length, 1, "Only one family catalog may be visible without disclosure");
+  assert.equal((both.match(/class="card family-card"/g) ?? []).length, 2, "The model catalog data must not be dropped");
+  // Without measured scenarios the model estimate is the catalog, and it stays visible.
+  const modelOnly = render(diagnosticSession());
+  assert.doesNotMatch(modelOnly, /<summary>Campioni dal modello/);
+  assert.equal((publicContent(modelOnly).match(/class="card family-card"/g) ?? []).length, 1);
+});
+
+test("problem cards and scenario issues lead with human usage names while the tokens remain as provenance", () => {
+  const html = render(measuredSession({ automation: automationRun() }));
+  assert.match(html, /<h3>Testo sul callout primary<\/h3><p class="margin-note">primary-text \/ family surface<\/p><p><code>--color-primary-text<\/code> su <code>--color-primary-surface<\/code><\/p>/);
+  assert.match(html, /<p><strong>Testo sul callout primary<\/strong><\/p>/);
+  // The shared automation table keeps its exact token shape for the preview renderer; the same
+  // usage name is derived from the identical frozen helper there.
+  assert.match(html, /<code>--color-primary-text<\/code> su <code>--color-primary-surface<\/code><\/th>/);
+  // A pair outside the known catalog keeps the faithful tokens instead of a guessed name.
+  const unknown = render(measuredSession({ scenarios: [scenario({ diagnostics: [diagnostic({ label: "unknown", foregroundToken: "--color-mystery", backgroundToken: "--color-bg", ratio: 4.2 })] })] }));
+  assert.match(unknown, /<h3>--color-mystery su --color-bg<\/h3>/);
+});
+
+test("severe identity problems stay visible while the full integrity data stays disclosed, never hidden", () => {
+  const html = render(diagnosticSession({ inputDigest: "not-a-sha256" }));
+  const visible = publicContent(html);
+  assert.match(visible, /Nessuna conclusione positiva/);
+  assert.match(visible, /Impronta SHA-256 degli input assente o non valida\./);
+  assert.match(html, /<details><summary>File, impronta dello snapshot ed errori<\/summary>/);
+  assert.match(html, /SHA-256 degli input \(dichiarato, non ricalcolato\)/);
+  assert.match(html, /Snapshot statico, non stato attuale del progetto\./);
+});
+
+test("the static session report stays scriptless, network-free and escapes names that reach the usage title", () => {
+  const attack = '<img src=x onerror=alert(1)>';
+  const html = render(diagnosticSession({
+    scenarios: [scenario({ diagnostics: [diagnostic({ label: attack, foregroundToken: attack, backgroundToken: attack, ratio: 4.2 })] })],
+    automation: automationRun(),
+  }));
+  const csp = html.match(/http-equiv="Content-Security-Policy" content="([^"]+)"/)[1].replaceAll("&#39;", "'");
+  assert.ok(csp.includes("script-src 'none'"));
+  assert.ok(csp.includes("connect-src 'none'"));
+  assert.doesNotMatch(html, /<(?:script|iframe|link|img|button|input|form)\b/i);
+  assert.doesNotMatch(html, /<[a-z][^>]*\son\w+=/i, "No event handler may appear in a real tag");
+  assert.doesNotMatch(html, /<[a-z][^>]*\ssrc=/i, "No resource attribute may appear in a real tag");
+  assert.doesNotMatch(html, /@import|url\(|https?:\/\//i);
+  assert.ok(html.includes("&lt;img src=x onerror=alert(1)&gt; su &lt;img src=x onerror=alert(1)&gt;"), "The token fallback reaches the markup escaped");
+  assert.doesNotMatch(html, /<img\b/);
+});
+
+// ---------------------------------------------------------------------------
+// New designer contract: CSS provenance, design registry and exploratory
+// coverage are rendered from the session data, never inferred by the report.
+// ---------------------------------------------------------------------------
+
+test("session CSS separates the generated model from the captured baseline and never promotes a candidate", () => {
+  const digest = { generated: "a".repeat(64), baseline: "b".repeat(64) };
+  const stale = render(diagnosticSession({ css: {
+    generated: "expected", baseline: "actual", source: "output", status: "stale", production: false,
+    digest, tuning: null, tuningSupport: "absent",
+  } }));
+  assert.match(stale, /Modello atteso \(generated\)<\/dt><dd>8 byte · SHA-256 <code>a{64}<\/code>/);
+  assert.match(stale, /Baseline incorporata<\/dt><dd>6 byte · SHA-256 <code>b{64}<\/code>/);
+  assert.match(stale, /Stato dell'output<\/dt><dd>Obsoleto<\/dd>/);
+  assert.match(stale, /Provenienza della baseline<\/dt><dd>Output reale catturato<\/dd>/);
+  assert.match(stale, /Produzione<\/dt><dd>No<\/dd>/);
+  assert.match(stale, /la baseline è l'output reale catturato, non un candidato generato/);
+  assert.doesNotMatch(stale, /candidato generato dal modello, non un file misurato su disco/);
+
+  const candidate = render(diagnosticSession({ css: {
+    generated: "expected", baseline: "expected", source: "generated-candidate", status: "empty", production: false,
+    digest, tuning: null, tuningSupport: "absent",
+  } }));
+  assert.match(candidate, /Provenienza della baseline<\/dt><dd>Candidato generato \(non misurato su disco\)<\/dd>/);
+  assert.match(candidate, /La baseline mostrata è il candidato generato dal modello, non un file misurato su disco/);
+  assert.match(candidate, /Produzione<\/dt><dd>No<\/dd>/);
+
+  const empty = render(diagnosticSession({ css: {
+    generated: "expected", baseline: "", source: "output", status: "empty", production: true,
+    digest, tuning: null, tuningSupport: "absent",
+  } }));
+  assert.match(empty, /Baseline incorporata<\/dt><dd>0 byte/);
+  assert.match(empty, /L'output reale esiste ma è vuoto \(0 byte\)/);
+  assert.match(empty, /Produzione<\/dt><dd>No<\/dd>/);
+  assert.doesNotMatch(empty, /Produzione<\/dt><dd>Sì/);
+
+  // The expected model is never shown as the baseline when no actual output was captured.
+  const absent = render(diagnosticSession({ css: {
+    generated: "expected", source: "output", status: "absent", production: false,
+    digest, tuning: null, tuningSupport: "absent",
+  } }));
+  assert.match(absent, /Modello atteso \(generated\)<\/dt><dd>8 byte/);
+  assert.match(absent, /Baseline incorporata<\/dt><dd>Non disponibile/);
+  assert.match(absent, /Nessun output reale disponibile/);
+});
+
+test("design registry metadata traces source, recipe, use and controls without exposing internals", () => {
+  const design = {
+    version: 1,
+    sources: [
+      { token: "--palette-primary", name: "primary", role: "ui", darkBlend: 80, darkMix: { mode: "white-wash", sourcePercent: 77.6, whitePercent: 22.4 } },
+      { token: "--palette-ink", name: "ink", role: "ink", darkBlend: null, darkMix: { mode: "automatic", sourcePercent: null, whitePercent: null } },
+      { token: "--_palette-hidden", name: "hidden", role: "ui" },
+    ],
+    recipes: {
+      "identity-base": { kind: "identity", usage: "Riempimento diretto", basis: "sorgente + dark-blend" },
+      "text-adaptive": { kind: "text", usage: "Testo sul callout", basis: "contrasto risolto" },
+      "--_secret-recipe": { kind: "hidden", usage: "nascosta", basis: "nascosta" },
+    },
+    tokens: {
+      "--color-primary": { sources: ["--palette-primary"], recipe: "identity-base", usage: "Riempimento diretto", controls: {
+        light: { override: "--color-tune-primary-light" },
+        dark: { override: "--color-tune-primary-dark", mix: "--color-tune-primary-dark-mix", defaultMix: 0.776 },
+      } },
+      "--color-primary-text": { sources: ["--palette-primary"], recipe: "text-adaptive", usage: "Testo sul callout", controls: {
+        light: { override: "--color-tune-primary-text-light" },
+        dark: { override: "--color-tune-primary-text-dark" },
+      } },
+      "--color-primary-surface": { sources: ["--palette-primary"], recipe: "surface", usage: "Soft tint", controls: {
+        light: { override: "--color-tune-primary-surface-light", mix: "--color-tune-primary-surface-light-mix", defaultMix: 0.1 },
+        dark: { override: "--color-tune-primary-surface-dark", mix: "--color-tune-primary-surface-dark-mix", defaultMix: 0.18 },
+      } },
+      "--_color-secret": { sources: ["--palette-primary"], recipe: "identity-base", usage: "interna", controls: {} },
+    },
+  };
+  const html = render(diagnosticSession({ design }));
+  assert.match(html, /<section aria-labelledby="design"><h2 id="design">Sorgenti, ricette e controlli<\/h2>/);
+  assert.match(html, /<a href="#design">Sorgenti e ricette<\/a>/);
+  assert.match(html, /<code>--palette-primary<\/code>/);
+  assert.match(html, /sorgente 77,6% · bianco 22,4%/);
+  assert.match(html, /Automatico per ruolo \(nessun dark-blend dichiarato: non equivale a 0\)/);
+  assert.match(html, /<code>identity-base<\/code> — identity/);
+  assert.match(html, /aspettative di partenza del generatore/);
+  assert.match(html, /CSS misurato \(baseline\) resta la fonte finale/);
+  assert.match(html, /Ricette di partenza del generatore/);
+  assert.match(html, /Controllo per personalizzare \(chiaro\)/);
+  assert.match(html, /le superfici sono espressioni runtime \(mix\), non letterali risolti/);
+  assert.match(html, /<code>text-adaptive<\/code> — text/);
+  assert.match(html, /override <code>--color-tune-primary-light<\/code>/);
+  assert.match(html, /override <code>--color-tune-primary-dark<\/code> · mix <code>--color-tune-primary-dark-mix<\/code> · default 77,6%/);
+  assert.match(html, /override <code>--color-tune-primary-surface-light<\/code> · mix <code>--color-tune-primary-surface-light-mix<\/code> · default 10%/);
+  assert.match(html, /Il <code>dark-blend<\/code> mescola bianco/);
+  assert.match(html, /mix 10% source \/ 90% base \(chiaro\), 18%\/82% \(scuro\) — regola di progetto, non WCAG/);
+  assert.doesNotMatch(html, /--_color-secret|--_palette-hidden|--_secret-recipe/);
+  assert.ok(html.indexOf('id="usi"') < html.indexOf('id="design"'));
+  assert.ok(html.indexOf('id="design"') < html.indexOf('id="sessione"'));
+});
+
+test("exploratory coverage is separate from the verified pairs and reports partial missing families", () => {
+  const pair = (scheme, foreground, background, ratio, family) => ({
+    pairId: `${scheme}|color|${foreground}|${background}`, scenarioId: `chromium/${scheme}`, engine: "chromium",
+    minimum: 4.5, target: 4.6, ratio, status: statusFor(ratio, 4.6, 4.5), error: null, family,
+  });
+  const run = automationRun({
+    explorations: [
+      pair("light", "--color-primary-text", "--color-primary-surface", 4.8, "primary"),
+      pair("light", "--color-info-text", "--color-info-surface", 4.4, "info"),
+      pair("dark", "--color-danger-text", "--color-danger-surface", 3.9, "danger"),
+      { pairId: "light|color|--color-broken|--color-broken-surface", scenarioId: "chromium/light", engine: "chromium", minimum: 4.5, target: 4.6, ratio: null, status: "unmeasured", error: "timeout", family: "broken" },
+    ],
+    explorationCoverage: {
+      expected: 4, measured: 3, unmeasured: ["dark|color|--color-warning-text|--color-warning-surface"],
+      omittedFamilies: ["muted"], complete: false,
+    },
+  });
+  const html = render(diagnosticSession({ automation: run }));
+  assert.match(html, /<h4>Esplorazioni di sovrapposizione \(3 misure, canale separato\)<\/h4>/);
+  assert.doesNotMatch(html, /timeout/);
+  assert.match(html, /Copertura esplorativa parziale: 3 di 4 misurate · 1 non misurata · 1 famiglia omessa\./);
+  assert.match(html, /Gli abbinamenti sono ordinati per fascia d'uso: testo normale \(almeno 4,5:1\), poi solo titoli grandi, bordi e icone \(3:1–4,5:1\), poi da evitare \(sotto 3:1\)\./);
+  assert.match(html, /<caption>Primi abbinamenti esplorativi<\/caption>/);
+  assert.match(html, /<code>--color-primary-text<\/code> su <code>--color-primary-surface<\/code>/);
+  assert.match(html, /<td>Chiaro<\/td><td><code>4\.8:1<\/code><\/td><td><code>4\.5:1<\/code><\/td><td><code>4\.6:1<\/code><\/td>/);
+  assert.match(html, /<h5>Coppie non misurate<\/h5>/);
+  assert.match(html, /dark\|color\|--color-warning-text\|--color-warning-surface/);
+  assert.match(html, /<h5>Famiglie omesse dalla copertura<\/h5>/);
+  assert.match(html, /Misure automatizzate \(1\)/);
+  assert.doesNotMatch(html, /Misure automatizzate \(3\)/);
+  assert.match(html, /non sostituiscono un audit di accessibilità/);
+  assert.match(html, /<strong>Copertura verificata:<\/strong>/, "the normal complete run keeps its own gate");
+  const absent = render(diagnosticSession({ automation: automationRun() }));
+  assert.doesNotMatch(absent, /Esplorazioni di sovrapposizione|Copertura esplorativa/);
+});
+
+test("exploration rendering caps the schema at 24 families without inventing a verdict", () => {
+  const items = Array.from({ length: 25 }, (_, index) => ({
+    pairId: `light|color|--color-f${index}-text|--color-f${index}-surface`, scenarioId: "chromium/light", engine: "chromium",
+    minimum: 4.5, target: 4.5, ratio: 4.6, status: "pass", error: null, family: `f${index}`,
+  }));
+  const html = render(diagnosticSession({ automation: automationRun({ explorations: items, explorationCoverage: { expected: 25, measured: 25, unmeasured: [], omittedFamilies: [], complete: true } }) }));
+  assert.match(html, /1 famiglia supera il limite di schema di 24/);
+  assert.match(html, /<code>f24<\/code>/);
+  assert.match(html, /Esplorazioni di sovrapposizione \(25 misure/);
 });

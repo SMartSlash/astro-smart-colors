@@ -14,9 +14,25 @@
      1. Copy a block below and rename `--palette-<name>`.
      2. Set `initial-value` to any opaque oklch() color.
      3. Set `role` to one of the five roles above.
-     4. For ui/feedback, optionally set `dark-blend: 0` … `100` to control
-        how much white is mixed into the dark-mode variant; omit it to use
-        the adaptive mix based on lightness.
+     4. Optionally set `dark-blend: 0` … `100` on any role to control how
+        much white is mixed into the dark-mode variant.
+
+   `dark-blend` is a bounded white wash, never a darkening toward black:
+
+     0    -> 100% source + 0% white
+     80   -> 77.6% source + 22.4% white
+     100  -> 72% source + 28% white
+
+   Omit it to keep the role's automatic derivation; an omitted descriptor is
+   NOT `0`. WCAG does not impose a fixed 10/90 (or any other) mix: the resolved
+   pairs are what gets checked.
+
+   Recipes by role (the semantic API each source feeds):
+     canvas      neutral foundation: page background and neutral surfaces
+     ink         neutral text: main text and muted text
+     ui          direct pair plus the surface / border / solid / text family
+     feedback    same family, classified separately from brand UI
+     decorative  theme-adapted ornamental fill plus a readable companion
 
    Components never read `--palette-*`. They consume the generated --color-*
    API. Project-specific deviations that must survive a rebuild belong in

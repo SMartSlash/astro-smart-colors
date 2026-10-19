@@ -147,6 +147,88 @@ test("createContract freezes identities, decoratives, themes and exact threshold
   assert.deepEqual(core.createContract({ contrast: CONFIG.contrast, roles: { identities: {}, decoratives: {} } }).identities, []);
 });
 
+test("explorationPairsFor compares every supported pair of the first 24 families plus canvas/surface", () => {
+  // A family contributes exactly its base color; canvas and surface are always compared.
+  const many = Array.from({ length: 40 }, (_, index) => `id${index}`);
+  const bounded = core.explorationPairsFor("light", many, []);
+  // 24 families + canvas + surface = 26 colors => 26*25 ordered non-self pairs, with NO 24-pair cap.
+  assert.equal(bounded.pairs.length, 26 * 25, "all supported pairs are compared, never an arbitrary first 24");
+  assert.equal(bounded.omittedFamilies.length, 40 - 24, "the 16 families beyond the cap are declared omitted");
+  assert.ok(bounded.pairs.every((pair) => pair.foreground !== pair.background), "no self pair");
+  assert.ok(bounded.pairs.every((pair) => pair.kind === "on-color" && pair.property === "color"), "text/on-color semantics on the DOM property color");
+  assert.ok(bounded.pairs.every((pair) => pair.exploration === true));
+  assert.ok(bounded.pairs.every((pair) => pair.id.split("|")[1] === "exploration"), "ids use the exploration namespace, never the DOM property");
+  const ids = bounded.pairs.map((pair) => pair.id);
+  assert.equal(new Set(ids).size, ids.length, "exploration ids are unique");
+
+  const first = core.explorationPairsFor("light", ["primary", "secondary"], ["spark"]);
+  const again = core.explorationPairsFor("light", ["primary", "secondary"], ["spark"]);
+  assert.deepEqual(first.pairs.map((pair) => pair.id), again.pairs.map((pair) => pair.id), "the catalog is deterministic for identical inputs");
+});
+
+test("exploration covers every included family as foreground and background, including the last one", () => {
+  const identities = ["primary", "secondary", "info"];
+  const { pairs } = core.explorationPairsFor("light", identities, ["spark"]);
+  const tokens = new Set();
+  for (const pair of pairs) { tokens.add(pair.foreground); tokens.add(pair.background); }
+  assert.ok(tokens.has("--color-bg") && tokens.has("--color-surface"), "canvas and surface are always compared");
+  for (const name of [...identities, "spark"]) {
+    assert.ok(tokens.has(`--color-${name}`), `${name} must appear as foreground and background`);
+  }
+
+  // Exactly 24 families: the last one is still explored, nothing is silently dropped.
+  const exactly = core.explorationPairsFor("light", Array.from({ length: 24 }, (_, index) => `id${index}`), []);
+  assert.equal(exactly.omittedFamilies.length, 0);
+  assert.ok(exactly.pairs.some((pair) => pair.foreground === "--color-id23"));
+  assert.ok(exactly.pairs.some((pair) => pair.background === "--color-id23"));
+
+  // 25 families: the 25th is the coherent omitted family, and the 24th is still explored.
+  const beyond = core.explorationPairsFor("light", Array.from({ length: 25 }, (_, index) => `id${index}`), []);
+  assert.deepEqual(beyond.omittedFamilies, ["id24"]);
+  assert.ok(beyond.pairs.some((pair) => pair.foreground === "--color-id23"));
+  assert.ok(!beyond.pairs.some((pair) => pair.foreground === "--color-id24" || pair.background === "--color-id24"));
+});
+
+test("createContract adds explorationPairs/explorationScope without changing the primary pairs", () => {
+  const contract = core.createContract(CONFIG);
+  const baseline = core.createContract({ contrast: CONFIG.contrast, roles: { identities: { primary: {}, secondary: {}, info: {} }, decoratives: { spark: {} } } });
+  assert.deepEqual(contract.pairs, baseline.pairs, "the primary catalog is untouched by exploration");
+
+  assert.deepEqual(Object.keys(contract.explorationPairs), ["light", "dark"]);
+  for (const scheme of ["light", "dark"]) {
+    const pairs = contract.explorationPairs[scheme];
+    // 3 identities + 1 decorative + canvas + surface = 6 colors => 6*5 = 30 pairs, above 24: no pair cap.
+    assert.equal(pairs.length, 30);
+    assert.ok(pairs.every((pair) => pair.theme === scheme && pair.kind === "on-color" && pair.property === "color"));
+    assert.ok(pairs.every((pair) => pair.minimum === 4.5), "exploration reuses the text minimum 4.5");
+    assert.ok(pairs.every((pair) => Number.isFinite(pair.target) && pair.target >= pair.minimum), "the on-color target is never below the minimum");
+    const ids = pairs.map((pair) => pair.id);
+    assert.equal(new Set(ids).size, ids.length);
+    const primary = new Set(contract.pairs[scheme].map((pair) => pair.id));
+    assert.ok(ids.every((id) => !primary.has(id)), "no exploration id collides with a primary pair id");
+  }
+  assert.equal(contract.explorationScope.advisory, true);
+  assert.equal(contract.explorationScope.minimum, 4.5);
+  assert.deepEqual(Object.keys(contract.explorationScope.omittedFamilies), ["light", "dark"]);
+});
+
+test("a 3.2:1 exploration ratio is never usable body text, while the 4.5 minimum governs the verdict", () => {
+  const pair = core.createContract(CONFIG).explorationPairs.light[0];
+  assert.equal(pair.kind, "on-color");
+  assert.equal(pair.minimum, 4.5);
+  assert.ok(pair.target >= pair.minimum);
+  // Same clipped-sRGB contrast math, text semantics: 3:1 / 3.2:1 is below-minimum for body text.
+  assert.equal(core.warningStatus(3, pair.target, pair.minimum), "below-minimum");
+  assert.equal(core.warningStatus(3.2, pair.target, pair.minimum), "below-minimum");
+  assert.equal(core.warningStatus(4.5, pair.target, pair.minimum), pair.target > 4.5 ? "below-target" : "pass");
+  assert.equal(core.warningStatus(21, pair.target, pair.minimum), "pass");
+  // The measurable verdict is derived by the same measurePair used everywhere.
+  const measured = core.measurePair(pair, { id: "light" }, { foreground: WHITE, background: BLACK });
+  assert.equal(measured.minimum, 4.5);
+  assert.equal(measured.target, pair.target);
+  assert.equal(measured.status, "pass");
+});
+
 test("measurePair classifies exact boundaries without rounding and keeps the raw ratio", () => {
   const pair = { id: "probe", label: "probe", target: 4.6, minimum: 4.5 };
   const measurement = core.measurePair(pair, { id: "light" }, { foreground: WHITE, background: BLACK });
@@ -285,6 +367,8 @@ test("the factory serializes into an isolated realm with no imports", () => {
   assert.deepEqual([...contract.identities], ["primary", "secondary", "info"]);
   assert.deepEqual([...contract.decoratives], ["spark"]);
   assert.equal(contract.pairs.light.length, core.createContract(CONFIG).pairs.light.length);
+  assert.deepEqual(Object.keys(contract.explorationPairs), ["light", "dark"]);
+  assert.equal(contract.explorationPairs.light.length, 30);
 
   const pair = contract.pairs.light[0];
   const measurement = isolated.measurePair(pair, { id: "light" }, { foreground: WHITE, background: BLACK });

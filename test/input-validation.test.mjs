@@ -78,8 +78,22 @@ test("palette parser accepts only the designer-facing roles", () => {
   });
 });
 
-test("palette parser accepts dark-blend for ui and feedback roles", () => {
-  const report = parsePaletteWithDiagnostics(`@property --palette-primary {
+test("palette parser accepts dark-blend for every role", () => {
+  const report = parsePaletteWithDiagnostics(`@property --palette-canvas {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.962 0.015 88);
+  role: canvas;
+  dark-blend: 20;
+}
+@property --palette-ink {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.28 0.007 3.68);
+  role: ink;
+  dark-blend: 40;
+}
+@property --palette-primary {
   syntax: "<color>";
   inherits: true;
   initial-value: oklch(0.62 0.16 32);
@@ -92,12 +106,22 @@ test("palette parser accepts dark-blend for ui and feedback roles", () => {
   initial-value: oklch(0.62 0.14 160);
   role: feedback;
   dark-blend: 100;
+}
+@property --palette-spark {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.72 0.18 280);
+  role: decorative;
+  dark-blend: 50;
 }`);
 
   assert.deepEqual(report.errors, []);
   assert.deepEqual(report.annotatedDarkBlends, {
+    "palette-canvas": 20,
+    "palette-ink": 40,
     "palette-primary": 0,
     "palette-success": 100,
+    "palette-spark": 50,
   });
 });
 
@@ -131,7 +155,7 @@ test("palette parser rejects duplicate dark-blend descriptors", () => {
   assert.ok(report.errors.some((error) => error.includes("at most once")));
 });
 
-test("palette parser limits dark-blend to functional identity roles", () => {
+test("palette parser accepts dark-blend for canvas, ink and decorative roles", () => {
   const report = parsePaletteWithDiagnostics(`@property --palette-spark {
   syntax: "<color>";
   inherits: true;
@@ -140,7 +164,8 @@ test("palette parser limits dark-blend to functional identity roles", () => {
   dark-blend: 50;
 }`);
 
-  assert.ok(report.errors.some((error) => error.includes("only for roles ui and feedback")));
+  assert.deepEqual(report.errors, []);
+  assert.deepEqual(report.annotatedDarkBlends, { "palette-spark": 50 });
 });
 
 test("palette parser rejects legacy roles in @property blocks", () => {

@@ -6,6 +6,7 @@ import path from "node:path";
 import { contrast, fitToSrgb, oklch } from "../src/color-math.mjs";
 import { generateColorTokens } from "../src/generate-colors.mjs";
 import { parseOklch, parsePaletteWithDiagnostics } from "../src/parse-palette.mjs";
+import { getDeclarations, resolveThemeColor } from "./css-resolver.mjs";
 
 const PALETTE = [
   ["canvas", "canvas", "0.962 0.015 88"],
@@ -32,31 +33,8 @@ async function createProject(t, paletteCss = PALETTE) {
   return root;
 }
 
-function getDeclarations(css) {
-  return new Map([...css.matchAll(/(?:^|\n)\s*(--[a-z0-9_-]+)\s*:\s*([^;]+);/gi)]
-    .map(([, name, value]) => [name, value.trim()]));
-}
-
 function getThemeColor(css, token, scheme) {
-  const declarations = getDeclarations(css);
-  const value = declarations.get(token);
-  assert.ok(value, `Expected generated token ${token}.`);
-  const pair = /^light-dark\(((?:oklch|var)\([^()]+\)),\s*((?:oklch|var)\([^()]+\))\)$/.exec(value);
-  assert.ok(pair, `Expected a static light-dark color pair in ${token}: ${value}.`);
-  return resolveStaticColor(declarations, pair[scheme === "light" ? 1 : 2]);
-}
-
-function resolveStaticColor(declarations, value, stack = []) {
-  const reference = /^var\((--[a-z0-9_-]+)(?:,\s*(.*))?\)$/.exec(value);
-  if (reference) {
-    assert.ok(!stack.includes(reference[1]), `Circular reference: ${reference[1]}.`);
-    const selected = declarations.get(reference[1]) ?? reference[2];
-    assert.ok(selected, `Expected ${reference[1]} or its fallback.`);
-    return resolveStaticColor(declarations, selected, [...stack, reference[1]]);
-  }
-  const parsed = parseOklch(value);
-  assert.deepEqual(parsed.errors, []);
-  return parsed.source;
+  return resolveThemeColor(getDeclarations(css), token, scheme);
 }
 
 function getSolidRatios(css, name, scheme, foreground = getThemeColor(css, `--color-${name}-solid-text`, scheme)) {

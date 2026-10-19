@@ -22,6 +22,7 @@ import { defaultSmartColorsConfig } from "../src/defaults.mjs";
 import { createDiagnosticSession } from "../src/diagnostic-session.mjs";
 import {
   DIAGNOSTIC_CSS_ATTRIBUTE,
+  DIAGNOSTIC_FRAME_COLOR_SCHEME,
   DIAGNOSTIC_FRAME_TIMEOUT_MS,
   DIAGNOSTIC_HOOK_ATTRIBUTE,
   DIAGNOSTIC_HOOKS,
@@ -175,7 +176,7 @@ function inertJson(value) {
 
 // Mirrors the isolation approved in SC-01: strict CSP, one script hash over the exact emitted
 // bytes, `frame-src 'none'` for the srcdoc measurement frames.
-function buildFixtureHtml({ title, payload, runtimeSource }) {
+function buildFixtureHtml({ title, payload, runtimeSource, hostColorScheme = null }) {
   const csp = [
     "default-src 'none'",
     "script-src 'sha256-" + sha256Base64(runtimeSource) + "'",
@@ -189,12 +190,15 @@ function buildFixtureHtml({ title, payload, runtimeSource }) {
     "base-uri 'none'",
     "form-action 'none'",
   ].join("; ");
+  // A UI host that pins a single color-scheme on its root: the regression the carrier must not inherit.
+  const hostStyle = hostColorScheme ? '<style>:root { color-scheme: ' + hostColorScheme + '; }</style>' : "";
   return [
     "<!doctype html>",
     '<html lang="it"><head><meta charset="utf-8">',
     '<meta http-equiv="Content-Security-Policy" content="' + csp + '">',
     '<meta name="viewport" content="width=device-width, initial-scale=1">',
     "<title>" + title + "</title>",
+    hostStyle,
     "</head><body>",
     '<section id="' + DIAGNOSTIC_HOST_ID + '" ' + DIAGNOSTIC_HOOK_ATTRIBUTE + '="' + DIAGNOSTIC_HOOKS.host + '" aria-label="Verifica locale dei contrasti Smart Colors">',
     '  <div ' + DIAGNOSTIC_HOOK_ATTRIBUTE + '="' + DIAGNOSTIC_HOOKS.frames + '"></div>',
@@ -348,6 +352,13 @@ test("measureDocument requires the exact theme schema and a verifiable light-dar
   assert.equal(accepted.support, "supported", "an exactly pinned theme with a verified sentinel is supported");
 });
 
+test("the runtime status summary separates execution state from contrast outcome and the unmeasured preference", () => {
+  const source = createDiagnosticRuntimeSource();
+  assert.match(source, /stato di esecuzione, non esito dei contrasti/);
+  assert.match(source, /NON è misurata: è un'altra preferenza, non un altro tema/);
+  assert.match(source, /entrambi i temi sono misurati sotto la preferenza attiva/);
+});
+
 test("the exported runtime constants are complete and stable", () => {
   assert.equal(DIAGNOSTIC_RUNTIME_VERSION, 1);
   assert.ok(/^SMART_COLORS_DIAGNOSTIC_RUNTIME_V\d+$/.test(DIAGNOSTIC_RUNTIME_MARKER));
@@ -356,6 +367,25 @@ test("the exported runtime constants are complete and stable", () => {
   assert.deepEqual(DIAGNOSTIC_STATES, ["pending", "running", "complete", "incomplete", "unavailable", "unsupported", "disabled"]);
   assert.ok(DIAGNOSTIC_FRAME_TIMEOUT_MS > 0);
   assert.equal(typeof createDiagnosticRuntimeSource(), "string");
+});
+
+test("the serialized runtime declares the empty-baseline and exploration contract", () => {
+  const source = createDiagnosticRuntimeSource();
+  assert.match(source, /baseline-empty/, "an empty captured output has an explicit fail-closed cause");
+  assert.match(source, /explorationCoverage/, "exploration coverage is aggregated separately");
+  assert.match(source, /explorationPairsFor/, "the exploration catalog travels with the core");
+  assert.ok(!source.includes("</"), "no </ sequence may be introduced by the additions");
+  assert.doesNotThrow(() => new Function(source), "the emitted source must still compile as a classic script");
+});
+
+test("the measurement carrier declares both color schemes on the iframe element", () => {
+  assert.equal(DIAGNOSTIC_FRAME_COLOR_SCHEME, "light dark", "the carrier must declare both schemes");
+  const source = createDiagnosticRuntimeSource();
+  // The assignment lives on the carrier element, before the srcdoc loads, and not on the child root.
+  assert.match(source, /frame\.style\.colorScheme = FRAME_COLOR_SCHEME/);
+  assert.match(source, /const FRAME_COLOR_SCHEME = "light dark"/);
+  assert.match(source, /frameColorScheme: FRAME_COLOR_SCHEME/);
+  assert.ok(!source.includes("</"));
 });
 
 // ---------------------------------------------------------------------------
@@ -444,6 +474,7 @@ async function assertRuntimeConstants(page) {
       retryType: controller.button ? controller.button.type : null,
       hostId: controller.host ? controller.host.id : null,
       hostState: controller.host ? controller.host.getAttribute("data-smart-colors-state") : null,
+      frameColorScheme: controller.frameColorScheme,
     };
   });
   assert.equal(meta.marker, DIAGNOSTIC_RUNTIME_MARKER);
@@ -465,6 +496,7 @@ async function assertRuntimeConstants(page) {
   assert.equal(meta.retryType, "button");
   assert.equal(meta.hostId, DIAGNOSTIC_HOST_ID);
   assert.ok(TERMINAL_STATES.includes(meta.hostState), "the host must expose a terminal state attribute");
+  assert.equal(meta.frameColorScheme, DIAGNOSTIC_FRAME_COLOR_SCHEME, "the carrier declares both schemes");
   // The serialized copy must agree with the Node-side check SC-05/06 import.
   const samples = ['@import "x";', "a{background:url(y.png)}", "/* @import url(x) */ a{color:red}", ":root{--x:red}"];
   const fromBrowser = await page.evaluate((input) => input.map((css) => window.__smartColorsDiagnostic.containsUnsupportedResources(css)), samples);
@@ -480,6 +512,7 @@ async function assertFrames(page, expectedCount) {
       src: frame.getAttribute("src"),
       title: frame.getAttribute("title"),
       scenario: frame.getAttribute("data-smart-colors-scenario"),
+      styleScheme: frame.style.colorScheme,
       scripts: frameDocument ? frameDocument.querySelectorAll("script").length : -1,
       styles: frameDocument ? frameDocument.querySelectorAll("style").length : -1,
       hasProbe: frameDocument ? frameDocument.querySelectorAll("[data-smart-colors-pair]").length : -1,
@@ -490,6 +523,7 @@ async function assertFrames(page, expectedCount) {
   assert.equal(frames.length, expectedCount, "one fresh frame per scenario");
   for (const frame of frames) {
     assert.equal(frame.sandbox, "allow-same-origin", "frames keep the minimal sandbox");
+    assert.equal(frame.styleScheme, "light dark", "the carrier element declares both schemes so the child follows the native preference, never the pinned UI");
     assert.equal(frame.srcdoc, true, "frames load from srcdoc, never from a remote src");
     assert.equal(frame.src, null);
     assert.ok(frame.title && frame.title.trim().length > 0, "every frame needs an accessible name");
@@ -654,11 +688,16 @@ test("SC-04 browser proof: isolated collector and runtime on file://", { skip: N
   const runtimeSource = createDiagnosticRuntimeSource();
   const contract = contractFor(SYNTHETIC_CONFIG);
 
+  const emptyBaselinePayload = { ...buildPayload({ baseline: "" }), css: { baseline: "", tuning: null, tuningSupport: "absent", source: "output", status: "empty", production: false } };
   const files = {
     pref: buildFixtureHtml({ title: "Smart Colors T-PREF fixture", runtimeSource, payload: buildPayload({ baseline: PREF_BASELINE, tuning: PREF_TUNING, tuningSupport: "supported" }) }),
+    parentLight: buildFixtureHtml({ title: "Smart Colors parent light host", runtimeSource, hostColorScheme: "light", payload: buildPayload({ baseline: PREF_BASELINE, tuning: PREF_TUNING, tuningSupport: "supported" }) }),
+    parentDark: buildFixtureHtml({ title: "Smart Colors parent dark host", runtimeSource, hostColorScheme: "dark", payload: buildPayload({ baseline: PREF_BASELINE, tuning: PREF_TUNING, tuningSupport: "supported" }) }),
     failClosed: buildFixtureHtml({ title: "Smart Colors fail-closed fixture", runtimeSource, payload: buildPayload({ baseline: FAIL_CLOSED_BASELINE }) }),
     unsupportedTuning: buildFixtureHtml({ title: "Smart Colors unsupported tuning", runtimeSource, payload: buildPayload({ baseline: PREF_BASELINE, tuning: '@import url("https://example.invalid/x.css");\n', tuningSupport: "unsupported" }) }),
     unsupportedBaseline: buildFixtureHtml({ title: "Smart Colors unsupported baseline", runtimeSource, payload: buildPayload({ baseline: ':root { background-image: url("https://example.invalid/a.png"); }\n' }) }),
+    unsupportedBaselineTuned: buildFixtureHtml({ title: "Smart Colors unsupported baseline with tuning", runtimeSource, payload: buildPayload({ baseline: ':root { background-image: url("https://example.invalid/a.png"); }\n', tuning: PREF_TUNING, tuningSupport: "supported" }) }),
+    emptyBaseline: buildFixtureHtml({ title: "Smart Colors empty baseline", runtimeSource, payload: emptyBaselinePayload }),
     badPayload: buildFixtureHtml({ title: "Smart Colors invalid payload", runtimeSource, payload: buildPayload({ baseline: PREF_BASELINE, schemaVersion: 2 }) }),
     unpinnedTheme: buildFixtureHtml({ title: "Smart Colors unpinned theme", runtimeSource, payload: buildPayload({ baseline: UNPINNED_BASELINE }) }),
     motion: buildFixtureHtml({ title: "Smart Colors tuning animation", runtimeSource, payload: buildPayload({ baseline: PREF_BASELINE, tuning: MOTION_TUNING, tuningSupport: "supported" }) }),
@@ -699,6 +738,56 @@ test("SC-04 browser proof: isolated collector and runtime on file://", { skip: N
       await assertRuntimeConstants(pref.page);
       await runPreferenceFixture(pref.page, pref.requests, pref.url, contract);
 
+      // 1b. Nested carrier regression: a host that pins `color-scheme: light` must not force the
+      //     isolated document to light. Under a dark native preference the run must be complete with
+      //     the dark matrix, and a later preference change must still invalidate and rerun.
+      const parentLight = await loadFixture(context, path.join(root, "parentLight.html"));
+      await parentLight.page.evaluate(() => {
+        window.__events = [];
+        window.__smartColorsDiagnostic.subscribe((snapshot) => window.__events.push({ state: snapshot.state, preference: snapshot.report ? snapshot.report.preference.active : null }));
+      });
+      await parentLight.page.emulateMedia({ colorScheme: "dark" });
+      const underDark = await (async () => {
+        await parentLight.page.waitForFunction(() => {
+          const controller = window.__smartColorsDiagnostic;
+          const report = controller.report();
+          return Boolean(report && report.preference && report.preference.active === "dark" && controller.status().state === "complete");
+        }, null, { timeout: 20_000 });
+        return parentLight.page.evaluate(() => window.__smartColorsDiagnostic.report());
+      })();
+      assert.equal(underDark.status, "complete", "a light host under a dark preference must still measure: " + JSON.stringify(underDark.errors));
+      assert.deepEqual(underDark.preference, { active: "dark", unmeasured: ["light"], source: "(prefers-color-scheme)" });
+      for (const theme of ["light", "dark"]) {
+        const measurement = measurementOf(underDark, scenarioIdOf(underDark, "baseline", theme), pairIdOf(contract, theme, "neutral text / canvas"));
+        closeTo(measurement.ratio, PREFERENCE_MATRIX.dark[theme], "parent-light host under dark preference, " + theme + " theme");
+      }
+      const lightEvents = await parentLight.page.evaluate(() => window.__events);
+      assert.ok(lightEvents.some((event) => event.state === "pending" && event.preference === null), "a preference change must invalidate the local results");
+      assert.ok(lightEvents.some((event) => event.state === "complete" && event.preference === "dark"), "the invalidation must be followed by a fresh dark run");
+      await assertFrames(parentLight.page, 4);
+      await assertNoNetwork(parentLight.requests, parentLight.url);
+
+      // 1c. A host that pins `color-scheme: dark` must not force the isolated document to dark: under
+      //     a light native preference the run follows the light matrix.
+      const parentDark = await loadFixture(context, path.join(root, "parentDark.html"));
+      await parentDark.page.emulateMedia({ colorScheme: "light" });
+      const underLight = await (async () => {
+        await parentDark.page.waitForFunction(() => {
+          const controller = window.__smartColorsDiagnostic;
+          const report = controller.report();
+          return Boolean(report && report.preference && report.preference.active === "light" && controller.status().state === "complete");
+        }, null, { timeout: 20_000 });
+        return parentDark.page.evaluate(() => window.__smartColorsDiagnostic.report());
+      })();
+      assert.equal(underLight.status, "complete", "a dark host under a light preference must still measure: " + JSON.stringify(underLight.errors));
+      assert.equal(underLight.preference.active, "light");
+      for (const theme of ["light", "dark"]) {
+        const measurement = measurementOf(underLight, scenarioIdOf(underLight, "baseline", theme), pairIdOf(contract, theme, "neutral text / canvas"));
+        closeTo(measurement.ratio, PREFERENCE_MATRIX.light[theme], "parent-dark host under light preference, " + theme + " theme");
+      }
+      await assertFrames(parentDark.page, 4);
+      await assertNoNetwork(parentDark.requests, parentDark.url);
+
       // 2. Fail-closed fixture: registered initial and undeclared token.
       const failClosed = await loadFixture(context, path.join(root, "failClosed.html"));
       await assertNoNetwork(failClosed.requests, failClosed.url);
@@ -720,6 +809,23 @@ test("SC-04 browser proof: isolated collector and runtime on file://", { skip: N
       assert.equal(baselineReport.measurements.length, 0, "no measurement may be produced for unsupported CSS");
       assert.equal(baselineReport.unsupported.length, 2);
       await assertNoNetwork(unsupportedBaseline.requests, unsupportedBaseline.url);
+
+      // 4b. Unsupported baseline WITH a tuning present: the tuned variant injects the same baseline,
+      //     so every scenario (baseline and tuned) is declared unsupported and nothing is measured.
+      const unsupportedBaselineTuned = await loadFixture(context, path.join(root, "unsupportedBaselineTuned.html"));
+      const tunedUnsupported = await unsupportedBaselineTuned.page.evaluate(() => window.__smartColorsDiagnostic.report());
+      assert.equal(tunedUnsupported.status, "unsupported");
+      assert.equal(tunedUnsupported.measurements.length, 0);
+      assert.equal(tunedUnsupported.unsupported.length, 4, "both baseline and both tuned scenarios are unsupported");
+      await assertNoNetwork(unsupportedBaselineTuned.requests, unsupportedBaselineTuned.url);
+
+      // 4c. Empty captured output: declared unavailable, never substituted by the generated candidate.
+      const emptyBaseline = await loadFixture(context, path.join(root, "emptyBaseline.html"));
+      const emptyReport = await emptyBaseline.page.evaluate(() => window.__smartColorsDiagnostic.report());
+      assert.equal(emptyReport.status, "incomplete");
+      assert.equal(emptyReport.measurements.length, 0);
+      assert.equal(emptyReport.errors[0].cause, "baseline-empty");
+      await assertNoNetwork(emptyBaseline.requests, emptyBaseline.url);
 
       // 5. Invalid payload: fail-closed, no measurements, explicit payload phase.
       const badPayload = await loadFixture(context, path.join(root, "badPayload.html"));
@@ -802,6 +908,12 @@ test("SC-04 browser proof: isolated collector and runtime on file://", { skip: N
         measurementOf(realReport, scenarioIdOf(realReport, "tuned", "light"), realLightPair).ratio,
         "a dark-only tuning must not change the light theme",
       );
+      // Exploration runs in the SAME frames (no new context, no new request) and stays separate.
+      assert.ok(Array.isArray(realReport.explorations) && realReport.explorations.length > 0, "the real payload measures exploration pairs");
+      assert.ok(realReport.explorationCoverage && realReport.explorationCoverage.expected > 0);
+      assert.ok(realReport.explorations.every((measurement) => measurement.pairId.includes("|exploration|")), "exploration ids use the exploration property");
+      assert.ok(realReport.explorations.every((measurement) => Number.isFinite(measurement.ratio) || measurement.status === "unmeasured"), "exploration never fabricates a ratio");
+      await assertFrames(real.page, 4);
       await assertNoNetwork(real.requests, real.url);
 
       results.push({ engine: engineName, version, status: "pass", realExpected: realReport.coverage.expectedCount });

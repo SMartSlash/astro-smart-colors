@@ -26,6 +26,14 @@ export const DOM_MEASUREMENT_STYLE_ATTRIBUTE = "data-smart-colors-measurement";
 export const DOM_REGISTRATION_PROBE = "--smart-colors-registration-probe";
 export const DOM_REGISTRATION_PROBE_INITIAL = "rgb(1, 2, 3)";
 export const DOM_THEME_PROBE_CLASS = "smart-colors-theme-probe";
+// Optional visible-node contract: a caller that already renders a real specimen can mark the
+// element that consumes a pair's tokens. `measureDocument(..., { elements: Map })` measures that
+// element instead of the synthetic probe, and fails closed when the element is missing, hidden,
+// not painted, or does not resolve the same tokens as the reference probe.
+export const DOM_VISIBLE_FOREGROUND_ATTRIBUTE = "data-smart-colors-foreground";
+export const DOM_VISIBLE_BACKGROUND_ATTRIBUTE = "data-smart-colors-background";
+export const DOM_VISIBLE_PROPERTY_ATTRIBUTE = "data-smart-colors-property";
+export const DOM_VISIBLE_SPECIMEN_ATTRIBUTE = "data-smart-colors-specimen";
 
 export function createDomVerifier(core) {
   const PROBE_ATTRIBUTE = "data-smart-colors-pair";
@@ -35,6 +43,9 @@ export function createDomVerifier(core) {
   const REGISTRATION_PROBE = "--smart-colors-registration-probe";
   const REGISTRATION_PROBE_INITIAL = "rgb(1, 2, 3)";
   const THEME_PROBE_CLASS = "smart-colors-theme-probe";
+  const VISIBLE_FOREGROUND_ATTRIBUTE = "data-smart-colors-foreground";
+  const VISIBLE_BACKGROUND_ATTRIBUTE = "data-smart-colors-background";
+  const VISIBLE_PROPERTY_ATTRIBUTE = "data-smart-colors-property";
   const PROBE_CLASS = "smart-colors-probe";
   const PROBE_HOST_TAG = "div";
   const PROBE_TAG = "div";
@@ -264,9 +275,138 @@ export function createDomVerifier(core) {
     return tokenGuard(document, view, rootStyle, pair.background, registration);
   }
 
-  function readProbe(view, probe, pair) {
-    const style = view.getComputedStyle(probe);
-    return { foreground: trim(style[pair.property]), background: trim(style.backgroundColor) };
+  // Read the applied values once and keep the style object, so the opaque-scope guards do not
+  // force a second style resolution.
+  function readNode(view, node, pair) {
+    const style = view.getComputedStyle(node);
+    return { style, foreground: trim(style[pair.property]), background: trim(style.backgroundColor) };
+  }
+
+  // A provided visible element is only usable when it is a connected element of the measured
+  // document, visible, actually paints the declared property, and declares the pair's tokens when
+  // the caller opted into the attributes. Anything else fails closed: a fallback probe would hide
+  // the fact that the visible specimen is not the thing that was rendered.
+  function visibleNodeGuard(document, view, node, pair) {
+    if (!node || node.nodeType !== 1) {
+      return { ok: false, cause: "visible-node-invalid", message: "the visible element for pair " + pair.id + " is not a DOM element" };
+    }
+    if (node.ownerDocument && node.ownerDocument !== document) {
+      return { ok: false, cause: "visible-node-invalid", message: "the visible element for pair " + pair.id + " belongs to another document" };
+    }
+    if (node.isConnected === false) {
+      return { ok: false, cause: "visible-node-missing", message: "the visible element for pair " + pair.id + " is not connected to the measured document" };
+    }
+    if (node.isConnected === undefined && document.documentElement && typeof document.documentElement.contains === "function" && !document.documentElement.contains(node)) {
+      return { ok: false, cause: "visible-node-missing", message: "the visible element for pair " + pair.id + " is detached from the measured document" };
+    }
+    if (typeof node.getAttribute === "function") {
+      const declaredForeground = node.getAttribute(VISIBLE_FOREGROUND_ATTRIBUTE);
+      if (declaredForeground != null && declaredForeground !== pair.foreground) {
+        return { ok: false, cause: "visible-node-mismatch", message: "the visible element for pair " + pair.id + " declares foreground " + declaredForeground + " instead of " + pair.foreground };
+      }
+      const declaredBackground = node.getAttribute(VISIBLE_BACKGROUND_ATTRIBUTE);
+      if (declaredBackground != null && declaredBackground !== pair.background) {
+        return { ok: false, cause: "visible-node-mismatch", message: "the visible element for pair " + pair.id + " declares background " + declaredBackground + " instead of " + pair.background };
+      }
+      const declaredProperty = node.getAttribute(VISIBLE_PROPERTY_ATTRIBUTE);
+      if (declaredProperty != null && declaredProperty !== pair.property) {
+        return { ok: false, cause: "visible-node-mismatch", message: "the visible element for pair " + pair.id + " declares property " + declaredProperty + " instead of " + pair.property };
+      }
+    }
+    const style = view.getComputedStyle(node);
+    const display = trim(style.display);
+    if (display === "none") {
+      return { ok: false, cause: "visible-node-hidden", message: "the visible element for pair " + pair.id + " is display:none, so its applied colours are not rendered" };
+    }
+    const visibility = trim(style.visibility);
+    if (visibility === "hidden" || visibility === "collapse") {
+      return { ok: false, cause: "visible-node-hidden", message: "the visible element for pair " + pair.id + " is visibility:" + visibility };
+    }
+    if (pair.property === "borderColor") {
+      const borderStyle = trim(style.borderStyle);
+      if (borderStyle === "none" || borderStyle === "hidden") {
+        return { ok: false, cause: "visible-node-invalid", message: "the visible element for pair " + pair.id + " has no painted border" };
+      }
+      const borderWidth = trim(style.borderWidth);
+      if (borderWidth !== "" && !(Number.parseFloat(borderWidth) > 0)) {
+        return { ok: false, cause: "visible-node-invalid", message: "the visible element for pair " + pair.id + " has a zero-width border" };
+      }
+    }
+    if (pair.property === "outlineColor") {
+      const outlineStyle = trim(style.outlineStyle);
+      if (outlineStyle === "none") {
+        return { ok: false, cause: "visible-node-invalid", message: "the visible element for pair " + pair.id + " has no painted outline" };
+      }
+      const outlineWidth = trim(style.outlineWidth);
+      if (outlineWidth !== "" && !(Number.parseFloat(outlineWidth) > 0)) {
+        return { ok: false, cause: "visible-node-invalid", message: "the visible element for pair " + pair.id + " has a zero-width outline" };
+      }
+    }
+    return { ok: true };
+  }
+
+  // Alpha is already rejected by `parseComputedColor`; this guard covers the compositing that a
+  // computed `background-color` alone cannot describe. Unknown compositing is unmeasured, never a
+  // pass. Missing computed fields (a minimal stub) are tolerated; present ones are enforced.
+  function compositedStyle(style, where) {
+    const image = trim(style.backgroundImage);
+    if (image !== "" && image !== "none") {
+      return { ok: false, cause: "composited-background", message: "the applied background-image for " + where + " is " + image + "; gradients and images are outside the opaque scope" };
+    }
+    const filter = trim(style.filter);
+    if (filter !== "" && filter !== "none") {
+      return { ok: false, cause: "composited-background", message: "the applied filter for " + where + " is " + filter + "; filtered colours are outside the opaque scope" };
+    }
+    const backdrop = trim(style.backdropFilter != null ? style.backdropFilter : style.webkitBackdropFilter);
+    if (backdrop !== "" && backdrop !== "none") {
+      return { ok: false, cause: "composited-background", message: "the applied backdrop-filter for " + where + " is " + backdrop + "; backdrop compositing is outside the opaque scope" };
+    }
+    const opacity = trim(style.opacity);
+    if (opacity !== "" && Number(opacity) < 1) {
+      return { ok: false, cause: "translucent-element", message: "the applied opacity for " + where + " is " + opacity + "; a translucent element changes the effective colours" };
+    }
+    const blend = trim(style.mixBlendMode);
+    if (blend !== "" && blend !== "normal") {
+      return { ok: false, cause: "composited-background", message: "the applied mix-blend-mode for " + where + " is " + blend + "; blended colours are outside the opaque scope" };
+    }
+    return { ok: true };
+  }
+
+  function normalizeElements(options) {
+    const value = options && isRecord(options) ? options.elements : null;
+    if (value == null) return { ok: true, map: null };
+    if (typeof value.get !== "function" || typeof value.has !== "function" || typeof value.keys !== "function") return { ok: false, map: null };
+    return { ok: true, map: value };
+  }
+
+  // A computed colour is not the rendered colour when an ancestor applies opacity, a filter, a
+  // backdrop filter or a blend mode. The walk is bounded by the ancestor chain and only inspects
+  // the compositing properties that can change the pair; an opaque background-image on an ancestor
+  // is irrelevant once the measured node paints its own background.
+  function ancestorCompositingGuard(document, view, node) {
+    let current = node.parentElement;
+    while (current) {
+      const style = view.getComputedStyle(current);
+      const opacity = trim(style.opacity);
+      if (opacity !== "" && Number(opacity) < 1) {
+        return { ok: false, cause: "translucent-ancestor", message: "an ancestor of the measured pair applies opacity: " + opacity + "; the rendered colours are not the computed colours" };
+      }
+      const filter = trim(style.filter);
+      if (filter !== "" && filter !== "none") {
+        return { ok: false, cause: "composited-ancestor", message: "an ancestor of the measured pair applies filter: " + filter + "; filtered colours are outside the opaque scope" };
+      }
+      const backdrop = trim(style.backdropFilter != null ? style.backdropFilter : style.webkitBackdropFilter);
+      if (backdrop !== "" && backdrop !== "none") {
+        return { ok: false, cause: "composited-ancestor", message: "an ancestor of the measured pair applies backdrop-filter: " + backdrop + "; backdrop compositing is outside the opaque scope" };
+      }
+      const blend = trim(style.mixBlendMode);
+      if (blend !== "" && blend !== "normal") {
+        return { ok: false, cause: "composited-ancestor", message: "an ancestor of the measured pair applies mix-blend-mode: " + blend + "; blended colours are outside the opaque scope" };
+      }
+      if (current === document.documentElement) break;
+      current = current.parentElement;
+    }
+    return { ok: true };
   }
 
   function pushUnmeasured(result, pair, phase, cause, message) {
@@ -290,7 +430,7 @@ export function createDomVerifier(core) {
     return result;
   }
 
-  function measureDocument(document, scenario, contract) {
+  function measureDocument(document, scenario, contract, options = {}) {
     const result = {
       scenarioId: scenario ? scenario.id : null,
       theme: scenario ? scenario.theme : null,
@@ -304,6 +444,7 @@ export function createDomVerifier(core) {
       measurements: [],
       errors: [],
       probes: { total: 0, missing: [] },
+      visible: { provided: 0, measured: 0, missing: [], unexpected: [] },
       measuredAt: nowIso(),
     };
     const view = document ? document.defaultView : null;
@@ -314,6 +455,17 @@ export function createDomVerifier(core) {
     const pairs = contract && isRecord(contract.pairs) ? contract.pairs[theme] : null;
     if (!Array.isArray(pairs)) {
       return failDocument(result, "contract", "theme-missing", "The contract declares no pairs for theme " + String(theme));
+    }
+    const providedElements = normalizeElements(options);
+    if (!providedElements.ok) {
+      return fail(result, pairs, "setup", "elements-invalid", "options.elements must be a Map keyed by pair id; a plain object cannot guarantee that a visible node belongs to each pair");
+    }
+    if (providedElements.map) {
+      result.visible.provided = typeof providedElements.map.size === "number" ? providedElements.map.size : 0;
+      const declared = new Set(pairs.map((pair) => pair.id));
+      for (const id of providedElements.map.keys()) {
+        if (!declared.has(id)) result.visible.unexpected.push(id);
+      }
     }
 
     result.forcedColors = forcedColorsActive(view);
@@ -346,7 +498,19 @@ export function createDomVerifier(core) {
     const rootStyle = view.getComputedStyle(document.documentElement);
     for (const pair of pairs) {
       const probe = probes.byId.get(pair.id);
-      if (!probe) {
+      const hasVisible = Boolean(providedElements.map && providedElements.map.has(pair.id));
+      const mapped = hasVisible ? providedElements.map.get(pair.id) : null;
+      const visible = hasVisible;
+      const node = visible ? mapped : probe;
+      if (visible) {
+        const visibleGuard = visibleNodeGuard(document, view, node, pair);
+        if (!visibleGuard.ok) {
+          result.visible.missing.push(pair.id);
+          pushUnmeasured(result, pair, "measure", visibleGuard.cause, visibleGuard.message);
+          continue;
+        }
+      }
+      if (!node) {
         result.probes.missing.push(pair.id);
         pushUnmeasured(result, pair, "measure", "probe-missing", "no probe element was found for pair " + pair.id);
         continue;
@@ -356,12 +520,47 @@ export function createDomVerifier(core) {
         pushUnmeasured(result, pair, "measure", guard.cause, guard.message);
         continue;
       }
-      const computed = readProbe(view, probe, pair);
+      const computed = readNode(view, node, pair);
       if (computed.foreground === "" || computed.background === "") {
         pushUnmeasured(result, pair, "measure", "computed-empty", "the applied " + pair.property + "/background-color serialized empty");
         continue;
       }
-      result.measurements.push(core.measurePair(pair, { id: result.scenarioId }, computed));
+      const composite = compositedStyle(computed.style, pair.label || pair.id);
+      if (!composite.ok) {
+        pushUnmeasured(result, pair, "measure", composite.cause, composite.message);
+        continue;
+      }
+      if (pair.property === "color") {
+        // Gradient text paints from `-webkit-text-fill-color`, not `color`: a differing fill is an
+        // unmeasured foreground, never a pass.
+        const fill = trim(computed.style.webkitTextFillColor);
+        if (fill !== "" && fill !== "currentcolor" && sameColor(computed.style.color, fill) !== true) {
+          pushUnmeasured(result, pair, "measure", "text-fill-color", "the applied -webkit-text-fill-color for " + (pair.label || pair.id) + " is " + fill + " instead of the applied color " + computed.style.color);
+          continue;
+        }
+      }
+      const ancestors = ancestorCompositingGuard(document, view, node);
+      if (!ancestors.ok) {
+        pushUnmeasured(result, pair, "measure", ancestors.cause, ancestors.message);
+        continue;
+      }
+      if (visible) {
+        if (!probe) {
+          pushUnmeasured(result, pair, "measure", "visible-node-unverified", "the visible element for pair " + pair.id + " has no reference probe, so its token use cannot be verified");
+          continue;
+        }
+        const reference = readNode(view, probe, pair);
+        if (sameColor(computed.foreground, reference.foreground) !== true || sameColor(computed.background, reference.background) !== true) {
+          pushUnmeasured(result, pair, "measure", "visible-node-mismatch", "the visible element for pair " + pair.id + " does not resolve the declared pair tokens identically to the reference probe");
+          continue;
+        }
+      }
+      const measurement = core.measurePair(pair, { id: result.scenarioId }, {
+        foreground: computed.foreground,
+        background: computed.background,
+      });
+      result.measurements.push(measurement);
+      if (visible && measurement.status !== "unmeasured") result.visible.measured += 1;
     }
     result.support = "supported";
     return result;
@@ -376,6 +575,9 @@ export function createDomVerifier(core) {
     registrationProbe: REGISTRATION_PROBE,
     registrationProbeInitial: REGISTRATION_PROBE_INITIAL,
     themeProbeClass: THEME_PROBE_CLASS,
+    visibleForegroundAttribute: VISIBLE_FOREGROUND_ATTRIBUTE,
+    visibleBackgroundAttribute: VISIBLE_BACKGROUND_ATTRIBUTE,
+    visiblePropertyAttribute: VISIBLE_PROPERTY_ATTRIBUTE,
     observePreference,
     forcedColorsActive,
     measureDocument,

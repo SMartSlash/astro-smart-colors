@@ -36,6 +36,12 @@ export const DIAGNOSTIC_RETRY_LABEL = "Ripeti verifica";
 export const DIAGNOSTIC_FRAME_TIMEOUT_MS = 5000;
 export const DIAGNOSTIC_HOOKS = Object.freeze({ host: "host", frames: "frames", status: "status", retry: "retry", scenario: "scenario" });
 export const DIAGNOSTIC_STATES = Object.freeze(["pending", "running", "complete", "incomplete", "unavailable", "unsupported", "disabled"]);
+// The measurement carriers must declare support for BOTH schemes on the iframe element itself. An
+// embedded document inherits the embedding element's `color-scheme` for its `prefers-color-scheme`
+// (MDN /Web/CSS/@media/prefers-color-scheme): a UI that pins `color-scheme: light` on its root would
+// otherwise force every child to report `light`, so a dark OS preference could never be measured.
+// Declaring `light dark` lets the child keep the native preference and never emulates it arbitrarily.
+export const DIAGNOSTIC_FRAME_COLOR_SCHEME = "light dark";
 
 // Tuning may reference resources the isolated runner cannot load; this is the same syntax check
 // the session uses, not a CSS parser. Anything it flags is declared unsupported, never a pass.
@@ -94,6 +100,9 @@ export function createDiagnosticRuntime(deps) {
   const CSS_ATTRIBUTE = "data-smart-colors-css";
   const RETRY_LABEL = "Ripeti verifica";
   const FRAME_TIMEOUT_MS = 5000;
+  // Re-declared inside the factory so the serialized source stays self-contained; the entry-point
+  // DIAGNOSTIC_FRAME_COLOR_SCHEME is asserted equal by the runtime test to prevent drift.
+  const FRAME_COLOR_SCHEME = "light dark";
   const HOOKS = { host: "host", frames: "frames", status: "status", retry: "retry", scenario: "scenario" };
   const STATES = ["pending", "running", "complete", "incomplete", "unavailable", "unsupported", "disabled"];
   const STATE_LABELS = {
@@ -215,14 +224,21 @@ export function createDiagnosticRuntime(deps) {
     return total;
   }
 
+  // One honest, non-live-exclusive summary: an execution terminal state is never a contrast pass,
+  // both themes are always measured under the active preference, and the OTHER `prefers-color-scheme`
+  // value is declared as an unmeasured preference (not a second theme). The runtime still publishes a
+  // single status region; this function only shapes its text.
   function statusText() {
     const label = STATE_LABELS[currentState] || String(currentState);
-    if (!currentReport) return "Misure locali non eseguite: " + label + ".";
-    const parts = ["Misure locali: " + label + "."];
+    if (!currentReport) return "Misure locali non eseguite: " + label + ". Nessun contrasto locale è stato verificato in questa pagina.";
+    const parts = ["Misure locali: " + label + " (stato di esecuzione, non esito dei contrasti)."];
     const preference = currentReport.preference;
     if (preference) {
-      const other = preference.unmeasured && preference.unmeasured.length ? "; " + preference.unmeasured.join(", ") + " non misurata" : "";
-      parts.push("Preferenza attiva: " + preference.active + other + ".");
+      const active = preference.active == null ? "non disponibile" : String(preference.active);
+      const other = preference.unmeasured && preference.unmeasured.length
+        ? " La preferenza di sistema " + preference.unmeasured.join(", ") + " NON è misurata: è un'altra preferenza, non un altro tema; entrambi i temi sono misurati sotto la preferenza attiva."
+        : "";
+      parts.push("Preferenza attiva: " + active + "." + other);
     }
     parts.push("Coppie misurate: " + currentReport.measurements.length + " su " + countExpected(currentReport.expected) + ".");
     if (currentReport.unsupported && currentReport.unsupported.length) parts.push("Scenari non supportati: " + currentReport.unsupported.length + ".");
@@ -287,9 +303,16 @@ export function createDiagnosticRuntime(deps) {
     if (value.schemaVersion !== VERSION) return reject("payload-schema", "unsupported payload schemaVersion " + String(value.schemaVersion) + "; expected " + VERSION);
     if (!isRecord(value.config)) return reject("payload-invalid", "the payload must carry a verifiable config object");
     if (!isRecord(value.css)) return reject("payload-invalid", "the payload must carry a css object");
-    if (typeof value.css.baseline !== "string" || value.css.baseline === "") return reject("payload-invalid", "the payload must carry non-empty baseline CSS bytes");
+    if (typeof value.css.baseline !== "string") return reject("payload-invalid", "css.baseline must be a string");
+    // A captured output that is empty is never replaced by the generated candidate: it is declared
+    // unavailable so nothing is measured, instead of silently confirming the model bytes as real.
+    if (value.css.baseline === "" && value.css.source === "output") return reject("baseline-empty", "the captured output is empty; the generated candidate is never substituted, so nothing is measured");
+    if (value.css.baseline === "") return reject("payload-invalid", "the payload must carry non-empty baseline CSS bytes");
     if (value.css.tuning != null && typeof value.css.tuning !== "string") return reject("payload-invalid", "css.tuning must be a string or null");
     if (value.css.tuningSupport != null && ["absent", "supported", "unsupported"].indexOf(value.css.tuningSupport) === -1) return reject("payload-invalid", "css.tuningSupport is not a known state");
+    // Additive fields: tolerated when absent (legacy payloads) and validated when present.
+    if (value.css.source != null && ["output", "generated-candidate"].indexOf(value.css.source) === -1) return reject("payload-invalid", "css.source is not a known state");
+    if (value.css.status != null && ["current", "stale", "absent", "empty"].indexOf(value.css.status) === -1) return reject("payload-invalid", "css.status is not a known state");
     if (value.snapshotId != null && typeof value.snapshotId !== "string") return reject("payload-invalid", "snapshotId must be a string");
     return { ok: true };
   }
@@ -323,6 +346,10 @@ export function createDiagnosticRuntime(deps) {
     frame.setAttribute("title", "Smart Colors " + scenario.variant + " " + scenario.theme);
     frame.setAttribute(HOOK_ATTRIBUTE, HOOKS.scenario);
     frame.setAttribute(SCENARIO_ATTRIBUTE, scenario.id);
+    // Declare both schemes on the carrier element BEFORE the srcdoc loads, so the isolated document's
+    // `prefers-color-scheme` follows the native/OS preference instead of the embedding UI's pinned
+    // color-scheme. The child still pins its own theme via `color-scheme`/`data-theme` after load.
+    frame.style.colorScheme = FRAME_COLOR_SCHEME;
     let settle = null;
     const ready = new Promise((resolve, reject) => {
       settle = { resolve, reject };
@@ -384,10 +411,13 @@ export function createDiagnosticRuntime(deps) {
   }
 
   function measureScenario(scenario, contract, session, flags) {
-    const pairs = contract.pairs[scenario.theme] || [];
-    const unsupportedReason = scenario.variant === "tuned"
-      ? (flags.tuningUnsupported ? "the tuning references @import or url() resources the isolated runner does not load" : null)
-      : (flags.baselineUnsupported ? "the generated CSS references @import or url() resources the isolated runner does not load" : null);
+    // The tuned variant injects baseline AND tuning, so an unsupported baseline makes it unsupported
+    // too: the tuning state alone must never let a scenario through with unsupported baseline bytes.
+    const baselineMessage = "the baseline CSS references @import or url() resources the isolated runner does not load";
+    const tuningMessage = "the tuning references @import or url() resources the isolated runner does not load";
+    const unsupportedReason = flags.baselineUnsupported
+      ? baselineMessage
+      : (scenario.variant === "tuned" && flags.tuningUnsupported ? tuningMessage : null);
     if (unsupportedReason) {
       return {
         scenario,
@@ -395,6 +425,8 @@ export function createDiagnosticRuntime(deps) {
         reason: unsupportedReason,
         measurements: [],
         errors: [{ phase: "inject", cause: "unsupported-resource", scenarioId: scenario.id, pairId: null, message: unsupportedReason }],
+        explorations: [],
+        explorationErrors: [],
       };
     }
     const created = createFrame(scenario);
@@ -402,14 +434,33 @@ export function createDiagnosticRuntime(deps) {
       (frameDocument) => {
         injectPayloadCss(frameDocument, session, scenario.variant);
         const measured = verifier.measureDocument(frameDocument, scenario, contract);
+        // Exploration is measured in the SAME isolated document, on the guaranteed base tokens, with
+        // the same collector and core.measurePair: no new frame, no new algorithm and no network.
+        // Any exploration failure is kept apart and can never affect the primary scenario.
+        let explorations = [];
+        const explorationErrors = [];
+        if (measured.support === "supported") {
+          const explorationPairs = contract && contract.explorationPairs ? contract.explorationPairs[scenario.theme] : null;
+          if (Array.isArray(explorationPairs) && explorationPairs.length > 0) {
+            try {
+              const explorationContract = { pairs: {} };
+              explorationContract.pairs[scenario.theme] = explorationPairs;
+              const explored = verifier.measureDocument(frameDocument, scenario, explorationContract);
+              if (explored.support === "supported") explorations = explored.measurements;
+              else explorationErrors.push({ phase: "exploration", cause: "exploration-unsupported", scenarioId: scenario.id, pairId: null, message: explored.error || "the exploration pairs could not be measured" });
+            } catch (error) {
+              explorationErrors.push({ phase: "exploration", cause: "exploration-failed", scenarioId: scenario.id, pairId: null, message: error && error.message ? error.message : String(error) });
+            }
+          }
+        }
         created.cleanup();
         // A document that could not be proven measurable (unpinned theme, unverifiable light-dark,
         // forced colours, indeterminate registration) is declared unsupported, never measured.
         if (measured.support !== "supported") {
           const reason = measured.error || "the isolated document could not be measured";
-          return { scenario, ran: false, reason, measurements: [], errors: measured.errors.length ? measured.errors : [{ phase: "measure", cause: "unsupported-document", scenarioId: scenario.id, pairId: null, message: reason }] };
+          return { scenario, ran: false, reason, measurements: [], errors: measured.errors.length ? measured.errors : [{ phase: "measure", cause: "unsupported-document", scenarioId: scenario.id, pairId: null, message: reason }], explorations: [], explorationErrors: [] };
         }
-        return { scenario, ran: true, reason: null, measurements: measured.measurements, errors: measured.errors };
+        return { scenario, ran: true, reason: null, measurements: measured.measurements, errors: measured.errors, explorations, explorationErrors };
       },
       (error) => {
         const message = error && error.message ? error.message : String(error);
@@ -420,6 +471,8 @@ export function createDiagnosticRuntime(deps) {
           reason: message,
           measurements: [],
           errors: [{ phase: "frame", cause: message === "frame-timeout" ? "frame-timeout" : "frame-unavailable", scenarioId: scenario.id, pairId: null, message }],
+          explorations: [],
+          explorationErrors: [],
         };
       },
     );
@@ -442,7 +495,34 @@ export function createDiagnosticRuntime(deps) {
       unsupported: parts.unsupported == null ? [] : parts.unsupported,
       errors: parts.errors == null ? [] : parts.errors,
       notes: parts.notes == null ? [] : parts.notes,
+      // Exploration stays in its own slots: it never enters `measurements`, `coverage` or the status.
+      explorations: parts.explorations == null ? [] : parts.explorations,
+      explorationErrors: parts.explorationErrors == null ? [] : parts.explorationErrors,
+      explorationCoverage: parts.explorationCoverage == null ? null : parts.explorationCoverage,
       measuredAt: parts.measuredAt == null ? null : parts.measuredAt,
+    };
+  }
+
+  // Advisory exploration coverage, computed from the scenarios that actually ran: expected is the
+  // bounded exploration pair count per measured scenario, never part of `coverage` or the status.
+  function explorationCoverageFor(contract, results, explorations, explorationErrors) {
+    let expected = 0;
+    const omitted = [];
+    for (const result of results) {
+      if (!result.ran) continue;
+      const theme = result.scenario.theme;
+      const pairs = contract && contract.explorationPairs ? contract.explorationPairs[theme] : null;
+      expected += Array.isArray(pairs) ? pairs.length : 0;
+      const families = contract && contract.explorationScope && contract.explorationScope.omittedFamilies ? contract.explorationScope.omittedFamilies[theme] : null;
+      if (Array.isArray(families)) for (const family of families) if (omitted.indexOf(family) === -1) omitted.push(family);
+    }
+    const measured = explorations.filter((measurement) => measurement.status !== "unmeasured").length;
+    return {
+      expected,
+      measured,
+      unmeasured: Math.max(0, expected - measured),
+      omittedFamilies: omitted,
+      complete: expected > 0 && measured === expected && explorationErrors.length === 0,
     };
   }
 
@@ -468,6 +548,8 @@ export function createDiagnosticRuntime(deps) {
     const errors = [];
     const unsupported = [];
     const scenarioRecords = [];
+    const explorations = [];
+    const explorationErrors = [];
     for (const result of results) {
       const id = result.scenario.id;
       scenarioRecords.push({
@@ -486,9 +568,12 @@ export function createDiagnosticRuntime(deps) {
         unsupported.push({ id, reason: result.reason });
       }
       for (const error of result.errors) errors.push(error);
+      if (Array.isArray(result.explorations)) for (const measurement of result.explorations) explorations.push(measurement);
+      if (Array.isArray(result.explorationErrors)) for (const error of result.explorationErrors) explorationErrors.push(error);
     }
 
     const coverage = core.coverage(expectedList, measurements);
+    const explorationCoverage = explorationCoverageFor(contract, results, explorations, explorationErrors);
     const ranAny = results.some((result) => result.ran);
     const allUnsupported = results.length > 0 && results.every((result) => !result.ran);
     let status = "incomplete";
@@ -513,6 +598,9 @@ export function createDiagnosticRuntime(deps) {
       unsupported,
       errors,
       notes,
+      explorations,
+      explorationErrors,
+      explorationCoverage,
       measuredAt,
     });
   }
@@ -645,6 +733,7 @@ export function createDiagnosticRuntime(deps) {
     },
     retryLabel: RETRY_LABEL,
     frameTimeoutMs: FRAME_TIMEOUT_MS,
+    frameColorScheme: FRAME_COLOR_SCHEME,
     ready: true,
     preference,
     scenarios,

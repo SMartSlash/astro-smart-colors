@@ -569,8 +569,10 @@ test("a diagnostic session preview embeds one hashed script, an inert payload an
   assert.doesNotMatch(cspOf(html), /unsafe-eval|unsafe-hashes/);
   assert.doesNotMatch(markupOf(html), /\son[a-z]+\s*=/i, "no inline event handler in markup");
   // Native form controls are the guided workbench: they are allowed and required, while
-  // external/embedded resources and remote URLs stay forbidden.
-  assert.doesNotMatch(markupOf(html), /<(?:link|img|object|embed|svg|iframe)\b|https?:\/\//i);
+  // external/embedded resources stay forbidden. The only remote anchors are the static WCAG
+  // reference links, so strip those exact hrefs before checking for any other remote URL.
+  const markup = markupOf(html).replace(/href="https:\/\/www\.w3\.org\/TR\/WCAG22\/#[a-z-]+"/g, "");
+  assert.doesNotMatch(markup, /<(?:link|img|object|embed|svg|iframe)\b|https?:\/\//i);
   assert.match(markupOf(html), /<form\b/);
   assert.match(markupOf(html), /<input\b/);
   assert.match(markupOf(html), /<select\b/);
@@ -634,9 +636,8 @@ test("the session preview leads with the workbench, keeps the raw source archive
   // The archive gallery must not dominate: the summary line precedes the model samples.
   assert.ok(html.indexOf("archive-gallery") < html.indexOf("Famiglia <code>--color-primary</code>"), "the resolved gallery sits inside the archive detail");
   assert.match(html, /Senza JavaScript/);
-  assert.match(html, /La ricerca è limitata alla <strong>minima variazione di luminosità<\/strong>/);
-  assert.match(html, /il fit di gamut può ridurre il chroma/);
-  assert.match(html, /ricerca globale del colore più vicino in ΔE/);
+  assert.match(html, /La ricerca varia la luminosità quanto basta per raggiungere il minimo dichiarato, non il target del progetto/);
+  assert.match(html, /non cerca il colore più vicino in ΔE/);
   assert.match(html, /nessun abbinamento verificato/);
   // Fully native controls, and neutral headings whose theme/variant come from the controller.
   assert.match(html, /<select id="smart-colors-workbench-source"/);
@@ -760,7 +761,7 @@ test("the presenter degrades to technical wording when no designer language is a
 
 test("a session preview stays useful without JavaScript and keeps the model out of any verified verdict", () => {
   const html = preview(diagSession());
-  assert.match(html, /<h1>La tua palette, in uso\.<\/h1>/);
+  assert.match(html, /<h1>Colori a confronto\.<\/h1>/);
   assert.equal((html.match(/<h1>/g) ?? []).length, 1);
   assert.match(html, /<main id="contenuto">/);
   // Three explicit channels, never one global verdict: model forecast, this browser, automation.
@@ -797,7 +798,8 @@ test("session markup follows the navigation, keeps a logical heading order and n
   assert.match(html, /:focus-visible\s*\{[^}]*outline:\s*3px solid/);
   assert.match(html, /data-smart-colors-diagnostic="status" role="status"/);
   assert.match(html, /<button type="button" data-smart-colors-diagnostic="retry" hidden>Ripeti verifica<\/button>/);
-  assert.ok([...html.matchAll(/href="([^"]+)"/g)].every((match) => /^(#|smart-colors\.html(#\w+)?$)/.test(match[1])), "only in-document anchors or the full report may be linked");
+  const allowedLinks = html.replace(/href="https:\/\/www\.w3\.org\/TR\/WCAG22\/#[a-z-]+"/g, 'href=""');
+  assert.ok([...allowedLinks.matchAll(/href="([^"]+)"/g)].every((match) => /^(#|smart-colors\.html(#\w+)?$)/.test(match[1])), "only in-document anchors, the full report or static WCAG reference links may be linked");
 });
 
 test("a diagnostic session escapes hostile identity and automation metadata", () => {
@@ -983,7 +985,8 @@ test("automation engine and error details stay static, escaped and cause-complet
   assert.match(markup, /<ul class="automation-counts"><li><strong>1<\/strong> sotto il minimo<\/li><li><strong>0<\/strong> sotto il target<\/li><li><strong>0<\/strong> non misurate<\/li><li><strong>0<\/strong> raggiungono minimo e target<\/li><\/ul>/);
   assert.match(markup, /<a href="smart-colors.html">Apri misure complete nel report<\/a>/);
   assert.match(markup, /<h4>Errori dell'automazione \(2\)<\/h4>/);
-  assert.doesNotMatch(markup, /\/opt\/foo\.svg|https?:\/\//);
+  const withoutWcagLinks = markup.replace(/href="https:\/\/www\.w3\.org\/TR\/WCAG22\/#[a-z-]+"/g, "");
+  assert.doesNotMatch(withoutWcagLinks, /\/opt\/foo\.svg|https?:\/\//);
 });
 
 // QA finding, preview side: a session with externally supplied, structurally valid scenarios must

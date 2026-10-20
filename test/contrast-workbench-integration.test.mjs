@@ -264,10 +264,10 @@ async function selectComparison(page, value) {
   return state(page);
 }
 
-// Real source choice: open the technical details, pick the source in the native select, then settle.
+// Real source choice: use the visible native swatch on desktop, then settle. The source select is
+// mobile-only and display:none at the integration viewport.
 async function selectSource(page, token) {
-  await revealDetails(page);
-  await page.selectOption("#smart-colors-workbench-source", token);
+  await page.click(`#smart-colors-workbench [data-smart-colors-workbench="swatch"][data-token="${token}"]`);
   await settle(page);
 }
 
@@ -296,6 +296,10 @@ function selectedSpecimen(page, slot) {
       backgroundColor: style.backgroundColor,
       borderColor: style.borderColor,
       outlineColor: style.outlineColor,
+      text: node.textContent,
+      childCount: node.children.length,
+      role: node.getAttribute("role"),
+      ariaLabel: node.getAttribute("aria-label"),
       scripts: doc.querySelectorAll("script").length,
     };
   }, slot);
@@ -651,8 +655,13 @@ test("the code snippet uses the pair's real property for border and outline, and
     assert.match(focus.snippet, /background-color: var\(--color-(?:bg|surface)\);/);
     assert.doesNotMatch(focus.snippet, /^\s*color:/);
     const focusSpecimen = await selectedSpecimen(page, "right");
-    assert.equal(focusSpecimen.tag, "BUTTON");
+    assert.equal(focusSpecimen.tag, "DIV", "the outline sample is static geometry, not a fake control");
     assert.equal(focusSpecimen.property, "outlineColor");
+    assert.equal(focusSpecimen.text.trim(), "", "the outline sample carries no unmeasured copy");
+    assert.equal(focusSpecimen.childCount, 0, "the outline sample is geometry only");
+    assert.equal(focusSpecimen.role, "img");
+    assert.match(focusSpecimen.ariaLabel, /Campione statico dell.{1,2}anello/);
+    assert.match(focusSpecimen.ariaLabel, /non il comportamento di focus/);
     assert.match(focusSpecimen.inlineStyle, /var\(--color-focus-ring\)/);
     assert.equal(focusSpecimen.outlineColor, (await measurement(page, "right")).foreground);
 
@@ -661,6 +670,15 @@ test("the code snippet uses the pair's real property for border and outline, and
     assert.match(border, /^border: 2px solid var\(--color-sea-gull-border-strong\);/);
     assert.match(border, /background-color: var\(--color-bg\);/);
     assert.doesNotMatch(border, /^\s*color:/);
+    const borderSpecimen = await selectedSpecimen(page, "right");
+    assert.equal(borderSpecimen.tag, "DIV", "the border sample is static geometry, not a fake control");
+    assert.equal(borderSpecimen.property, "borderColor");
+    assert.equal(borderSpecimen.text.trim(), "", "the border sample carries no unmeasured copy");
+    assert.equal(borderSpecimen.childCount, 0, "the border sample is geometry only");
+    assert.equal(borderSpecimen.role, "img");
+    assert.match(borderSpecimen.ariaLabel, /Campione statico del bordo/);
+    assert.match(borderSpecimen.ariaLabel, /non il comportamento di focus/);
+    assert.match(borderSpecimen.inlineStyle, /var\(--color-sea-gull-border-strong\)/);
 
     // A text pair keeps `color`, and the two thresholds are shown separately.
     await choosePair(page, { fg: "--color-text", bg: "--color-bg" });
@@ -677,7 +695,7 @@ test("the code snippet uses the pair's real property for border and outline, and
     assert.notEqual("4,50:1", "4,60:1");
     assert.match(text.measure, /Minimo richiesto/);
     assert.match(text.measure, /4,50:1/);
-    assert.match(text.measure, /Target del progetto/);
+    assert.match(text.measure, /Obiettivo progetto \(non WCAG\)/);
     assert.match(text.measure, /[0-9]+,[0-9]{2}:1/, "the project target is reported as a real ratio, distinct from the minimum");
   } finally {
     await page.close();
@@ -700,7 +718,7 @@ test("a temporary failure yields verified foreground AND background suggestions 
     await settle(page);
 
     // A pair that fails at runtime and is repairable from either side.
-    await page.selectOption("#smart-colors-workbench-source", "--palette-lagoon2");
+    await selectSource(page, "--palette-lagoon2");
     await choosePair(page, { fg: "--color-lagoon2-ink", bg: "--color-lagoon2" });
     const failing = await measurement(page, "right");
     assert.ok(failing.ratio < 4.5, "the lagoon2-ink pair must fail at runtime");

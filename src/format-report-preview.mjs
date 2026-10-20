@@ -1467,8 +1467,8 @@ ${problemsHtml(groups, proposals, verified, language)}</section>`
 <a class="skip" href="#contenuto">Vai al contenuto</a>
 <header class="studio-header">
 <div class="studio-topline"><p class="eyebrow">Smart Colors</p><a href="smart-colors.html">Report completo ↗</a></div>
-<h1>La tua palette, in uso.</h1>
-<p class="lede">Scegli un colore e verifica la leggibilità nei due temi.</p>
+<h1>Colori a confronto.</h1>
+<p class="lede">Esplora gli abbinamenti generati dalla palette e misura il loro contrasto in chiaro e in scuro.</p>
 ${badgeLine}
 ${nav}
 </header>

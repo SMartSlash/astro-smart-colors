@@ -11,6 +11,10 @@
  * `measureDocument(..., { elements })`, a verified suggestion, draft application, full-override
  * precedence, stale-input provenance, cancellation and the alpha/gradient/backdrop fail-closed
  * cases. No install, server or network access is used.
+ *
+ * A third opt-in Chromium regression uses a synthetic white canvas / black surface / #9a9a9a
+ * ring to prove that border and outline samples paint the measured background around the whole
+ * ring (7.462:1), in both themes and in the 360x480 proposal preview, without unmeasured copy.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -788,11 +792,16 @@ async function loadFixture(context, file) {
   return { page, requests };
 }
 
-async function mountAndSettle(page) {
-  await page.evaluate(() => {
+async function mountAndSettle(page, options = {}) {
+  await page.evaluate((withProposal) => {
     const controller = window.__smartColorsWorkbench;
-    controller.mount({ left: document.getElementById("scw-left"), right: document.getElementById("scw-right") });
-  });
+    const slots = { left: document.getElementById("scw-left"), right: document.getElementById("scw-right") };
+    if (withProposal) {
+      slots.proposalBefore = document.getElementById("scw-proposal-before");
+      slots.proposalAfter = document.getElementById("scw-proposal-after");
+    }
+    controller.mount(slots);
+  }, Boolean(options.proposal));
   await page.waitForFunction(() => {
     const controller = window.__smartColorsWorkbench;
     return controller && ["complete", "incomplete", "unavailable"].includes(controller.state().phase);
@@ -1096,7 +1105,14 @@ test("browser proof: visible specimen, real CSS measurement, verified suggestion
       const frame = document.querySelector('iframe[data-smart-colors-workbench-slot="right"]');
       const doc = frame.contentDocument;
       const node = doc.querySelector('[data-smart-colors-specimen="selected"]');
+      const wrapper = node.parentElement;
       const style = frame.contentWindow.getComputedStyle(node);
+      const wrapperStyle = frame.contentWindow.getComputedStyle(wrapper);
+      const nodeRect = node.getBoundingClientRect();
+      const wrapperRect = wrapper.getBoundingClientRect();
+      const ringExtent = pair.property === "outlineColor"
+        ? Number.parseFloat(style.outlineWidth) + Number.parseFloat(style.outlineOffset)
+        : Number.parseFloat(style.borderWidth);
       out[name] = {
         pairId: pair.id,
         property: pair.property,
@@ -1108,6 +1124,16 @@ test("browser proof: visible specimen, real CSS measurement, verified suggestion
         computed: pair.property === "outlineColor" ? style.outlineColor : style.borderColor,
         background: style.backgroundColor,
         tag: node.tagName,
+        text: node.textContent,
+        role: node.getAttribute("role"),
+        ariaLabel: node.getAttribute("aria-label"),
+        wrapperBackground: wrapperStyle.backgroundColor,
+        wrapperPaddingLeft: Number.parseFloat(wrapperStyle.paddingLeft),
+        ringExtent,
+        ringFits: wrapperRect.left <= nodeRect.left - ringExtent + 0.5
+          && wrapperRect.top <= nodeRect.top - ringExtent + 0.5
+          && wrapperRect.right >= nodeRect.right + ringExtent - 0.5
+          && wrapperRect.bottom >= nodeRect.bottom + ringExtent - 0.5,
       };
     }
     await controller.select({ pairId, theme: "light", comparison: "tuning" });
@@ -1118,13 +1144,28 @@ test("browser proof: visible specimen, real CSS measurement, verified suggestion
   assert.equal(pairSpecimens.focus.measurement.foreground, pairSpecimens.focus.computed);
   assert.equal(pairSpecimens.focus.measurement.background, pairSpecimens.focus.background);
   assert.equal(pairSpecimens.focus.propertyAttribute, "outlineColor");
-  assert.equal(pairSpecimens.focus.tag, "BUTTON");
+  assert.equal(pairSpecimens.focus.tag, "DIV", "the outline sample is static geometry, not a fake control");
+  assert.equal(pairSpecimens.focus.text.trim(), "", "the outline sample carries no unmeasured copy");
+  assert.equal(pairSpecimens.focus.role, "img");
+  assert.match(pairSpecimens.focus.ariaLabel, /Campione statico/);
+  assert.match(pairSpecimens.focus.ariaLabel, /non il comportamento di focus/);
+  assert.equal(pairSpecimens.focus.wrapperBackground, pairSpecimens.focus.background, "the surface around the ring is the measured background token");
+  assert.ok(pairSpecimens.focus.wrapperPaddingLeft >= pairSpecimens.focus.ringExtent, "the wrapper padding contains the full ring");
+  assert.equal(pairSpecimens.focus.ringFits, true, "the complete outline is painted inside the measured surface");
   assert.ok(pairSpecimens.focus.inlineStyle.includes("var(" + pairSpecimens.focus.foregroundToken + ")"));
   assert.ok(pairSpecimens.border);
   assert.notEqual(pairSpecimens.border.status, "unmeasured");
   assert.equal(pairSpecimens.border.measurement.foreground, pairSpecimens.border.computed);
   assert.equal(pairSpecimens.border.measurement.background, pairSpecimens.border.background);
   assert.equal(pairSpecimens.border.propertyAttribute, "borderColor");
+  assert.equal(pairSpecimens.border.tag, "DIV", "the border sample is static geometry, not a fake control");
+  assert.equal(pairSpecimens.border.text.trim(), "", "the border sample carries no unmeasured copy");
+  assert.equal(pairSpecimens.border.role, "img");
+  assert.match(pairSpecimens.border.ariaLabel, /Campione statico/);
+  assert.match(pairSpecimens.border.ariaLabel, /non il comportamento di focus/);
+  assert.equal(pairSpecimens.border.wrapperBackground, pairSpecimens.border.background, "the surface around the border is the measured background token");
+  assert.ok(pairSpecimens.border.wrapperPaddingLeft >= pairSpecimens.border.ringExtent, "the wrapper padding contains the full border");
+  assert.equal(pairSpecimens.border.ringFits, true, "the complete border is painted inside the measured surface");
   assert.ok(pairSpecimens.border.inlineStyle.includes("var(" + pairSpecimens.border.foregroundToken + ")"));
 
   // ---- Theme comparison normalizes the same pair across both themes ------------------
@@ -1748,6 +1789,246 @@ test("browser proof: the proposal preview shows base and candidate without writi
   });
   assert.equal(destroyed.shown, 2, "the preview is shown before destroy");
   assert.equal(destroyed.all, 0, "destroy removes the proposal frames too");
+
+  await loaded.page.close();
+  await context.close();
+});
+
+// ---------------------------------------------------------------------------
+// Chromium regression: an offset ring must be adjacent to the measured surface.
+//
+// The light canvas is white while the surface/active background is black. A border's outer edge
+// and an offset outline live outside the node box, so the old specimen painted the ring against
+// the frame canvas (white) while reporting the ring/black ratio. The padded wrapper must paint
+// the pair background around the entire ring, and non-text samples must not carry copy that is
+// outside the measured pair.
+// ---------------------------------------------------------------------------
+
+const RING_ADJACENCY_BASELINE = [
+  ":root {",
+  "  color-scheme: light dark;",
+  "  --color-bg: white;",
+  "  --color-surface: black;",
+  "  --color-text: light-dark(black, white);",
+  "  --color-text-muted: light-dark(black, white);",
+  "  --color-focus-ring: light-dark(var(--color-tune-focus-ring-light, #9a9a9a), var(--color-tune-focus-ring-dark, #9a9a9a));",
+  "  --color-control-active-text: light-dark(white, white);",
+  "  --color-control-bg-active: black;",
+  "  --color-control-focus-bg: white;",
+  "  --color-control-border-active: #9a9a9a;",
+  "}",
+  "",
+].join("\n");
+
+function ringAdjacencyDesign() {
+  const design = JSON.parse(JSON.stringify(SYNTHETIC_DESIGN));
+  design.tokens["--color-focus-ring"] = {
+    sources: ["--palette-ink"],
+    recipe: "neutral",
+    usage: "focus ring",
+    controls: {
+      light: { override: "--color-tune-focus-ring-light" },
+      dark: { override: "--color-tune-focus-ring-dark" },
+    },
+  };
+  return design;
+}
+
+function ringAdjacencyPayload() {
+  return syntheticPayload({
+    design: ringAdjacencyDesign(),
+    css: {
+      baseline: RING_ADJACENCY_BASELINE,
+      tuning: null,
+      tuningSupport: "absent",
+      baselineSupport: "supported",
+      source: "output",
+      status: "current",
+      production: true,
+      digest: { baseline: sha256Hex(RING_ADJACENCY_BASELINE), generated: sha256Hex(RING_ADJACENCY_BASELINE) },
+    },
+  });
+}
+
+test("browser regression: border/outline samples sit on the measured surface with no unmeasured text", { skip: NATIVE_PROOF ? false : "opt-in: set SMART_COLORS_NATIVE_PROOF=1 to run the Chromium proof" }, async (t) => {
+  if (!NATIVE_PROOF) return;
+  const playwright = resolvePlaywright();
+  const browser = await openChromium(playwright.chromium);
+  t.after(() => browser.close());
+  const source = createContrastWorkbenchSource();
+  const dir = await mkdtemp(path.join(tmpdir(), "smart-colors-workbench-ring-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const file = path.join(dir, "ring.html");
+  await writeFile(file, buildFixtureHtml({ title: "Workbench ring adjacency", payload: ringAdjacencyPayload(), source }), "utf8");
+  const context = await browser.newContext({ colorScheme: "light", reducedMotion: "reduce" });
+  t.after(() => context.close());
+  const loaded = await loadFixture(context, file);
+  const initial = await mountAndSettle(loaded.page, { proposal: true });
+  assert.equal(initial.phase, "complete");
+
+  const adjacency = await loaded.page.evaluate(async () => {
+    const controller = window.__smartColorsWorkbench;
+    const effectiveSurface = (doc, view, x, y) => {
+      const stack = doc.elementsFromPoint ? doc.elementsFromPoint(x, y) : [];
+      for (const element of stack) {
+        const background = view.getComputedStyle(element).backgroundColor;
+        if (background !== "rgba(0, 0, 0, 0)" && background !== "transparent") {
+          return { tag: element.tagName, background };
+        }
+      }
+      return null;
+    };
+    const out = {};
+    for (const theme of ["light", "dark"]) {
+      const outlinePair = controller.pairs(theme).find((entry) => entry.property === "outlineColor" && entry.background === "--color-surface");
+      const borderPair = controller.pairs(theme).find((entry) => entry.property === "borderColor" && entry.background === "--color-control-bg-active");
+      out[theme] = {};
+      for (const [name, pair] of [["outline", outlinePair], ["border", borderPair]]) {
+        if (!pair) {
+          out[theme][name] = null;
+          continue;
+        }
+        await controller.select({ pairId: pair.id, theme, comparison: "tuning" });
+        const state = controller.state();
+        const view = state.views.find((entry) => entry.slot === "right");
+        const frame = document.querySelector('iframe[data-smart-colors-workbench-slot="right"]');
+        const doc = frame.contentDocument;
+        const frameView = frame.contentWindow;
+        const node = doc.querySelector('[data-smart-colors-specimen="selected"]');
+        const wrapper = node.parentElement;
+        const style = frameView.getComputedStyle(node);
+        const wrapperStyle = frameView.getComputedStyle(wrapper);
+        const nodeRect = node.getBoundingClientRect();
+        const wrapperRect = wrapper.getBoundingClientRect();
+        const ringExtent = name === "outline"
+          ? Number.parseFloat(style.outlineWidth) + Number.parseFloat(style.outlineOffset)
+          : Number.parseFloat(style.borderWidth);
+        const centerY = nodeRect.top + nodeRect.height / 2;
+        out[theme][name] = {
+          pairId: pair.id,
+          property: pair.property,
+          status: view.measurement.status,
+          measurement: view.measurement,
+          text: node.textContent,
+          childCount: node.children.length,
+          role: node.getAttribute("role"),
+          ariaLabel: node.getAttribute("aria-label"),
+          wrapperBackground: wrapperStyle.backgroundColor,
+          wrapperPaddingLeft: Number.parseFloat(wrapperStyle.paddingLeft),
+          ringExtent,
+          gapSurface: effectiveSurface(doc, frameView, nodeRect.left - 1, centerY),
+          outsideRingSurface: effectiveSurface(doc, frameView, nodeRect.left - ringExtent - 1, centerY),
+          ringFits: wrapperRect.left <= nodeRect.left - ringExtent + 0.5
+            && wrapperRect.top <= nodeRect.top - ringExtent + 0.5
+            && wrapperRect.right >= nodeRect.right + ringExtent - 0.5
+            && wrapperRect.bottom >= nodeRect.bottom + ringExtent - 0.5,
+        };
+      }
+    }
+    return out;
+  });
+
+  for (const theme of ["light", "dark"]) {
+    for (const name of ["outline", "border"]) {
+      const entry = adjacency[theme] && adjacency[theme][name];
+      assert.ok(entry, "missing " + name + " specimen in " + theme);
+      assert.notEqual(entry.status, "unmeasured", name + " specimen must be measured in " + theme);
+      assert.ok(Math.abs(entry.measurement.ratio - 7.462) < 1e-3, name + " ratio should be 7.462 on black: " + entry.measurement.ratio);
+      assert.equal(entry.measurement.background, "rgb(0, 0, 0)", name + " must report the black surface in " + theme);
+      assert.equal(entry.wrapperBackground, entry.measurement.background, "the wrapper paints the reported surface around the " + name);
+      assert.equal(entry.gapSurface && entry.gapSurface.background, entry.measurement.background, "the surface in the " + name + " gap must be the reported background");
+      assert.equal(entry.outsideRingSurface && entry.outsideRingSurface.background, entry.measurement.background, "the surface outside the full " + name + " must be the reported background");
+      assert.ok(entry.wrapperPaddingLeft >= entry.ringExtent, "the wrapper padding must contain the full " + name);
+      assert.equal(entry.ringFits, true, "the full " + name + " must fit inside the painted wrapper");
+      assert.equal(entry.text.trim(), "", "the " + name + " specimen must not contain unmeasured text");
+      assert.equal(entry.childCount, 0, "the " + name + " specimen must be geometry only");
+      assert.equal(entry.role, "img");
+      assert.match(entry.ariaLabel, /Campione statico/);
+      assert.match(entry.ariaLabel, /non il comportamento di focus/);
+    }
+  }
+
+  // The accessibility tree exposes the static-geometry label, never the retired sample copy.
+  const selectPair = async (property) => {
+    await loaded.page.evaluate(async (propertyName) => {
+      const controller = window.__smartColorsWorkbench;
+      const pair = controller.pairs("light").find((entry) => entry.property === propertyName);
+      await controller.select({ pairId: pair.id, theme: "light", comparison: "tuning" });
+    }, property);
+  };
+  await selectPair("outlineColor");
+  const outlineAria = await loaded.page.locator('iframe[data-smart-colors-workbench-slot="right"]').contentFrame().locator("body").ariaSnapshot();
+  assert.doesNotMatch(outlineAria, /Un messaggio da leggere/, "the outline sample exposes no unmeasured copy");
+  assert.match(outlineAria, /Campione statico dell.{1,2}anello/);
+  assert.match(outlineAria, /non il comportamento di focus/);
+  await selectPair("borderColor");
+  const borderAria = await loaded.page.locator('iframe[data-smart-colors-workbench-slot="right"]').contentFrame().locator("body").ariaSnapshot();
+  assert.doesNotMatch(borderAria, /Un messaggio da leggere/, "the border sample exposes no unmeasured copy");
+  assert.match(borderAria, /Campione statico del bordo/);
+  assert.match(borderAria, /non il comportamento di focus/);
+
+  // ---- Proposal preview: the same geometry is measured at the 360x480 trial viewport --------
+  const proposal = await loaded.page.evaluate(async () => {
+    const controller = window.__smartColorsWorkbench;
+    const pair = controller.pairs("light").find((entry) => entry.property === "outlineColor" && entry.background === "--color-surface");
+    await controller.select({ pairId: pair.id, theme: "light", comparison: "tuning" });
+    await controller.setOverride("--color-tune-focus-ring-light", "#555555");
+    const draftState = controller.state();
+    await controller.suggest("foreground");
+    const state = controller.state();
+    const frames = Array.from(document.querySelectorAll('iframe[data-smart-colors-workbench-frame="proposal"]')).map((frame) => {
+      const doc = frame.contentDocument;
+      const frameView = frame.contentWindow;
+      const node = doc.querySelector('[data-smart-colors-specimen="selected"]');
+      const wrapper = node.parentElement;
+      const style = frameView.getComputedStyle(node);
+      return {
+        slot: frame.getAttribute("data-smart-colors-workbench-slot"),
+        variant: frame.getAttribute("data-smart-colors-workbench-variant"),
+        theme: frame.getAttribute("data-smart-colors-workbench-theme"),
+        sandbox: frame.getAttribute("sandbox"),
+        width: frame.getBoundingClientRect().width,
+        height: frame.getBoundingClientRect().height,
+        scripts: doc.querySelectorAll("script").length,
+        text: node.textContent,
+        role: node.getAttribute("role"),
+        ariaLabel: node.getAttribute("aria-label"),
+        property: node.getAttribute("data-smart-colors-property"),
+        outlineColor: style.outlineColor,
+        background: style.backgroundColor,
+        wrapperBackground: frameView.getComputedStyle(wrapper).backgroundColor,
+      };
+    });
+    return {
+      draftStatus: draftState.views.find((entry) => entry.slot === "right").measurement.status,
+      suggestion: state.suggestion,
+      preview: state.suggestion ? state.suggestion.preview : null,
+      frames,
+    };
+  });
+  assert.equal(proposal.draftStatus, "below-minimum");
+  assert.equal(proposal.suggestion.status, "verified", proposal.suggestion.reason);
+  assert.equal(proposal.preview.status, "shown");
+  assert.ok(proposal.preview.before < 3, "the draft ring is below the UI minimum: " + proposal.preview.before);
+  assert.ok(proposal.preview.after >= 3, "the candidate ring reaches the UI minimum: " + proposal.preview.after);
+  assert.equal(proposal.frames.length, 2);
+  assert.deepEqual(proposal.frames.map((frame) => frame.slot), ["proposal-before", "proposal-after"]);
+  for (const frame of proposal.frames) {
+    assert.equal(frame.variant, "draft");
+    assert.equal(frame.theme, "light");
+    assert.equal(frame.width, 360);
+    assert.equal(frame.height, 480);
+    assert.equal(frame.sandbox, "allow-same-origin");
+    assert.equal(frame.scripts, 0);
+    assert.equal(frame.text.trim(), "", "the proposal ring sample must not contain unmeasured text");
+    assert.equal(frame.role, "img");
+    assert.match(frame.ariaLabel, /Campione statico dell'anello/);
+    assert.match(frame.ariaLabel, /non il comportamento di focus/);
+    assert.equal(frame.property, "outlineColor");
+    assert.equal(frame.background, "rgb(0, 0, 0)");
+    assert.equal(frame.wrapperBackground, "rgb(0, 0, 0)");
+  }
+  assert.notEqual(proposal.frames[0].outlineColor, proposal.frames[1].outlineColor, "the candidate frame paints the proposed ring colour");
 
   await loaded.page.close();
   await context.close();

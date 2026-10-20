@@ -101,9 +101,11 @@ test("renderContrastWorkbench leads with the guided workbench and keeps the raw 
   assert.match(html, /<textarea id="smart-colors-workbench-palette-source" data-smart-colors-workbench="palette-source" readonly rows="10">/);
   assert.match(html, /<a class="wb-download" download="palette\.css" href="data:text\/css;charset=utf-8,/);
   assert.match(html, /Il download è manuale: aprire l'anteprima non scrive file\./);
-  // No scripts, no inline handlers, no external resources.
+  // No scripts, no inline handlers. The only external URLs are official W3C criterion links in the
+  // closed thresholds reference; they are links, not loaded resources.
   assert.doesNotMatch(html, /<script|\son[a-z]+\s*=/i);
-  assert.doesNotMatch(html, /https?:\/\//i);
+  assert.doesNotMatch(html, /(?:src|href)="https?:\/\/(?!www\.w3\.org\/)/i);
+  assert.match(html, /href="https:\/\/www\.w3\.org\/TR\/WCAG22\/#contrast-minimum"/);
 });
 
 test("the captured palette keeps the DECLARED role and shows a differing effective role separately", () => {
@@ -204,12 +206,14 @@ test("override controls are whitelisted from the design metadata and never edit 
   assert.doesNotMatch(html, /data-control="--palette-brand"/);
 });
 
-test("the suggestion copy states a bounded min-lightness search, not a global deltaE closest match", () => {
+test("the suggestion copy states a bounded min-lightness search for the minimum, not a global deltaE closest match", () => {
   const html = renderContrastWorkbench(workbenchSession());
-  assert.match(html, /ricerca è limitata alla <strong>minima variazione di luminosità<\/strong> che soddisfa le soglie dichiarate/);
-  assert.match(html, /chroma e hue restano l'intento di partenza, ma il fit di gamut può ridurre il chroma/);
+  assert.match(html, /La ricerca varia la luminosità quanto basta per raggiungere il minimo dichiarato/);
+  assert.match(html, /non il target del progetto/);
+  assert.match(html, /non cerca il colore più vicino in ΔE/);
   assert.doesNotMatch(html, /con chroma e hue invariati/);
-  assert.match(html, /Non è una ricerca globale del colore più vicino in ΔE/);
+  assert.match(html, /Cerca una correzione/);
+  assert.doesNotMatch(html, /Correggi il minimo/);
   assert.match(html, /Correggi testo/);
   assert.match(html, /Correggi sfondo/);
   assert.match(html, /<button type="button" id="smart-colors-workbench-apply" data-smart-colors-workbench="apply" disabled>Prova proposta<\/button>/);
@@ -252,7 +256,7 @@ test("hostile source and design labels are escaped and cannot close a tag or inj
   assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/);
 });
 
-test("the workbench frames stay empty for the runtime and never substitute an RGB paint", () => {
+test("the workbench frames stay empty for the runtime and the specimen precedes its scoped result", () => {
   const html = renderContrastWorkbench(workbenchSession());
   assert.match(html, /<div id="smart-colors-workbench-left" data-smart-colors-workbench="left" class="wb-frame" role="group" aria-label="Vista CSS sinistra"><\/div>/);
   assert.match(html, /<div id="smart-colors-workbench-right" data-smart-colors-workbench="right" class="wb-frame" role="group" aria-label="Vista CSS destra"><\/div>/);
@@ -270,24 +274,127 @@ test("the workbench frames stay empty for the runtime and never substitute an RG
   assert.doesNotMatch(html, /--sample-fg|--sample-bg/);
   assert.match(html, /color: var\(--color-primary-text\)/);
   assert.match(html, /background-color: var\(--color-primary-surface\)/);
-  // The measure block precedes the visual frame in each view, so the ratio is read before the sample.
+  // The visible specimen comes BEFORE its scoped ratio; the result is read after the sample.
   const leftMeasure = html.indexOf('id="smart-colors-workbench-left-measure"');
   const leftFrame = html.indexOf('id="smart-colors-workbench-left"');
   const rightMeasure = html.indexOf('id="smart-colors-workbench-right-measure"');
   const rightFrame = html.indexOf('id="smart-colors-workbench-right"');
-  assert.ok(leftMeasure >= 0 && leftMeasure < leftFrame, "the left measure precedes its frame");
-  assert.ok(rightMeasure >= 0 && rightMeasure < rightFrame, "the right measure precedes its frame");
+  assert.ok(leftFrame >= 0 && leftFrame < leftMeasure, "the left specimen precedes its measure");
+  assert.ok(rightFrame >= 0 && rightFrame < rightMeasure, "the right specimen precedes its measure");
+  // The selection rail is the quieter first column of the natural DOM order.
+  const rail = html.indexOf('class="wb-rail"');
+  const main = html.indexOf('class="wb-main"');
+  assert.ok(rail >= 0 && rail < main, "the source rail precedes the comparison area in DOM order");
 });
 
 test("CONTRAST_WORKBENCH_CSS is container-query based, forced-colors aware and resource-free", () => {
-  assert.match(CONTRAST_WORKBENCH_CSS, /@container preview-section \(min-width: 44rem\)/);
+  // Workspace split and specimen pair are named container queries, never viewport media queries.
+  assert.match(CONTRAST_WORKBENCH_CSS, /@container preview-section \(min-width: 60rem\)/);
+  assert.match(CONTRAST_WORKBENCH_CSS, /grid-template-columns: minmax\(15rem, 17rem\) minmax\(0, 1fr\)/);
+  assert.match(CONTRAST_WORKBENCH_CSS, /@container wb-main \(min-width: 34rem\)/);
+  assert.doesNotMatch(CONTRAST_WORKBENCH_CSS, /@container preview-section \(min-width: 44rem\)/);
+  // The rail is a compact two-column swatch grid and the generated pairs are readable rows.
+  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-palette \{ display: none; gap:[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
+  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-palette \{ display: grid; \}/, "the swatches are the desktop counterpart");
+  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-source-select \{ display: none; \}/, "the native select is fully removed on desktop, not an invisible focus stop");
+  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-swatch \{[^}]*height: 44px;[^}]*\}/, "every source target is 44px high");
+  assert.doesNotMatch(CONTRAST_WORKBENCH_CSS, /wb-swatch-role/, "the compact rail drops the secondary role");
+  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-theme-fieldset \{[^}]*border: 0;/);
+  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-uses \{[^}]*display: grid/);
+  assert.doesNotMatch(CONTRAST_WORKBENCH_CSS, /border-radius: 999px/);
   assert.match(CONTRAST_WORKBENCH_CSS, /@media \(forced-colors: active\)/);
   assert.match(CONTRAST_WORKBENCH_CSS, /@media print/);
   assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-proposal-frames\[hidden\] \{ display: none; \}/, "the hidden attribute must beat the grid display");
+  // The hidden rules must live in `layout`, otherwise the later `layout` grid rule would win the cascade.
+  const layoutLayer = CONTRAST_WORKBENCH_CSS.indexOf("@layer layout {");
+  const preferencesLayer = CONTRAST_WORKBENCH_CSS.indexOf("@layer preferences {");
+  const hiddenRule = CONTRAST_WORKBENCH_CSS.indexOf(".wb-proposal-frames[hidden]");
+  assert.ok(layoutLayer >= 0 && hiddenRule > layoutLayer && hiddenRule < preferencesLayer, "the hidden rule sits in the layout layer with the grid it overrides");
   assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-proposal-frames \.wb-frame \{ overflow: auto; overscroll-behavior: contain; \}/, "proposal containers scroll locally instead of clipping");
   assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-frame \{ min-height: 7rem;[^}]*overflow: hidden; \}/, "the main views keep clipping");
   assert.doesNotMatch(CONTRAST_WORKBENCH_CSS, /@import|url\(|https?:/i);
   assert.doesNotMatch(CONTRAST_WORKBENCH_CSS, /position:\s*fixed/);
+});
+
+test("the static workspace separates source values from the generated catalogue and shows the pair identity outside the closed details", () => {
+  const html = renderContrastWorkbench(workbenchSession());
+  // Rail copy is short and explicit; the detailed source archive owns role metadata.
+  assert.match(html, /Colori originali da palette\.css\./);
+  assert.match(html, /Abbinamenti generati, non usi rilevati nel sito\./);
+  assert.doesNotMatch(html, /Valori dichiarati nel file di palette del progetto; non sono una scansione del sito/);
+  assert.match(html, /Coppia dal catalogo generato/);
+  assert.match(html, /Solo coppie presenti nella diagnostica generata; nessuna coppia inventata\./);
+  assert.match(html, /<span class="wb-use-kind">testo<\/span>/);
+  // The compact source select is promoted into the rail as the single instance, before the swatches.
+  const rail = html.indexOf('class="wb-rail"');
+  const sourceSelect = html.indexOf('id="smart-colors-workbench-source"');
+  const swatches = html.indexOf('class="wb-palette"');
+  const main = html.indexOf('class="wb-main"');
+  assert.ok(rail >= 0 && sourceSelect > rail && sourceSelect < swatches && swatches < main, "the rail owns the only source select and the desktop swatches");
+  assert.equal((html.match(/id="smart-colors-workbench-source"/g) ?? []).length, 1, "the native source select exists exactly once");
+  // The misleading usage wording is gone from the file's own UI.
+  assert.doesNotMatch(html, /Dove lo usi\?/);
+  assert.doesNotMatch(html, /abbinamenti reali/i);
+  assert.doesNotMatch(html, /Coppia reale/);
+  assert.doesNotMatch(html, /vedere dove è usato/);
+  // The human pair heading and the exact tokens live in the main area, not only in the details.
+  const identityIndex = html.indexOf('id="smart-colors-workbench-identity"');
+  const detailsIndex = html.indexOf('class="is-detail wb-technical"');
+  assert.ok(identityIndex >= 0 && identityIndex < detailsIndex, "the identity is visible before any closed detail");
+  assert.match(html, /<code>--color-primary-text<\/code> su <code>--color-primary-surface<\/code> · testo/);
+  assert.match(html, /Testo normale · soglia AA 4,5:1 \(SC 1\.4\.3\)\. Il corpo del campione è da 16 px\./);
+  assert.doesNotMatch(html, /titolo 22 px non bold/);
+  // The mode form stays above the specimen; the theme fieldset moves next to the correction action
+  // but keeps its form association.
+  const modeForm = html.indexOf('id="smart-colors-workbench-selection"');
+  const frames = html.indexOf('id="smart-colors-workbench-left"');
+  const correction = html.indexOf('id="smart-colors-workbench-suggestions-title"');
+  const themeFieldset = html.indexOf('class="wb-fieldset wb-theme-fieldset"');
+  assert.ok(modeForm >= 0 && modeForm < frames, "the mode radio form stays above the specimen");
+  assert.ok(themeFieldset >= 0 && themeFieldset < correction, "the theme recovery fieldset precedes the correction section");
+  assert.ok(themeFieldset < html.indexOf('<section class="wb-suggestions"'), "the theme fieldset is outside the correction box");
+  assert.match(html, /id="smart-colors-workbench-theme-light" type="radio"[^>]*form="smart-colors-workbench-selection"/);
+  assert.match(html, /id="smart-colors-workbench-theme-dark" type="radio"[^>]*form="smart-colors-workbench-selection"/);
+  // Scope guidance lives under the results, not before them.
+  const scope = html.indexOf('class="wb-scope-note"');
+  assert.ok(html.indexOf('id="smart-colors-workbench-result"') < scope, "the scope sentence follows the result frames");
+  // The criterion reference is a closed native detail with normal/large text and the project target.
+  assert.match(html, /<details class="is-detail wb-criteria"[^>]*><summary>Soglie di riferimento e testo grande<\/summary>/);
+  assert.match(html, /Testo normale · AAA<\/dt><dd>7:1 · <a href="https:\/\/www\.w3\.org\/TR\/WCAG22\/#contrast-enhanced">SC 1\.4\.6<\/a>/);
+  assert.match(html, /Testo grande · AA<\/dt><dd>3:1 · 18 pt \/ 24 CSS px regular oppure 14 pt \/ ~18,67 CSS px bold · <a href="https:\/\/www\.w3\.org\/TR\/WCAG22\/#contrast-minimum">SC 1\.4\.3<\/a>/);
+  assert.match(html, /Testo grande · AAA<\/dt><dd>4,5:1 · <a href="https:\/\/www\.w3\.org\/TR\/WCAG22\/#contrast-enhanced">SC 1\.4\.6<\/a>/);
+  assert.match(html, /<a href="https:\/\/www\.w3\.org\/TR\/WCAG22\/#non-text-contrast">SC 1\.4\.11<\/a>/);
+  assert.match(html, /per esempio 7,5:1 non è una soglia WCAG/);
+  // Manual and export stay closed; no detail is opened by the build.
+  assert.match(html, /<details class="is-detail wb-advanced"[^>]*><summary>Modifica manualmente \(avanzato\)<\/summary>/);
+  assert.match(html, /<details class="is-detail wb-export"[^>]*><summary>Esporta modifiche<\/summary>/);
+  assert.doesNotMatch(html, /<details[^>]*\bopen\b/);
+});
+
+test("the compact rail keeps 16 source buttons at 44px targets and uses the native select on narrow containers", () => {
+  const session = workbenchSession({
+    design: { ...workbenchSession().design, sources: [] },
+    paletteSource: {
+      ...workbenchSession().paletteSource,
+      sources: Array.from({ length: 16 }, (_, index) => ({
+        token: `--palette-source-${index}`,
+        value: `oklch(0.6 0.1 ${200 + index})`,
+        role: "ui",
+        darkBlend: null,
+        declaration: null,
+      })),
+    },
+  });
+  const html = renderContrastWorkbench(session);
+  assert.equal((html.match(/data-smart-colors-workbench="swatch"/g) ?? []).length, 16, "all 16 source buttons are present");
+  assert.match(html, /class="wb-field wb-source-select"/, "the single native source select lives in the rail");
+  assert.equal((html.match(/id="smart-colors-workbench-source"/g) ?? []).length, 1);
+  // Eight rows of 44px targets (352px) plus the 4px grid gaps; the swatches are desktop-only.
+  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-swatch \{[^}]*height: 44px;[^}]*\}/);
+  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-palette \{ display: none; gap: var\(--space-1\); grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
+  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-palette \{ display: grid; \}/);
+  assert.doesNotMatch(html, /wb-swatch-role/, "the compact rail drops the human role");
+  assert.match(html, /<code>--palette-source-0<\/code> · ruolo dichiarato: interfaccia/, "the source archive keeps the human role");
 });
 
 // --- Serialized factory ------------------------------------------------------
@@ -359,6 +466,10 @@ function flat(node) {
   for (const child of node.children) out += " " + flat(child);
   return out;
 }
+function snippetOf(html) {
+  const match = /<pre[^>]*><code>([\s\S]*?)<\/code><\/pre>/.exec(html);
+  return match ? match[1] : "";
+}
 function optionOf(value, data) {
   const option = makeNode("option");
   option.value = value;
@@ -380,6 +491,9 @@ function workbenchDom(session) {
   const swatchOrphan = swatch("--palette-orphan"); host.appendChild(swatchOrphan);
   const usesBox = makeNode("div"); usesBox.setAttribute("data-smart-colors-workbench", "uses"); host.appendChild(usesBox);
   const current = register(makeNode("p"), "smart-colors-workbench-current");
+  const identity = register(makeNode("p"), "smart-colors-workbench-identity"); identity.setAttribute("data-smart-colors-workbench", "identity");
+  const purpose = register(makeNode("p"), "smart-colors-workbench-purpose"); purpose.setAttribute("data-smart-colors-workbench", "purpose");
+  const actionTheme = register(makeNode("p"), "smart-colors-workbench-action-theme"); actionTheme.setAttribute("data-smart-colors-workbench", "action-theme");
   const resultBox = register(makeNode("div"), "smart-colors-workbench-result");
   const emptyNote = makeNode("p"); emptyNote.setAttribute("data-smart-colors-workbench", "empty"); emptyNote.hidden = true; register(emptyNote, "smart-colors-workbench-empty");
   const correctionBox = makeNode("section"); correctionBox.setAttribute("data-smart-colors-workbench", "correction"); host.appendChild(correctionBox);
@@ -452,7 +566,7 @@ function workbenchDom(session) {
     getElementById: (id) => registry.get(id) ?? null,
     createElement: (tag) => makeNode(tag),
   };
-  return { host, status, selection, controlsForm, source, pair, themeLight, themeDark, comparisonThemes, comparisonTuning, comparisonDraft, controlsBody, proposal, proposalFrames, proposalBefore, proposalAfter, usesBox, current, resultBox, emptyNote, correctionBox, manualBox, exportBox, swatchBrand, swatchCanvas, swatchOrphan, document };
+  return { host, status, selection, controlsForm, source, pair, themeLight, themeDark, comparisonThemes, comparisonTuning, comparisonDraft, controlsBody, proposal, proposalFrames, proposalBefore, proposalAfter, usesBox, current, identity, purpose, actionTheme, resultBox, emptyNote, correctionBox, manualBox, exportBox, swatchBrand, swatchCanvas, swatchOrphan, document };
 }
 
 function controllerStub(options = {}) {
@@ -497,6 +611,7 @@ test("mount is called only with the real left/right containers and phases are an
 
   controller.publish({ phase: "running", revision: 1, views: [], draft: {}, suggestion: null, error: null });
   assert.match(dom.status.textContent, /Verifica in corso/);
+  assert.doesNotMatch(dom.status.className, /wb-visually-hidden/, "busy status remains visible");
   assert.match(flat(dom.document.getElementById("smart-colors-workbench-left-measure")), /Verifica in corso/);
 
   controller.publish({
@@ -508,11 +623,18 @@ test("mount is called only with the real left/right containers and phases are an
   });
   const left = flat(dom.document.getElementById("smart-colors-workbench-left-measure"));
   assert.match(left, /3,10:1/);
-  assert.match(left, /Contrasto insufficiente/);
-  assert.match(left, /Minimo richiesto/);
+  assert.match(left, /Soglia AA per testo normale non raggiunta/);
+  assert.match(left, /SC 1\.4\.3 · 4,50:1/);
+  assert.match(left, /Minimo richiesto e criterio/);
   assert.match(left, /4,50:1/);
-  assert.match(left, /Target del progetto/);
-  assert.match(left, /4,60:1/);
+  assert.match(left, /Obiettivo progetto \(non WCAG\)/);
+  assert.match(left, /4,60:1 · non raggiunto/);
+  assert.doesNotMatch(left, /obiettivo del progetto, non una soglia WCAG/, "the closed reference owns the non-WCAG target explanation");
+  assert.doesNotMatch(left, /corpo 16 px|nota 14 px/, "common applicability is not repeated per card");
+  assert.match(flat(dom.purpose), /Testo normale · soglia AA 4,5:1 \(SC 1\.4\.3\)\. Il corpo del campione è da 16 px\./);
+  assert.doesNotMatch(flat(dom.purpose), /titolo 22 px non bold/, "the actual 650 title is never claimed as bold or non-bold large text");
+  assert.match(dom.status.className, /wb-visually-hidden/, "routine complete status is visually hidden but remains a live region");
+  assert.doesNotMatch(left, /Contrasto sufficiente|Contrasto insufficiente/, "no universal pass/fail badge survives");
   // The two threshold rows are DIRECT semantic groups of the measure <dl>: div.wb-measure-row.wb-threshold > dt/dd.
   const leftMeasureNode = dom.document.getElementById("smart-colors-workbench-left-measure");
   assert.equal(leftMeasureNode.tagName, "dl");
@@ -524,14 +646,16 @@ test("mount is called only with the real left/right containers and phases are an
     assert.equal(row.parentNode, leftMeasureNode, "the threshold group is a direct child of the measure dl");
   }
   assert.equal(leftMeasureNode.children.filter((child) => /(^|\s)wb-thresholds-inline(\s|$)/.test(child.className)).length, 0, "the invalid inline wrapper is gone");
-  assert.match(flat(dom.document.getElementById("smart-colors-workbench-right-measure")), /Contrasto sufficiente/);
-  assert.match(dom.status.textContent, /Contrasto misurato in questo browser/);
+  assert.match(flat(dom.document.getElementById("smart-colors-workbench-right-measure")), /Soglia AA per testo normale raggiunta/);
+  assert.match(flat(dom.document.getElementById("smart-colors-workbench-right-measure")), /4,60:1 · raggiunto/);
+  assert.match(dom.status.textContent, /Misure di questa coppia aggiornate in questo browser/);
 
   controller.publish({
     phase: "incomplete", revision: 3, draft: {}, suggestion: null, error: "coverage incompleta",
     views: [{ slot: "left", theme: "light", variant: "baseline", pair: null, measurement: { ratio: 6.4, minimum: 4.5, target: 4.6, status: "pass" }, measurements: [{}], errors: [] }],
   });
   assert.match(dom.status.textContent, /Misura incompleta/);
+  assert.doesNotMatch(dom.status.className, /wb-visually-hidden/, "incomplete/error status remains visible");
   assert.doesNotMatch(dom.status.textContent, /complete per la selezione/);
   // A per-pair pass must never be promoted to a global verdict on incomplete coverage.
   assert.match(flat(dom.document.getElementById("smart-colors-workbench-left-measure")), /Copertura incompleta: questo esito è locale e non un verdetto globale/);
@@ -539,6 +663,223 @@ test("mount is called only with the real left/right containers and phases are an
   controller.publish({ phase: "unavailable", revision: 4, views: [], draft: {}, suggestion: null, error: "payload non supportato" });
   assert.match(dom.status.textContent, /Misura non disponibile/);
   assert.match(flat(dom.document.getElementById("smart-colors-workbench-left-measure")), /Non disponibile/);
+});
+
+test("the action theme follows the checked theme immediately, before any measurement returns", async () => {
+  const { dom } = install(workbenchSession());
+  dom.themeLight.checked = false;
+  dom.themeDark.checked = true;
+  dom.themeDark.dispatch("change");
+  assert.match(dom.actionTheme.textContent, /Tema per proposta e override: scuro/);
+  await tick();
+});
+
+test("each specimen reports its scoped AA criterion and the project target separately, and fails closed when unmeasured", () => {
+  const { dom, controller } = install(workbenchSession());
+  const selection = { pairId: "light|color|--color-primary-text|--color-primary-surface", theme: "light", comparison: "themes" };
+  controller.publish({
+    phase: "complete", revision: 1, draft: {}, suggestion: null, error: null, selection,
+    views: [
+      { slot: "left", theme: "light", variant: "baseline", pair: null, measurement: { ratio: 4.8, minimum: 4.5, target: 7.5, status: "below-target" }, measurements: [{}], errors: [] },
+      { slot: "right", theme: "dark", variant: "baseline", pair: null, measurement: { ratio: 3.1, minimum: 4.5, target: 7.5, status: "below-minimum" }, measurements: [{}], errors: [] },
+    ],
+  });
+  const left = flat(dom.document.getElementById("smart-colors-workbench-left-measure"));
+  assert.match(left, /4,80:1/);
+  assert.match(left, /Soglia AA per testo normale raggiunta/);
+  assert.match(left, /SC 1\.4\.3 · 4,50:1/);
+  assert.doesNotMatch(left, /corpo 16 px|nota 14 px/, "applicability is stated once above the frames");
+  assert.match(left, /Obiettivo progetto \(non WCAG\)/);
+  assert.match(left, /7,50:1 · non raggiunto/, "a below-target pass keeps the project target unmet");
+  assert.doesNotMatch(left, /non una soglia WCAG/, "the per-card result stays concise");
+  assert.doesNotMatch(left, /Contrasto sufficiente|Contrasto insufficiente/, "no universal badge");
+  const right = flat(dom.document.getElementById("smart-colors-workbench-right-measure"));
+  assert.match(right, /Soglia AA per testo normale non raggiunta/);
+  assert.match(right, /7,50:1 · non raggiunto/);
+
+  // The exact identity and the contextual criterion are visible in the main area.
+  assert.match(flat(dom.identity), /--color-primary-text/);
+  assert.match(flat(dom.identity), /--color-primary-surface/);
+  assert.match(flat(dom.identity), /testo/);
+  assert.match(flat(dom.purpose), /Testo normale · soglia AA 4,5:1 \(SC 1\.4\.3\)\. Il corpo del campione è da 16 px\./);
+  assert.doesNotMatch(flat(dom.purpose), /titolo 22 px non bold/);
+  // The selected theme is stated next to the suggestion action.
+  assert.match(dom.actionTheme.textContent, /Tema per proposta e override: chiaro/);
+
+  // An explicitly unmeasured record never inherits a threshold or a pass, even with stale numbers.
+  controller.publish({
+    phase: "complete", revision: 2, draft: {}, suggestion: null, error: null, selection,
+    views: [
+      { slot: "left", theme: "light", variant: "baseline", pair: null, measurement: { ratio: 6, minimum: 4.5, target: 7, status: "unmeasured" }, measurements: [{}], errors: [] },
+      { slot: "right", theme: "dark", variant: "baseline", pair: null, measurement: { ratio: 6, minimum: 4.5, target: 7, status: "unmeasured" }, measurements: [{}], errors: [] },
+    ],
+  });
+  const unmeasured = flat(dom.document.getElementById("smart-colors-workbench-left-measure"));
+  assert.match(unmeasured, /Non misurato/);
+  assert.match(unmeasured, /Stato di misura non supportato o incoerente: nessun esito/);
+  assert.match(unmeasured, /Obiettivo progetto \(non WCAG\)/);
+  assert.match(unmeasured, /7,00:1 · non misurato/);
+  assert.doesNotMatch(unmeasured, /raggiunta|non raggiunta/);
+});
+
+test("a criterion is never inferred from a numeric threshold: unknown kind fails closed", () => {
+  const dom = workbenchDom(workbenchSession());
+  const unknown = optionOf("--color-unknown|--color-bg|widget", {
+    "data-fg": "--color-unknown", "data-bg": "--color-bg", "data-kind": "widget", "data-catalogue-kind": "widget",
+    "data-usage": "Widget sconosciuto", "data-sources": "--palette-brand", "data-thresholds": "4.5,7;4.5,7",
+  });
+  dom.pair.appendChild(unknown);
+  for (const candidate of dom.pair.options) candidate.selected = candidate === unknown;
+  dom.pair.value = unknown.value;
+  const controller = controllerStub({
+    pairs: () => [{ id: "light|color|--color-unknown|--color-bg", foreground: "--color-unknown", background: "--color-bg", property: "color" }],
+    state: {
+      phase: "complete", revision: 1, draft: {}, suggestion: null, error: null,
+      selection: { pairId: "light|color|--color-unknown|--color-bg", theme: "light", comparison: "themes" },
+      views: [
+        { slot: "left", theme: "light", variant: "baseline", pair: null, measurement: { ratio: 8, minimum: 4.5, target: 7, status: "pass" }, measurements: [{}], errors: [] },
+        { slot: "right", theme: "dark", variant: "baseline", pair: null, measurement: { ratio: 8, minimum: 4.5, target: 7, status: "pass" }, measurements: [{}], errors: [] },
+      ],
+    },
+  });
+  createContrastWorkbenchView({ document: dom.document, controller });
+  const left = flat(dom.document.getElementById("smart-colors-workbench-left-measure"));
+  assert.match(left, /Non applicabile/);
+  assert.match(left, /Tipo di coppia non riconosciuto: nessun criterio WCAG applicato/);
+  assert.doesNotMatch(left, /SC 1\.4\.3|SC 1\.4\.11|Soglia AA per testo normale|Soglia di confronto/, "an unknown kind never receives a normative label");
+  assert.match(flat(dom.purpose), /Tipo di coppia non riconosciuto/);
+  assert.match(flat(dom.identity), /tipo non riconosciuto/);
+});
+
+test("an unsupported or incoherent measurement status fails closed", () => {
+  const { dom, controller } = install(workbenchSession());
+  const selection = { pairId: "light|color|--color-primary-text|--color-primary-surface", theme: "light", comparison: "themes" };
+  const view = (measurement) => ({ slot: "left", theme: "light", variant: "baseline", pair: null, measurement, measurements: [{}], errors: [] });
+  controller.publish({ phase: "complete", revision: 1, draft: {}, suggestion: null, error: null, selection, views: [view({ ratio: 8, minimum: 4.5, target: 7, status: "mystery" })] });
+  let left = flat(dom.document.getElementById("smart-colors-workbench-left-measure"));
+  assert.match(left, /Non misurato/);
+  assert.match(left, /Stato di misura non supportato o incoerente: nessun esito/);
+  assert.doesNotMatch(left, /Soglia AA per testo normale|SC 1\.4\.3/);
+
+  // A supported status that contradicts the numbers is also fail-closed.
+  controller.publish({ phase: "complete", revision: 2, draft: {}, suggestion: null, error: null, selection, views: [view({ ratio: 2, minimum: 4.5, target: 7, status: "pass" })] });
+  left = flat(dom.document.getElementById("smart-colors-workbench-left-measure"));
+  assert.match(left, /Non misurato/);
+  assert.match(left, /Stato di misura non supportato o incoerente: nessun esito/);
+  assert.doesNotMatch(left, /raggiunta|non raggiunta/);
+});
+
+test("a noncanonical threshold never earns a normative positive", () => {
+  const { dom, controller } = install(workbenchSession());
+  const option = dom.pair.options.find((candidate) => candidate.value === "--color-primary-text|--color-primary-surface|text");
+  option.setAttribute("data-thresholds", "5,7;5,7");
+  const selection = { pairId: "light|color|--color-primary-text|--color-primary-surface", theme: "light", comparison: "themes" };
+  controller.publish({
+    phase: "complete", revision: 1, draft: {}, suggestion: null, error: null, selection,
+    views: [
+      { slot: "left", theme: "light", variant: "baseline", pair: null, measurement: { ratio: 8, minimum: 5, target: 7, status: "pass" }, measurements: [{}], errors: [] },
+      { slot: "right", theme: "dark", variant: "baseline", pair: null, measurement: { ratio: 8, minimum: 5, target: 7, status: "pass" }, measurements: [{}], errors: [] },
+    ],
+  });
+  const left = flat(dom.document.getElementById("smart-colors-workbench-left-measure"));
+  assert.match(left, /Non applicabile/);
+  assert.match(left, /Soglia non canonica per questo tipo: nessun criterio WCAG applicato/);
+  assert.doesNotMatch(left, /SC 1\.4\.3|SC 1\.4\.11|Soglia AA per testo normale/, "a noncanonical threshold is never called normative");
+  // The purpose sentence still states the normative rule for the catalogue kind, not the odd threshold.
+  assert.match(flat(dom.purpose), /Testo normale · soglia AA 4,5:1 \(SC 1\.4\.3\)/);
+});
+
+test("an on-color specimen states only its 16px button label, never the title/note pair", () => {
+  // Static build: the token shape (ink on its own fill) is enough to distinguish the on-color sample.
+  const staticHtml = renderContrastWorkbench(workbenchSession({
+    model: { diagnostics: [{ label: "on-primary", scheme: "light", foregroundToken: "--color-primary-ink", backgroundToken: "--color-primary", ratio: 6, minimum: 4.5, target: 4.6, kind: "text", status: "pass", provenance: "generated" }], errors: [], warnings: [] },
+  }));
+  assert.match(staticHtml, /Testo su riempimento · soglia AA 4,5:1 \(SC 1\.4\.3\)\. L(?:&#39;|')etichetta del campione è da 16 px\./);
+  assert.doesNotMatch(staticHtml, /nota 14 px|corpo 16 px/);
+  assert.match(staticHtml, /data-catalogue-kind="on-color"/);
+
+  const dom = workbenchDom(workbenchSession());
+  const onColor = optionOf("--color-primary-ink|--color-primary|text", {
+    "data-fg": "--color-primary-ink", "data-bg": "--color-primary", "data-kind": "text", "data-catalogue-kind": "on-color",
+    "data-usage": "Testo sul riempimento primary", "data-sources": "--palette-brand", "data-thresholds": "4.5,4.6;4.5,4.6",
+  });
+  dom.pair.appendChild(onColor);
+  for (const candidate of dom.pair.options) candidate.selected = candidate === onColor;
+  dom.pair.value = onColor.value;
+  const controller = controllerStub({
+    pairs: () => [{ id: "light|color|--color-primary-ink|--color-primary", foreground: "--color-primary-ink", background: "--color-primary", property: "color" }],
+    state: {
+      phase: "complete", revision: 1, draft: {}, suggestion: null, error: null,
+      selection: { pairId: "light|color|--color-primary-ink|--color-primary", theme: "light", comparison: "themes" },
+      views: [
+        { slot: "left", theme: "light", variant: "baseline", pair: null, measurement: { ratio: 6, minimum: 4.5, target: 4.6, status: "pass" }, measurements: [{}], errors: [] },
+        { slot: "right", theme: "dark", variant: "baseline", pair: null, measurement: { ratio: 6, minimum: 4.5, target: 4.6, status: "pass" }, measurements: [{}], errors: [] },
+      ],
+    },
+  });
+  createContrastWorkbenchView({ document: dom.document, controller });
+  assert.match(flat(dom.identity), /testo su riempimento/);
+  assert.match(flat(dom.purpose), /Testo su riempimento · soglia AA 4,5:1 \(SC 1\.4\.3\)\. L'etichetta del campione è da 16 px\./);
+  assert.doesNotMatch(flat(dom.purpose), /nota 14 px|corpo 16 px/);
+  const left = flat(dom.document.getElementById("smart-colors-workbench-left-measure"));
+  assert.match(left, /Soglia AA per testo normale raggiunta/);
+  assert.match(left, /SC 1\.4\.3 · 4,50:1/);
+});
+
+test("a non-text pair reports SC 1.4.11 and 3:1 with its applicability, never the text criterion", () => {
+  const dom = workbenchDom(workbenchSession());
+  const focus = optionOf("--color-focus-ring|--color-bg|non-text", {
+    "data-fg": "--color-focus-ring", "data-bg": "--color-bg", "data-kind": "non-text",
+    "data-usage": "Anello di focus", "data-sources": "--palette-brand",
+    "data-fg-sources": "--palette-brand", "data-bg-sources": "--palette-canvas",
+    "data-thresholds": "3,3;3,3",
+  });
+  dom.pair.appendChild(focus);
+  for (const candidate of dom.pair.options) candidate.selected = candidate === focus;
+  dom.pair.value = focus.value;
+  const controller = controllerStub({
+    pairs: () => [{ id: "light|outlineColor|--color-focus-ring|--color-bg", foreground: "--color-focus-ring", background: "--color-bg", property: "outlineColor" }],
+    state: {
+      phase: "complete", revision: 1, draft: {}, suggestion: null, error: null,
+      selection: { pairId: "light|outlineColor|--color-focus-ring|--color-bg", theme: "light", comparison: "themes" },
+      views: [
+        { slot: "left", theme: "light", variant: "baseline", pair: null, measurement: { ratio: 2.9, minimum: 3, target: 3, status: "below-minimum" }, measurements: [{}], errors: [] },
+        { slot: "right", theme: "dark", variant: "baseline", pair: null, measurement: { ratio: 3.4, minimum: 3, target: 3, status: "pass" }, measurements: [{}], errors: [] },
+      ],
+    },
+  });
+  createContrastWorkbenchView({ document: dom.document, controller });
+  const left = flat(dom.document.getElementById("smart-colors-workbench-left-measure"));
+  assert.match(left, /Soglia di confronto 3:1 non raggiunta/);
+  assert.match(left, /SC 1\.4\.11 · 3,00:1/);
+  assert.match(left, /3,00:1 · non raggiunto/);
+  assert.doesNotMatch(left, /Soglia AA per testo normale/);
+  assert.doesNotMatch(left, /bordo decorativo|oscuramento/, "applicability is stated once above the frames");
+  const right = flat(dom.document.getElementById("smart-colors-workbench-right-measure"));
+  assert.match(right, /Soglia di confronto 3:1 raggiunta/);
+  assert.match(right, /3,00:1 · raggiunto/);
+  assert.match(flat(dom.identity), /--color-focus-ring/);
+  assert.match(flat(dom.identity), /--color-bg/);
+  assert.match(flat(dom.identity), /anello/);
+  assert.match(flat(dom.purpose), /Componente non testuale · soglia 3:1 \(SC 1\.4\.11\)/);
+  assert.match(flat(dom.purpose), /per le informazioni necessarie a identificare componenti e stati/);
+  assert.match(flat(dom.purpose), /bordo decorativo non è automaticamente soggetto/);
+  assert.match(flat(dom.purpose), /non verifica focus, comportamento, visibilità o oscuramento/);
+
+  // A declared non-text kind with a text threshold is a mismatch: it never becomes SC 1.4.11.
+  focus.setAttribute("data-thresholds", "4.5,7;4.5,7");
+  controller.publish({
+    phase: "complete", revision: 2, draft: {}, suggestion: null, error: null,
+    selection: { pairId: "light|outlineColor|--color-focus-ring|--color-bg", theme: "light", comparison: "themes" },
+    views: [
+      { slot: "left", theme: "light", variant: "baseline", pair: null, measurement: { ratio: 8, minimum: 4.5, target: 7, status: "pass" }, measurements: [{}], errors: [] },
+      { slot: "right", theme: "dark", variant: "baseline", pair: null, measurement: { ratio: 8, minimum: 4.5, target: 7, status: "pass" }, measurements: [{}], errors: [] },
+    ],
+  });
+  const mismatch = flat(dom.document.getElementById("smart-colors-workbench-left-measure"));
+  assert.match(mismatch, /Non applicabile/);
+  assert.match(mismatch, /Soglia non canonica per questo tipo: nessun criterio WCAG applicato/);
+  assert.doesNotMatch(mismatch, /SC 1\.4\.11|Soglia di confronto/);
 });
 
 test("the view factory fails loud when the mandatory controller is missing", () => {
@@ -669,19 +1010,39 @@ test("the initial render projects the runtime pair over a stale static pair: sou
   assert.doesNotMatch(flat(dom.document.getElementById("smart-colors-workbench-left-measure")), /12,60:1/);
 });
 
-test("the pair snippet uses the real CSS property: border and outline are never written as color", () => {
+test("the pair snippet uses the real CSS property with the padded background wrapper for non-text geometry", () => {
   const border = renderContrastWorkbench(workbenchSession({
     model: { diagnostics: [{ label: "border", scheme: "light", foregroundToken: "--color-primary-border-strong", backgroundToken: "--color-primary-surface", ratio: 2.8, minimum: 3, target: 3, kind: "non-text", status: "below-minimum", provenance: "generated" }], errors: [], warnings: [] },
   }));
-  assert.match(border, /<code>border: 2px solid var\(--color-primary-border-strong\);\nbackground-color: var\(--color-primary-surface\);<\/code>/);
-  assert.doesNotMatch(border, /color: var\(--color-primary-border-strong\)/);
+  const borderSnippet = snippetOf(border);
+  assert.ok(borderSnippet.startsWith("border: 2px solid var(--color-primary-border-strong);"), "the border is never written as color: " + borderSnippet);
+  assert.match(borderSnippet, /background-color: var\(--color-primary-surface\);/);
+  assert.match(borderSnippet, /padding: 0;/);
+  assert.match(borderSnippet, /width: 100%;/);
+  assert.match(borderSnippet, /box-sizing: border-box;/);
+  assert.match(borderSnippet, /height: 48px;/);
+  assert.match(borderSnippet, /Campione vuoto: &lt;div/);
+  // The outer border edge lives outside the specimen box: the copied snippet keeps the padded wrapper
+  // that paints the measured background around the whole geometry (same as the runtime fix).
+  assert.match(borderSnippet, /\.surface \{\n  padding: 12px;\n  background: var\(--color-primary-surface\);\n  border-radius: 8px;\n\}/);
+  assert.ok(!/^\s*color:/.test(borderSnippet), "no text declaration leads the border snippet");
 
   const focus = renderContrastWorkbench(workbenchSession({
     model: { diagnostics: [{ label: "focus", scheme: "light", foregroundToken: "--color-focus-ring", backgroundToken: "--color-bg", ratio: 2.9, minimum: 3, target: 3, kind: "non-text", status: "below-minimum", provenance: "generated" }], errors: [], warnings: [] },
   }));
-  assert.match(focus, /<code>outline: 3px solid var\(--color-focus-ring\);\nbackground-color: var\(--color-bg\);<\/code>/);
+  const focusSnippet = snippetOf(focus);
+  assert.ok(focusSnippet.startsWith("outline: 3px solid var(--color-focus-ring);"), "the ring keeps its own property: " + focusSnippet);
+  assert.match(focusSnippet, /outline-offset: 2px;/);
+  assert.match(focusSnippet, /background-color: var\(--color-bg\);/);
+  assert.match(focusSnippet, /padding: 0;/);
+  assert.match(focusSnippet, /width: 100%;/);
+  assert.match(focusSnippet, /box-sizing: border-box;/);
+  assert.match(focusSnippet, /height: 48px;/);
+  assert.match(focusSnippet, /Campione vuoto: &lt;div/);
+  assert.match(focusSnippet, /\.surface \{\n  padding: 12px;\n  background: var\(--color-bg\);\n  border-radius: 8px;\n\}/);
+  assert.ok(!/^\s*color:/.test(focusSnippet), "no text declaration leads the outline snippet");
 
-  // The runtime-rendered details use the same property mapping.
+  // The runtime-rendered details use the same property mapping and the same padded wrapper.
   const { dom } = install(workbenchSession());
   const option = optionOf("--color-primary-border-strong|--color-primary-surface|non-text", {
     "data-fg": "--color-primary-border-strong", "data-bg": "--color-primary-surface", "data-kind": "non-text",
@@ -691,7 +1052,15 @@ test("the pair snippet uses the real CSS property: border and outline are never 
   for (const candidate of dom.pair.options) candidate.selected = candidate === option;
   dom.pair.value = option.value;
   dom.pair.dispatch("change");
-  assert.match(flat(dom.document.getElementById("smart-colors-workbench-details")), /border: 2px solid var\(--color-primary-border-strong\)/);
+  const details = flat(dom.document.getElementById("smart-colors-workbench-details"));
+  assert.match(details, /border: 2px solid var\(--color-primary-border-strong\)/);
+  assert.match(details, /\.surface/);
+  assert.match(details, /padding: 12px/);
+  assert.match(details, /background: var\(--color-primary-surface\)/);
+  assert.match(details, /padding: 0;/);
+  assert.match(details, /width: 100%;/);
+  assert.match(details, /box-sizing: border-box;/);
+  assert.match(details, /height: 48px;/);
 });
 
 test("the exported CSS always follows the current draft and copy never claims an empty copy", () => {
@@ -778,7 +1147,8 @@ test("a source with no verified use clears the result and hides the correction i
   assert.equal(dom.manualBox.hidden, true, "the manual controls are hidden");
   assert.equal(dom.exportBox.hidden, true, "the export controls are hidden");
   assert.equal(controller.calls.select.length, 0, "no measurement is requested for a source with no verified use");
-  assert.match(dom.status.textContent, /Nessun abbinamento verificato/);
+  assert.match(dom.status.textContent, /Nessuna coppia diagnostica/);
+  assert.match(dom.emptyNote.textContent, /Nessuna coppia diagnostica/);
 });
 
 test("initialization never overrides an existing draft or a non-idle phase", () => {
@@ -797,6 +1167,42 @@ test("apply stays disabled until a verified suggestion exists", async () => {
   assert.equal(apply.disabled, true, "a non-verified suggestion never enables apply");
   controller.publish({ phase: "complete", revision: 2, draft: {}, error: null, views: [], suggestion: { status: "verified", side: "foreground", control: "--color-tune-primary-text-light", value: "oklch(0.4 0.1 250)", before: 3.1, after: 4.6, reason: null, checked: 1, unmeasured: 0, regressions: [] } });
   assert.equal(apply.disabled, false, "only a verified suggestion enables apply");
+});
+
+test("a below-target status none keeps the project target unmet and never says no change is needed", () => {
+  const { dom, controller } = install(workbenchSession());
+  const textOption = dom.pair.options.find((option) => option.value === "--color-text|--color-bg|text");
+  textOption.setAttribute("data-thresholds", "4.5,7;4.5,7");
+  for (const option of dom.pair.options) option.selected = option === textOption;
+  dom.pair.value = textOption.value;
+  const selection = { pairId: "light|color|--color-text|--color-bg", theme: "light", comparison: "themes" };
+  controller.publish({
+    phase: "complete", revision: 3, draft: {}, error: null, selection, views: [],
+    suggestion: { status: "none", side: "foreground", token: "--color-text", control: "--color-tune-primary-text-light", value: null, before: 4.8, after: 4.8, reason: "the selected pair is not below its WCAG minimum", checked: 1, unmeasured: 0, regressions: [] },
+  });
+  const text = flat(dom.proposal);
+  assert.match(text, /Minimo già raggiunto/);
+  assert.match(text, /Target del progetto 7,00:1 non raggiunto\. Questa ricerca corregge solo il minimo 4,50:1\./);
+  assert.match(text, /Prima: 4,80:1/);
+  assert.doesNotMatch(text, /Soglia rilevante/, "the none result already states both thresholds without repeating them");
+  assert.doesNotMatch(text, /non serve una modifica/);
+  assert.doesNotMatch(text, /se non è raggiunto, resta non raggiunto/);
+  assert.doesNotMatch(text, /Valore proposto:/);
+  assert.equal(dom.document.getElementById("smart-colors-workbench-apply").disabled, true);
+
+  // The same result states a reached target explicitly, and an unknown ratio fails closed.
+  textOption.setAttribute("data-thresholds", "4.5,4.6;4.5,4.6");
+  controller.publish({
+    phase: "complete", revision: 4, draft: {}, error: null, selection, views: [],
+    suggestion: { status: "none", side: "foreground", token: "--color-text", control: "--color-tune-primary-text-light", value: null, before: 4.8, after: 4.8, reason: "already above minimum", checked: 1, unmeasured: 0, regressions: [] },
+  });
+  assert.match(flat(dom.proposal), /Target del progetto 4,60:1 raggiunto\. Questa ricerca corregge solo il minimo 4,50:1\./);
+  textOption.setAttribute("data-thresholds", "4.5,7;4.5,7");
+  controller.publish({
+    phase: "complete", revision: 5, draft: {}, error: null, selection, views: [],
+    suggestion: { status: "none", side: "foreground", token: "--color-text", control: "--color-tune-primary-text-light", value: null, before: null, after: null, reason: "already above minimum", checked: 1, unmeasured: 0, regressions: [] },
+  });
+  assert.match(flat(dom.proposal), /Target del progetto non verificabile con questa misura\. Questa ricerca corregge solo il minimo 4,50:1\./);
 });
 
 test("tuning comparisons are refused when the snapshot has no supported tuning", async () => {
@@ -966,7 +1372,10 @@ test("a verified suggestion shows the proposed value, ratio thresholds, delta L 
     phase: "complete", revision: 5, draft: {}, error: null, selection, views: [],
     suggestion: { status: "none", side: "foreground", token: "--color-primary-text", control: "--color-tune-primary-text-light", value: "oklch(0.4 0.1 250)", before: 4.8, after: null, reason: "already above minimum", checked: 6, unmeasured: 0, regressions: [] },
   });
-  assert.match(flat(dom.proposal), /Nessuna proposta necessaria/);
+  assert.match(flat(dom.proposal), /Minimo già raggiunto/);
+  assert.match(flat(dom.proposal), /Target del progetto 4,60:1 raggiunto\. Questa ricerca corregge solo il minimo 4,50:1\./);
+  assert.doesNotMatch(flat(dom.proposal), /non serve una modifica/);
+  assert.doesNotMatch(flat(dom.proposal), /se non è raggiunto, resta non raggiunto/);
   assert.doesNotMatch(flat(dom.proposal), /Valore proposto:/, "a non-verified result is never presented as a proposal");
   assert.equal(dom.proposalFrames.hidden, true);
 });
@@ -1076,7 +1485,23 @@ test("narrow viewport: the verified proposal stays locally scrollable and never 
     });
     // The saved tuning only shows in the tuned comparison, so select it as a real user would.
     await page.click("#smart-colors-workbench-comparison-tuning");
-    await page.waitForFunction(() => /Contrasto insufficiente/.test(document.getElementById("smart-colors-workbench-right-measure").textContent), null, { timeout: 30_000 });
+    await page.waitForFunction(() => /Soglia AA per testo normale non raggiunta/.test(document.getElementById("smart-colors-workbench-right-measure").textContent), null, { timeout: 30_000 });
+
+    // No suggestion has been requested: the proposal area is not painted at all.
+    const proposalVisibility = await page.evaluate(() => {
+      const section = document.getElementById("smart-colors-workbench-proposal-frames");
+      const result = document.getElementById("smart-colors-workbench-result");
+      return {
+        proposalHidden: section.hidden,
+        proposalDisplay: getComputedStyle(section).display,
+        resultHidden: result.hidden,
+        resultDisplay: getComputedStyle(result).display,
+      };
+    });
+    assert.equal(proposalVisibility.proposalHidden, true, "no verified proposal yet");
+    assert.equal(proposalVisibility.proposalDisplay, "none", "the hidden proposal section is not painted: " + JSON.stringify(proposalVisibility));
+    assert.equal(proposalVisibility.resultHidden, false, "the measured result is visible");
+    assert.notEqual(proposalVisibility.resultDisplay, "none", "the measured result is painted");
 
     await page.click("#smart-colors-workbench-suggest-foreground");
     await page.waitForFunction(() => {
@@ -1092,6 +1517,18 @@ test("narrow viewport: the verified proposal stays locally scrollable and never 
         document: doc.scrollWidth,
         body: document.body.scrollWidth,
         mainOverflow: ["left", "right"].map((slot) => getComputedStyle(document.getElementById("smart-colors-workbench-" + slot)).overflowX),
+        mainFrames: ["left", "right"].map((slot) => {
+          const container = document.getElementById("smart-colors-workbench-" + slot);
+          const frame = container ? container.querySelector("iframe") : null;
+          const frameDoc = frame && frame.contentDocument;
+          return {
+            slot,
+            present: Boolean(frame),
+            height: frame ? frame.clientHeight : null,
+            contentHeight: frameDoc && frameDoc.documentElement ? frameDoc.documentElement.clientHeight : null,
+            scrollHeight: frameDoc && frameDoc.documentElement ? frameDoc.documentElement.scrollHeight : null,
+          };
+        }),
         containers: containers.map((node) => {
           const frame = node.querySelector("iframe");
           return {
@@ -1108,6 +1545,37 @@ test("narrow viewport: the verified proposal stays locally scrollable and never 
     assert.ok(measured.viewport >= 300 && measured.viewport <= 320, "the layout viewport must stay the narrow 320px: " + measured.viewport);
     assert.ok(measured.document <= measured.viewport + 1 && measured.body <= measured.viewport + 1, "no document-level widening: " + JSON.stringify(measured));
     assert.deepEqual(measured.mainOverflow, ["hidden", "hidden"], "the main views keep their clipping");
+    for (const frame of measured.mainFrames) {
+      assert.equal(frame.present, true, "main frame " + frame.slot + " is mounted");
+      assert.ok(frame.contentHeight !== null && frame.scrollHeight !== null, "main frame " + frame.slot + " exposes its content box: " + JSON.stringify(frame));
+      assert.ok(frame.scrollHeight <= frame.contentHeight + 1, "primary text sample " + frame.slot + " must not need a nested vertical scroll at 320px: " + JSON.stringify(frame));
+      assert.ok(frame.scrollHeight <= frame.height + 1, "primary text sample " + frame.slot + " fits the main iframe height at 320px: " + JSON.stringify(frame));
+    }
+    const narrowLayout = await page.evaluate(() => {
+      const layout = document.querySelector("#banco .wb-layout");
+      const rail = document.querySelector("#banco .wb-rail");
+      const main = document.querySelector("#banco .wb-main");
+      const results = document.getElementById("smart-colors-workbench-result");
+      const railBox = rail.getBoundingClientRect();
+      const mainBox = main.getBoundingClientRect();
+      return {
+        columns: getComputedStyle(layout).gridTemplateColumns.split(" ").length,
+        specimenColumns: getComputedStyle(results).gridTemplateColumns.split(" ").length,
+        paletteDisplay: getComputedStyle(document.querySelector("#banco .wb-palette")).display,
+        sourceDisplay: getComputedStyle(document.querySelector("#banco .wb-source-select")).display,
+        specimenTop: window.scrollY + document.getElementById("smart-colors-workbench-left").getBoundingClientRect().top,
+        railTop: railBox.top,
+        mainTop: mainBox.top,
+        railWidth: railBox.width,
+      };
+    });
+    assert.equal(narrowLayout.columns, 1, "the workspace is a single column at 320px: " + JSON.stringify(narrowLayout));
+    assert.equal(narrowLayout.specimenColumns, 1, "the two specimens stack at 320px: " + JSON.stringify(narrowLayout));
+    assert.equal(narrowLayout.paletteDisplay, "none", "the full swatch rail is not used at 320px: " + JSON.stringify(narrowLayout));
+    assert.notEqual(narrowLayout.sourceDisplay, "none", "the compact native source select is visible at 320px");
+    assert.ok(narrowLayout.specimenTop < 1200, "the result stays reasonably reachable at 320px: " + narrowLayout.specimenTop);
+    assert.ok(narrowLayout.railTop < narrowLayout.mainTop, "the rail keeps the natural DOM order above the comparison at 320px");
+    assert.ok(narrowLayout.railWidth <= measured.viewport, "the rail never exceeds the 320px viewport: " + narrowLayout.railWidth);
     for (const container of measured.containers) {
       assert.equal(container.overflowX, "auto", "the proposal container scrolls locally");
       assert.equal(container.tabIndex, 0, "the proposal container is keyboard focusable");
@@ -1135,7 +1603,131 @@ test("narrow viewport: the verified proposal stays locally scrollable and never 
     }
     assert.ok(tabbed.includes("smart-colors-workbench-proposal-before") && tabbed.includes("smart-colors-workbench-proposal-after"), "both proposal regions are keyboard reachable: " + JSON.stringify(tabbed));
 
+    // Desktop: the same DOM becomes the two-column workspace inside the preview container.
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const wideLayout = await page.evaluate(() => {
+      const layout = document.querySelector("#banco .wb-layout");
+      const rail = document.querySelector("#banco .wb-rail");
+      const main = document.querySelector("#banco .wb-main");
+      const results = document.getElementById("smart-colors-workbench-result");
+      const railBox = rail.getBoundingClientRect();
+      const mainBox = main.getBoundingClientRect();
+      const sourceBox = document.querySelector("#banco .wb-source-select");
+      return {
+        columns: getComputedStyle(layout).gridTemplateColumns.split(" ").length,
+        specimenColumns: getComputedStyle(results).gridTemplateColumns.split(" ").length,
+        paletteDisplay: getComputedStyle(document.querySelector("#banco .wb-palette")).display,
+        sourceDisplay: getComputedStyle(sourceBox).display,
+        specimenTop: window.scrollY + document.getElementById("smart-colors-workbench-left").getBoundingClientRect().top,
+        railWidth: railBox.width,
+        railTop: railBox.top,
+        mainTop: mainBox.top,
+        railLeft: railBox.left,
+        mainLeft: mainBox.left,
+        viewport: document.documentElement.clientWidth,
+        document: document.documentElement.scrollWidth,
+      };
+    });
+    assert.equal(wideLayout.columns, 2, "the workspace splits into rail + comparison: " + JSON.stringify(wideLayout));
+    assert.equal(wideLayout.specimenColumns, 2, "light and dark specimens sit side by side: " + JSON.stringify(wideLayout));
+    assert.equal(wideLayout.paletteDisplay, "grid", "the swatch rail is the desktop counterpart");
+    assert.equal(wideLayout.sourceDisplay, "none", "the native select is removed on desktop, with no invisible focus stop: " + JSON.stringify(wideLayout));
+    assert.ok(wideLayout.specimenTop < 450, "the specimen starts above 450px at 1280: " + wideLayout.specimenTop);
+    assert.ok(wideLayout.railWidth >= 240 && wideLayout.railWidth <= 272, "the selection rail keeps its 15-17rem width: " + wideLayout.railWidth);
+    assert.ok(Math.abs(wideLayout.railTop - wideLayout.mainTop) <= 1, "rail and comparison start on the same row");
+    assert.ok(wideLayout.mainLeft > wideLayout.railLeft, "the comparison area is the right column");
+    assert.ok(wideLayout.document <= wideLayout.viewport + 1, "the desktop layout never widens the document: " + JSON.stringify(wideLayout));
+
     assert.ok(requests.every((url) => url.startsWith("file:")), "offline: no remote request " + JSON.stringify(requests));
+    await context.close();
+  } finally {
+    if (browser) await browser.close();
+    if (root) await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("blocked source leaves the theme recovery control visible and a valid swatch restores the result", { skip: NATIVE_PROOF ? false : OPT_IN }, async () => {
+  if (!NATIVE_PROOF) return;
+  const { chromium } = resolvePlaywright();
+  let browser = null;
+  let root = null;
+  try {
+    browser = await chromium.launch({ headless: true, timeout: 60_000 });
+    root = await mkdtemp(path.join(tmpdir(), "smart-colors-blocked-"));
+    await mkdir(path.join(root, "src/styles/tokens"), { recursive: true });
+    await writeFile(path.join(root, "src/styles/tokens/palette.css"), NARROW_PALETTE, "utf8");
+    await writeFile(path.join(root, "smart-colors.config.mjs"), "// Blocked-state fixture; only the generated output is written here.\nexport default {};\n", "utf8");
+    await writeFile(path.join(root, "src/styles/tokens/colors-tuning.css"), NARROW_TUNING, "utf8");
+    await generateColorTokens({ root, suggest: false });
+    const built = await createDiagnosticSession({ root, suggest: false });
+    const file = path.join(root, "reports/smart-colors-preview.html");
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, formatContrastPreviewHtml(built.session), "utf8");
+
+    const context = await browser.newContext({ viewport: { width: 1100, height: 900 }, colorScheme: "light", reducedMotion: "reduce" });
+    await context.route("**/*", (route) => {
+      const request = route.request();
+      if (request.isNavigationRequest() && request.resourceType() === "document") return route.continue();
+      return route.abort();
+    });
+    const page = await context.newPage();
+    page.setDefaultTimeout(30_000);
+    await page.goto(pathToFileURL(file).href, { waitUntil: "load", timeout: 30_000 });
+
+    // Force the real blocked path through the existing native source control: a source value with no
+    // catalogue pairs. The desktop swatches remain the visible source choice.
+    await page.evaluate(() => {
+      const source = document.getElementById("smart-colors-workbench-source");
+      const missing = document.createElement("option");
+      missing.value = "--palette-missing";
+      missing.textContent = "--palette-missing";
+      source.appendChild(missing);
+      source.value = "--palette-missing";
+      source.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await page.waitForFunction(() => {
+      const empty = document.getElementById("smart-colors-workbench-empty");
+      return Boolean(empty) && !empty.hidden;
+    }, null, { timeout: 30_000 });
+
+    const blocked = await page.evaluate(() => {
+      const fieldset = document.querySelector("#banco .wb-theme-fieldset");
+      const correction = document.querySelector("#smart-colors-workbench [data-smart-colors-workbench='correction']");
+      return {
+        correctionHidden: correction.hidden,
+        fieldsetVisible: Boolean(fieldset.offsetParent),
+        fieldsetHeight: Math.round(fieldset.getBoundingClientRect().height),
+        sourceDisplay: getComputedStyle(document.querySelector("#banco .wb-source-select")).display,
+        paletteDisplay: getComputedStyle(document.querySelector("#banco .wb-palette")).display,
+      };
+    });
+    assert.equal(blocked.correctionHidden, true, "the correction action is hidden while blocked");
+    assert.ok(blocked.fieldsetVisible && blocked.fieldsetHeight > 0, "the theme recovery control stays visible: " + JSON.stringify(blocked));
+    assert.equal(blocked.sourceDisplay, "none", "desktop uses the swatch counterpart, not a hidden focusable select");
+    assert.equal(blocked.paletteDisplay, "grid", "desktop swatches are visible");
+
+    // The theme radio remains operable while the correction box is hidden.
+    await page.click("#smart-colors-workbench-theme-dark");
+    assert.equal(await page.isChecked("#smart-colors-workbench-theme-dark"), true, "the blocked user can select a recovery theme");
+
+    // A valid visible swatch restores the result and the correction action.
+    await page.click('#smart-colors-workbench [data-smart-colors-workbench="swatch"][data-token="--palette-brand"]');
+    await page.waitForFunction(() => {
+      const result = document.getElementById("smart-colors-workbench-result");
+      const correction = document.querySelector("#smart-colors-workbench [data-smart-colors-workbench='correction']");
+      return Boolean(result) && !result.hidden && Boolean(correction) && !correction.hidden;
+    }, null, { timeout: 30_000 });
+    const recovered = await page.evaluate(() => ({
+      resultHidden: document.getElementById("smart-colors-workbench-result").hidden,
+      correctionHidden: document.querySelector("#smart-colors-workbench [data-smart-colors-workbench='correction']").hidden,
+      themeDark: document.getElementById("smart-colors-workbench-theme-dark").checked,
+      fieldsetVisible: Boolean(document.querySelector("#banco .wb-theme-fieldset").offsetParent),
+    }));
+    assert.equal(recovered.resultHidden, false, "a valid source restores the result");
+    assert.equal(recovered.correctionHidden, false, "a valid source restores the correction action");
+    assert.equal(recovered.themeDark, true, "the selected recovery theme survives");
+    assert.equal(recovered.fieldsetVisible, true, "the recovery control remains visible");
+
     await context.close();
   } finally {
     if (browser) await browser.close();

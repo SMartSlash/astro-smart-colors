@@ -831,6 +831,9 @@ export function createContrastWorkbench(deps) {
       ".scw-specimen { display: grid; min-inline-size: 0; }",
       ".scw-specimen-empty { margin: 0; font-size: 14px; line-height: 1.5; }",
       ".scw-selected { box-sizing: border-box; max-inline-size: 100%; margin: 0; padding: 24px; border-radius: 8px; font: inherit; overflow-wrap: break-word; }",
+      // Border and outline samples are pure geometry: no text and no fake control. The sample box
+      // keeps a deterministic size so the complete ring is painted, never a zero-height line.
+      ".scw-selected-ring { padding: 0; inline-size: 100%; block-size: 48px; }",
       ".scw-selected-title { margin: 0 0 8px; font-size: 22px; line-height: 1.25; font-weight: 650; }",
       ".scw-selected-text { margin: 0; font-size: 16px; line-height: 1.55; }",
       ".scw-selected-note { margin: 12px 0 0; font-size: 14px; line-height: 1.4; }",
@@ -855,18 +858,18 @@ export function createContrastWorkbench(deps) {
       node.style.appearance = "none";
       node.style.border = "0";
     } else if (pair.property === "borderColor") {
+      // Static geometry, not a control: a border sample proves the painted colour only.
       node = frameDocument.createElement("div");
-      node.textContent = "Un messaggio da leggere";
+      node.setAttribute("role", "img");
+      node.setAttribute("aria-label", "Campione statico del bordo: mostra solo il colore del bordo rispetto allo sfondo, non il comportamento di focus.");
       node.style.borderStyle = "solid";
       node.style.borderWidth = "2px";
     } else if (pair.property === "outlineColor") {
-      node = frameDocument.createElement("button");
-      node.type = "button";
-      node.tabIndex = -1;
-      node.setAttribute("aria-label", "Esempio non interattivo con focus visibile");
-      node.textContent = "Un messaggio da leggere";
-      node.style.appearance = "none";
-      node.style.border = "0";
+      // Static geometry, not a focusable control: the ring is shown to verify colour adjacency,
+      // never to test focus behaviour.
+      node = frameDocument.createElement("div");
+      node.setAttribute("role", "img");
+      node.setAttribute("aria-label", "Campione statico dell'anello: mostra solo il colore dell'anello rispetto allo sfondo, non il comportamento di focus.");
       node.style.outlineStyle = "solid";
       node.style.outlineWidth = "3px";
       node.style.outlineOffset = "2px";
@@ -885,7 +888,7 @@ export function createContrastWorkbench(deps) {
       node.appendChild(paragraph);
       node.appendChild(note);
     }
-    node.className = "scw-selected";
+    node.className = pair.property === "borderColor" || pair.property === "outlineColor" ? "scw-selected scw-selected-ring" : "scw-selected";
     node.setAttribute(VISIBLE_SPECIMEN_ATTRIBUTE, "selected");
     node.setAttribute(VISIBLE_PAIR_ATTRIBUTE, pair.id);
     node.setAttribute(VISIBLE_FOREGROUND_ATTRIBUTE, pair.foreground);
@@ -900,6 +903,15 @@ export function createContrastWorkbench(deps) {
     if (pair.property === "outlineColor") {
       node.style.outlineColor = "var(" + pair.foreground + ")";
       node.style.color = "inherit";
+    }
+    if (pair.property === "borderColor" || pair.property === "outlineColor") {
+      // A border's outer edge and an offset outline live OUTSIDE the node's own box. Without this
+      // wrapper they would sit on the frame canvas (--color-bg), while the reported ratio is the
+      // pair's background token. The padded wrapper paints the measured surface around the whole
+      // ring, and its padding is larger than the outline offset + width so the ring always fits.
+      wrapper.style.padding = "12px";
+      wrapper.style.backgroundColor = "var(" + pair.background + ")";
+      wrapper.style.borderRadius = "8px";
     }
     wrapper.appendChild(node);
     return { wrapper, node };

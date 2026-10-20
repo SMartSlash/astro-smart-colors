@@ -179,6 +179,22 @@ the `v0.4.0` tag.
   or review, and finally the technical data and the automation evidence. The workbench is
   the main path; in the archive samples the first family is open and the rest are native
   `<details>`, and the model samples are an **estimate**, never a verification.
+- The workbench now opens as **Colori a confronto**: a left rail lists the declared palette
+  values and the generated catalogue pairs for the selected source, while the right
+  comparison area shows the pair identity, the scoped criterion and the real CSS specimens
+  before their measured result. The archived raw source metadata and the manual palette
+  download stay in a closed technical detail, and the old **Dove lo usi?** wording is gone.
+- The bench states its scope in the UI: the catalogue is **generated**, not a site scan or
+  detected usage; the **4.5:1 normal-text threshold** is the WCAG minimum (with static
+  SC 1.4.3, 1.4.6 and 1.4.11 references) while the project target stays a separate objective;
+  the page is **not a site accessibility audit** and makes **no focus-conformity claim**
+  (the ring sample verifies colour adjacency only).
+- Fixed a real non-text adjacency bug: border and outline samples were painted on the frame
+  canvas rather than the pair's background, so the reported ratio did not match the surface
+  around the painted edge. The runtime now wraps the ring in a 12 px container painted with
+  `var(<pair.background>)`, so the measured surface surrounds the whole edge, and renders the
+  sample as an empty static `role="img"` element with a fixed 48 px size instead of
+  unmeasured placeholder text.
 - The local verification section leads with the measured variant/theme combinations,
   then the problems (up to eight cards by default, the rest behind a disclosure) and
   keeps the raw per-pair table in a disclosure. Baseline and tuned runs stay

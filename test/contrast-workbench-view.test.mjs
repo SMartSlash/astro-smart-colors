@@ -216,9 +216,10 @@ test("the suggestion copy states a bounded min-lightness search for the minimum,
   assert.doesNotMatch(html, /Correggi il minimo/);
   assert.match(html, /Correggi testo/);
   assert.match(html, /Correggi sfondo/);
-  assert.match(html, /<button type="button" id="smart-colors-workbench-apply" data-smart-colors-workbench="apply" disabled>Prova proposta<\/button>/);
-  assert.match(html, /Esporta CSS pubblico/);
+  assert.match(html, /<button type="button" id="smart-colors-workbench-apply" data-smart-colors-workbench="apply" hidden disabled>Prova proposta<\/button>/);
+  assert.doesNotMatch(html, /id="smart-colors-workbench-export"/, "the shell owns the single export command");
   assert.match(html, /Seleziona il CSS esportato/);
+  assert.match(html, /id="smart-colors-workbench-discard-suggestion" data-smart-colors-workbench="discard-suggestion" hidden disabled>Scarta proposta<\/button>/);
   // The redundant restore/reset-all duplicate is gone: reset-all lives once, in the controls scope.
   assert.doesNotMatch(html, /Ripristina<\/button>/);
   assert.equal((html.match(/Azzera tutto il tuning<\/button>/g) ?? []).length, 1);
@@ -281,36 +282,43 @@ test("the workbench frames stay empty for the runtime and the specimen precedes 
   const rightFrame = html.indexOf('id="smart-colors-workbench-right"');
   assert.ok(leftFrame >= 0 && leftFrame < leftMeasure, "the left specimen precedes its measure");
   assert.ok(rightFrame >= 0 && rightFrame < rightMeasure, "the right specimen precedes its measure");
-  // The selection rail is the quieter first column of the natural DOM order.
-  const rail = html.indexOf('class="wb-rail"');
+  // The selection toolbar owns the controls and precedes the full-width comparison area.
+  const toolbar = html.indexOf('class="wb-toolbar"');
   const main = html.indexOf('class="wb-main"');
-  assert.ok(rail >= 0 && rail < main, "the source rail precedes the comparison area in DOM order");
+  assert.ok(toolbar >= 0 && toolbar < main, "the horizontal toolbar precedes the comparison area in DOM order");
+  assert.doesNotMatch(html, /wb-rail|wb-layout/, "the old source sidebar is gone");
 });
 
-test("CONTRAST_WORKBENCH_CSS is container-query based, forced-colors aware and resource-free", () => {
-  // Workspace split and specimen pair are named container queries, never viewport media queries.
-  assert.match(CONTRAST_WORKBENCH_CSS, /@container preview-section \(min-width: 60rem\)/);
-  assert.match(CONTRAST_WORKBENCH_CSS, /grid-template-columns: minmax\(15rem, 17rem\) minmax\(0, 1fr\)/);
-  assert.match(CONTRAST_WORKBENCH_CSS, /@container wb-main \(min-width: 34rem\)/);
-  assert.doesNotMatch(CONTRAST_WORKBENCH_CSS, /@container preview-section \(min-width: 44rem\)/);
-  // The rail is a compact two-column swatch grid and the generated pairs are readable rows.
-  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-palette \{ display: none; gap:[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
-  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-palette \{ display: grid; \}/, "the swatches are the desktop counterpart");
+test("CONTRAST_WORKBENCH_CSS builds a compact horizontal toolbar and full-width specimens, is forced-colors aware and resource-free", () => {
+  // The palette strip and the specimen pair are named container queries, never viewport media queries.
+  assert.match(CONTRAST_WORKBENCH_CSS, /@container preview-section \(min-width: 45rem\)/);
+  assert.match(CONTRAST_WORKBENCH_CSS, /@container wb-main \(min-width: 40rem\)/);
+  assert.match(CONTRAST_WORKBENCH_CSS, /@container wb-main \(min-width: 48rem\) \{\s*\.wb-proposal-frames \{ grid-template-columns: repeat\(2, minmax\(0, 1fr\)\); \}\s*\}/, "the fixed proposal frames sit side by side from 48rem");
+  assert.doesNotMatch(CONTRAST_WORKBENCH_CSS, /\.wb-rail|\.wb-layout/, "no sidebar layout rule survives");
+  // The palette is a bounded horizontal strip; the pair selector is promoted in the same toolbar.
+  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-palette \{[^}]*display: none;[^}]*overflow-x: auto;/, "mobile keeps the native select and no overflowing strip");
+  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-palette \{ display: flex; \}/, "the swatches are the desktop counterpart");
   assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-source-select \{ display: none; \}/, "the native select is fully removed on desktop, not an invisible focus stop");
   assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-swatch \{[^}]*height: 44px;[^}]*\}/, "every source target is 44px high");
-  assert.doesNotMatch(CONTRAST_WORKBENCH_CSS, /wb-swatch-role/, "the compact rail drops the secondary role");
+  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-pair-field \{[^}]*flex: 1 1 20rem;/, "the pair selector is a first-class toolbar control");
+  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-picker-dialog \{[^}]*width: min\(40rem, calc\(100vw - 2rem\)\);[^}]*max-block-size: 90dvh;/, "the picker is a compact native viewport-bound dialog");
+  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-picker-results \{[^}]*overflow: auto;/, "only the results area scrolls inside the picker");
+  assert.doesNotMatch(CONTRAST_WORKBENCH_CSS, /\.wb-more/, "the giant more-pairs disclosure is gone");
+  assert.doesNotMatch(CONTRAST_WORKBENCH_CSS, /wb-swatch-role/, "the compact toolbar drops the secondary role");
   assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-theme-fieldset \{[^}]*border: 0;/);
   assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-uses \{[^}]*display: grid/);
   assert.doesNotMatch(CONTRAST_WORKBENCH_CSS, /border-radius: 999px/);
+  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-frames:not\(\.wb-proposal-frames\) \{ grid-template-columns: repeat\(2, minmax\(0, 1fr\)\); \}/, "the two specimens share the full width when the workbench is wide");
   assert.match(CONTRAST_WORKBENCH_CSS, /@media \(forced-colors: active\)/);
   assert.match(CONTRAST_WORKBENCH_CSS, /@media print/);
   assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-proposal-frames\[hidden\] \{ display: none; \}/, "the hidden attribute must beat the grid display");
+  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-action-strip \[hidden\] \{ display: none; \}/, "the discard action is never painted without a suggestion");
   // The hidden rules must live in `layout`, otherwise the later `layout` grid rule would win the cascade.
   const layoutLayer = CONTRAST_WORKBENCH_CSS.indexOf("@layer layout {");
   const preferencesLayer = CONTRAST_WORKBENCH_CSS.indexOf("@layer preferences {");
   const hiddenRule = CONTRAST_WORKBENCH_CSS.indexOf(".wb-proposal-frames[hidden]");
   assert.ok(layoutLayer >= 0 && hiddenRule > layoutLayer && hiddenRule < preferencesLayer, "the hidden rule sits in the layout layer with the grid it overrides");
-  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-proposal-frames \.wb-frame \{ overflow: auto; overscroll-behavior: contain; \}/, "proposal containers scroll locally instead of clipping");
+  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-proposal-frames \.wb-frame \{ overflow: auto; overscroll-behavior: contain;[^}]*\}/, "proposal containers scroll locally instead of clipping");
   assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-frame \{ min-height: 7rem;[^}]*overflow: hidden; \}/, "the main views keep clipping");
   assert.doesNotMatch(CONTRAST_WORKBENCH_CSS, /@import|url\(|https?:/i);
   assert.doesNotMatch(CONTRAST_WORKBENCH_CSS, /position:\s*fixed/);
@@ -318,20 +326,48 @@ test("CONTRAST_WORKBENCH_CSS is container-query based, forced-colors aware and r
 
 test("the static workspace separates source values from the generated catalogue and shows the pair identity outside the closed details", () => {
   const html = renderContrastWorkbench(workbenchSession());
-  // Rail copy is short and explicit; the detailed source archive owns role metadata.
-  assert.match(html, /Colori originali da palette\.css\./);
-  assert.match(html, /Abbinamenti generati, non usi rilevati nel sito\./);
+  // Toolbar copy is short and explicit; the detailed source archive owns role metadata.
+  assert.match(html, /Usi generati dalla palette, non rilevati nel sito\./);
   assert.doesNotMatch(html, /Valori dichiarati nel file di palette del progetto; non sono una scansione del sito/);
-  assert.match(html, /Coppia dal catalogo generato/);
-  assert.match(html, /Solo coppie presenti nella diagnostica generata; nessuna coppia inventata\./);
+  assert.match(html, /<label for="smart-colors-workbench-pair">Abbinamento tecnico<\/label>/);
+
   assert.match(html, /<span class="wb-use-kind">testo<\/span>/);
-  // The compact source select is promoted into the rail as the single instance, before the swatches.
-  const rail = html.indexOf('class="wb-rail"');
+  // The primary toolbar shows a human current use and one opener; the technical pair select moves
+  // into the technical disclosure as a fallback.
+  const workspace = html.indexOf('class="wb-workspace"');
   const sourceSelect = html.indexOf('id="smart-colors-workbench-source"');
   const swatches = html.indexOf('class="wb-palette"');
+  const currentUse = html.indexOf('id="smart-colors-workbench-current-use"');
+  const opener = html.indexOf('id="smart-colors-workbench-open-picker"');
+  const comparison = html.indexOf('id="smart-colors-workbench-comparison-themes"');
+  const theme = html.indexOf('id="smart-colors-workbench-theme-light"');
   const main = html.indexOf('class="wb-main"');
-  assert.ok(rail >= 0 && sourceSelect > rail && sourceSelect < swatches && swatches < main, "the rail owns the only source select and the desktop swatches");
+  assert.ok(workspace >= 0 && sourceSelect > workspace && sourceSelect < swatches && swatches < currentUse && currentUse < opener && opener < comparison && comparison < main, "the toolbar shows current use and the change-use opener before comparison and theme");
   assert.equal((html.match(/id="smart-colors-workbench-source"/g) ?? []).length, 1, "the native source select exists exactly once");
+  const technical = html.indexOf('class="is-detail wb-technical"');
+  const pairSelect = html.indexOf('id="smart-colors-workbench-pair"');
+  assert.ok(technical >= 0 && pairSelect > technical, "the native pairing selector lives inside the technical disclosure");
+  assert.equal((html.match(/id="smart-colors-workbench-pair"/g) ?? []).length, 1, "the native pairing selector exists exactly once");
+  assert.doesNotMatch(html, /wb-uses-details|Altre coppie/, "the duplicate long uses disclosure is gone");
+  assert.match(html, /<dialog id="smart-colors-workbench-picker"/);
+  const currentUseBlock = /<p id="smart-colors-workbench-current-use"[^>]*>([\s\S]*?)<\/p>/.exec(html);
+  assert.ok(currentUseBlock, "the toolbar exposes a current-use summary");
+  assert.match(currentUseBlock[1], /Testo sul callout primary/);
+  assert.doesNotMatch(currentUseBlock[1], /--color-primary-text|--color-primary-surface/, "the primary summary never leads with tokens");
+  // The dialog owns the search, category, paginated results and native footer.
+  assert.match(html, /<h2 id="smart-colors-workbench-picker-title">Scegli cosa verificare<\/h2>/);
+  assert.match(html, /id="smart-colors-workbench-picker-source"[^>]*>Sorgente: /);
+  assert.match(html, /<label for="smart-colors-workbench-use-search">Cerca un uso<\/label><input id="smart-colors-workbench-use-search"[^>]*type="search"[^>]*placeholder="es\. testo card"[^>]*disabled>/);
+  assert.match(html, /<label for="smart-colors-workbench-use-category">Tipo di uso<\/label><select id="smart-colors-workbench-use-category"[^>]*disabled>/);
+  assert.match(html, /<option value="">Tutti gli usi<\/option><option value="callout">Riquadri<\/option>/);
+  assert.match(html, /id="smart-colors-workbench-use-prev"[^>]*disabled>Precedenti<\/button>/);
+  assert.match(html, /id="smart-colors-workbench-use-next"[^>]*disabled>Successivi<\/button>/);
+  assert.match(html, /id="smart-colors-workbench-close-picker"[^>]*disabled>Chiudi<\/button>/);
+  assert.match(html, /id="smart-colors-workbench-open-picker"[^>]*disabled>Cambia uso<\/button>/);
+  assert.match(html, /id="smart-colors-workbench-use-count"[^>]*role="status"/);
+  assert.ok(html.indexOf('id="smart-colors-workbench-uses"') > html.indexOf('<dialog id="smart-colors-workbench-picker"'), "the uses hook lives inside the dialog");
+  assert.ok((html.match(/class="wb-use"/g) ?? []).length <= 6, "at most six real uses are rendered per page");
+  assert.match(html, /aria-pressed="true"[^>]*disabled><span class="wb-use-main">/, "the current use is selected in the results");
   // The misleading usage wording is gone from the file's own UI.
   assert.doesNotMatch(html, /Dove lo usi\?/);
   assert.doesNotMatch(html, /abbinamenti reali/i);
@@ -344,15 +380,15 @@ test("the static workspace separates source values from the generated catalogue 
   assert.match(html, /<code>--color-primary-text<\/code> su <code>--color-primary-surface<\/code> · testo/);
   assert.match(html, /Testo normale · soglia AA 4,5:1 \(SC 1\.4\.3\)\. Il corpo del campione è da 16 px\./);
   assert.doesNotMatch(html, /titolo 22 px non bold/);
-  // The mode form stays above the specimen; the theme fieldset moves next to the correction action
-  // but keeps its form association.
+  // The mode form stays above the specimen; the theme recovery fieldset lives in the toolbar,
+  // outside the correction strip, and keeps its form association.
   const modeForm = html.indexOf('id="smart-colors-workbench-selection"');
   const frames = html.indexOf('id="smart-colors-workbench-left"');
   const correction = html.indexOf('id="smart-colors-workbench-suggestions-title"');
   const themeFieldset = html.indexOf('class="wb-fieldset wb-theme-fieldset"');
   assert.ok(modeForm >= 0 && modeForm < frames, "the mode radio form stays above the specimen");
   assert.ok(themeFieldset >= 0 && themeFieldset < correction, "the theme recovery fieldset precedes the correction section");
-  assert.ok(themeFieldset < html.indexOf('<section class="wb-suggestions"'), "the theme fieldset is outside the correction box");
+  assert.ok(themeFieldset < html.indexOf('class="wb-action-strip wb-suggestions"'), "the theme fieldset is outside the correction box");
   assert.match(html, /id="smart-colors-workbench-theme-light" type="radio"[^>]*form="smart-colors-workbench-selection"/);
   assert.match(html, /id="smart-colors-workbench-theme-dark" type="radio"[^>]*form="smart-colors-workbench-selection"/);
   // Scope guidance lives under the results, not before them.
@@ -371,7 +407,59 @@ test("the static workspace separates source values from the generated catalogue 
   assert.doesNotMatch(html, /<details[^>]*\bopen\b/);
 });
 
-test("the compact rail keeps 16 source buttons at 44px targets and uses the native select on narrow containers", () => {
+test("a known on-color pair has one readable selection label and keeps the exact technical identity", () => {
+  const base = workbenchSession();
+  const warmSettings = {
+    ...base,
+    design: {
+      ...base.design,
+      sources: [...base.design.sources, { token: "--palette-warm", name: "warm", role: "decorative", darkBlend: null, darkMix: { mode: "automatic", sourcePercent: null, whitePercent: null } }],
+      tokens: {
+        ...base.design.tokens,
+        "--color-warm-ink": { sources: ["--palette-warm"], recipe: "ink", usage: "Testo sul riempimento warm", controls: {} },
+        "--color-warm": { sources: ["--palette-warm"], recipe: "identity", usage: "Riempimento warm", controls: {} },
+      },
+    },
+    paletteSource: {
+      ...base.paletteSource,
+      sources: [...base.paletteSource.sources, { token: "--palette-warm", value: "oklch(0.6 0.15 40)", role: "decorative", darkBlend: null, declaration: null }],
+    },
+    model: {
+      diagnostics: [{ label: "warm ink / warm", scheme: "light", foregroundToken: "--color-warm-ink", backgroundToken: "--color-warm", ratio: 3, minimum: 4.5, target: 4.6, kind: "text", status: "below-minimum", provenance: "generated" }],
+      errors: [], warnings: [],
+    },
+  };
+  const html = renderContrastWorkbench(warmSettings);
+  assert.match(html, /data-picker-label="Testo sul colore Warm"/, "the option serializes the authoritative picker label");
+  assert.match(html, /<span class="wb-use-label">Testo sul colore Warm<\/span>/);
+  assert.doesNotMatch(html, /<span class="wb-use-tech"><code>--color-warm-ink<\/code>/, "a known on-color picker label needs no technical fallback");
+  const summary = /<p id="smart-colors-workbench-current-use"[^>]*>([\s\S]*?)<\/p>/.exec(html)[1];
+  assert.match(summary, /Testo sul colore Warm/);
+  assert.doesNotMatch(summary, /--color-warm/);
+  assert.doesNotMatch(html, /<\/p>\s*<code class="wb-current-use-tech">/, "no unprojected static identity may survive a runtime selection");
+});
+
+test("the toolbar keeps current use, the change-use opener, comparison and theme above one full-width specimen row", () => {
+  const html = renderContrastWorkbench(workbenchSession());
+  const toolbar = html.indexOf('class="wb-toolbar"');
+  const currentUse = html.indexOf('id="smart-colors-workbench-current-use"');
+  const opener = html.indexOf('id="smart-colors-workbench-open-picker"');
+  const comparison = html.indexOf('id="smart-colors-workbench-comparison-themes"');
+  const theme = html.indexOf('id="smart-colors-workbench-theme-light"');
+  const result = html.indexOf('id="smart-colors-workbench-result"');
+  const correction = html.indexOf('class="wb-action-strip wb-suggestions"');
+  const technical = html.indexOf('class="is-detail wb-technical"');
+  const pair = html.indexOf('id="smart-colors-workbench-pair"');
+  assert.ok(toolbar >= 0 && currentUse > toolbar && opener > currentUse && comparison > opener && theme > comparison && theme < result, "current use, opener, comparison and theme stay adjacent in the toolbar");
+  assert.ok(result >= 0 && result < correction, "the single correction strip sits below the full-width specimens");
+  assert.doesNotMatch(html, /wb-rail|wb-layout/, "no left rail or workspace split remains");
+  assert.ok(pair > technical, "the technical pair fallback is not a primary toolbar control");
+  // The theme recovery control lives outside the correction strip and keeps its form association.
+  assert.ok(theme < correction, "theme selection survives even when the correction strip is hidden");
+  assert.match(html, /id="smart-colors-workbench-theme-dark" type="radio"[^>]*form="smart-colors-workbench-selection"/);
+});
+
+test("the horizontal palette toolbar keeps 16 source buttons at 44px targets and uses the native select on narrow containers", () => {
   const session = workbenchSession({
     design: { ...workbenchSession().design, sources: [] },
     paletteSource: {
@@ -387,13 +475,13 @@ test("the compact rail keeps 16 source buttons at 44px targets and uses the nati
   });
   const html = renderContrastWorkbench(session);
   assert.equal((html.match(/data-smart-colors-workbench="swatch"/g) ?? []).length, 16, "all 16 source buttons are present");
-  assert.match(html, /class="wb-field wb-source-select"/, "the single native source select lives in the rail");
+  assert.match(html, /class="wb-field wb-source-select"/, "the single native source select stays available on narrow containers");
   assert.equal((html.match(/id="smart-colors-workbench-source"/g) ?? []).length, 1);
-  // Eight rows of 44px targets (352px) plus the 4px grid gaps; the swatches are desktop-only.
+  // A bounded horizontal strip of 44px targets; the native select is the mobile fallback.
   assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-swatch \{[^}]*height: 44px;[^}]*\}/);
-  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-palette \{ display: none; gap: var\(--space-1\); grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
-  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-palette \{ display: grid; \}/);
-  assert.doesNotMatch(html, /wb-swatch-role/, "the compact rail drops the human role");
+  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-palette \{[^}]*overflow-x: auto;[^}]*\}/);
+  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-palette \{ display: flex; \}/);
+  assert.doesNotMatch(html, /wb-swatch-role/, "the compact toolbar drops the human role");
   assert.match(html, /<code>--palette-source-0<\/code> · ruolo dichiarato: interfaccia/, "the source archive keeps the human role");
 });
 
@@ -489,7 +577,22 @@ function workbenchDom(session) {
   const swatchBrand = swatch("--palette-brand"); host.appendChild(swatchBrand);
   const swatchCanvas = swatch("--palette-canvas"); host.appendChild(swatchCanvas);
   const swatchOrphan = swatch("--palette-orphan"); host.appendChild(swatchOrphan);
-  const usesBox = makeNode("div"); usesBox.setAttribute("data-smart-colors-workbench", "uses"); host.appendChild(usesBox);
+  const usesBox = makeNode("div"); usesBox.setAttribute("data-smart-colors-workbench", "uses"); usesBox.className = "wb-picker-results";
+  const currentUse = register(makeNode("p"), "smart-colors-workbench-current-use"); currentUse.setAttribute("data-smart-colors-workbench", "current-use"); host.appendChild(currentUse);
+  const openPicker = register(makeNode("button"), "smart-colors-workbench-open-picker"); openPicker.disabled = true; host.appendChild(openPicker);
+  const pickerDialog = register(makeNode("dialog"), "smart-colors-workbench-picker"); pickerDialog.open = false;
+  pickerDialog.showModal = function () { this.open = true; };
+  pickerDialog.close = function () { this.open = false; this.dispatch("close"); };
+  pickerDialog.appendChild(usesBox);
+  host.appendChild(pickerDialog);
+  const pickerSource = register(makeNode("p"), "smart-colors-workbench-picker-source"); pickerDialog.appendChild(pickerSource);
+  const useSearch = register(makeNode("input"), "smart-colors-workbench-use-search"); useSearch.value = ""; useSearch.disabled = true; pickerDialog.appendChild(useSearch);
+  const useCategory = register(makeNode("select"), "smart-colors-workbench-use-category"); useCategory.value = ""; useCategory.disabled = true; pickerDialog.appendChild(useCategory);
+  const useClear = register(makeNode("button"), "smart-colors-workbench-clear-search"); useClear.disabled = true; pickerDialog.appendChild(useClear);
+  const useCount = register(makeNode("p"), "smart-colors-workbench-use-count"); useCount.setAttribute("role", "status"); pickerDialog.appendChild(useCount);
+  const usePrev = register(makeNode("button"), "smart-colors-workbench-use-prev"); usePrev.disabled = true; usePrev.setAttribute("aria-disabled", "true"); pickerDialog.appendChild(usePrev);
+  const useNext = register(makeNode("button"), "smart-colors-workbench-use-next"); useNext.disabled = true; useNext.setAttribute("aria-disabled", "true"); pickerDialog.appendChild(useNext);
+  const closePicker = register(makeNode("button"), "smart-colors-workbench-close-picker"); closePicker.disabled = true; pickerDialog.appendChild(closePicker);
   const current = register(makeNode("p"), "smart-colors-workbench-current");
   const identity = register(makeNode("p"), "smart-colors-workbench-identity"); identity.setAttribute("data-smart-colors-workbench", "identity");
   const purpose = register(makeNode("p"), "smart-colors-workbench-purpose"); purpose.setAttribute("data-smart-colors-workbench", "purpose");
@@ -498,7 +601,7 @@ function workbenchDom(session) {
   const emptyNote = makeNode("p"); emptyNote.setAttribute("data-smart-colors-workbench", "empty"); emptyNote.hidden = true; register(emptyNote, "smart-colors-workbench-empty");
   const correctionBox = makeNode("section"); correctionBox.setAttribute("data-smart-colors-workbench", "correction"); host.appendChild(correctionBox);
   const manualBox = makeNode("details"); manualBox.setAttribute("data-smart-colors-workbench", "manual"); host.appendChild(manualBox);
-  const exportBox = makeNode("details"); exportBox.setAttribute("data-smart-colors-workbench", "export"); host.appendChild(exportBox);
+  const exportBox = makeNode("details"); exportBox.setAttribute("data-smart-colors-workbench", "export"); exportBox.open = false; host.appendChild(exportBox);
 
   const source = register(makeNode("select"), "smart-colors-workbench-source");
   for (const value of ["", "--palette-brand", "--palette-canvas"]) { const option = optionOf(value || "all", {}); option.value = value; source.appendChild(option); }
@@ -546,6 +649,8 @@ function workbenchDom(session) {
   proposalFrames.appendChild(proposalBefore);
   proposalFrames.appendChild(proposalAfter);
   register(makeNode("button"), "smart-colors-workbench-apply");
+  const discard = register(makeNode("button"), "smart-colors-workbench-discard-suggestion"); discard.hidden = true; discard.disabled = true;
+  const sessionStatus = register(makeNode("p"), "smart-colors-workbench-session-status"); sessionStatus.textContent = "Anteprima locale";
   register(makeNode("button"), "smart-colors-workbench-export");
   register(makeNode("textarea"), "smart-colors-workbench-export-text");
   register(makeNode("a"), "smart-colors-workbench-download");
@@ -566,11 +671,11 @@ function workbenchDom(session) {
     getElementById: (id) => registry.get(id) ?? null,
     createElement: (tag) => makeNode(tag),
   };
-  return { host, status, selection, controlsForm, source, pair, themeLight, themeDark, comparisonThemes, comparisonTuning, comparisonDraft, controlsBody, proposal, proposalFrames, proposalBefore, proposalAfter, usesBox, current, identity, purpose, actionTheme, resultBox, emptyNote, correctionBox, manualBox, exportBox, swatchBrand, swatchCanvas, swatchOrphan, document };
+  return { host, status, selection, controlsForm, source, pair, themeLight, themeDark, comparisonThemes, comparisonTuning, comparisonDraft, controlsBody, proposal, proposalFrames, proposalBefore, proposalAfter, usesBox, current, currentUse, openPicker, pickerDialog, pickerSource, useSearch, useCategory, useClear, useCount, usePrev, useNext, closePicker, identity, purpose, actionTheme, resultBox, emptyNote, correctionBox, manualBox, exportBox, sessionStatus, discard, swatchBrand, swatchCanvas, swatchOrphan, document };
 }
 
 function controllerStub(options = {}) {
-  const calls = { mount: [], select: [], setOverride: [], reset: [], suggest: [], apply: [], unsubscribed: false, destroy: 0 };
+  const calls = { mount: [], select: [], setOverride: [], reset: [], suggest: [], apply: [], discard: [], unsubscribed: false, destroy: 0 };
   let state = options.state ?? { phase: "idle", revision: 0, selection: { pairId: null, theme: "light", comparison: "themes" }, draft: {}, views: [], suggestion: null, error: null };
   let listener = null;
   return {
@@ -588,6 +693,12 @@ function controllerStub(options = {}) {
     reset(control) { calls.reset.push(control); return Promise.resolve(); },
     suggest(side) { calls.suggest.push(side); return Promise.resolve(); },
     applySuggestion() { calls.apply.push(true); return Promise.resolve(); },
+    discardSuggestion() {
+      calls.discard.push(true);
+      state = { ...state, suggestion: null, revision: Number(state.revision || 0) + 1 };
+      if (listener) listener(state);
+      return state;
+    },
     exportTuning() { return typeof options.tuning === "function" ? options.tuning() : (options.tuning ?? ":root { --color-tune-primary-text-light: oklch(0.4 0.1 250); }"); },
     destroy() { calls.destroy += 1; },
   };
@@ -598,6 +709,41 @@ function install(session, controller = controllerStub()) {
   const dom = workbenchDom(session);
   const view = createContrastWorkbenchView({ document: dom.document, controller });
   return { dom, controller, view };
+}
+
+function addUseOptions(dom, count) {
+  for (let index = 0; index < count; index += 1) {
+    const option = optionOf(`--color-extra-${index}|--color-bg|text`, {
+      "data-fg": `--color-extra-${index}`,
+      "data-bg": "--color-bg",
+      "data-kind": "text",
+      "data-usage": `Uso extra ${index}`,
+      "data-sources": "--palette-brand",
+      "data-fg-sources": "--palette-brand",
+      "data-bg-sources": "--palette-brand",
+      "data-use-bucket": index % 2 === 0 ? "page" : "border",
+      "data-use-rank": String(10 + index),
+      "data-thresholds": "4.5,4.6;4.5,4.6",
+    });
+    dom.pair.appendChild(option);
+  }
+}
+
+function addSearchOption(dom, foreground, background, usage) {
+  const option = optionOf(`${foreground}|${background}|text`, {
+    "data-fg": foreground,
+    "data-bg": background,
+    "data-kind": "text",
+    "data-usage": usage,
+    "data-sources": "--palette-brand",
+    "data-fg-sources": "--palette-brand",
+    "data-bg-sources": "--palette-brand",
+    "data-use-bucket": "page",
+    "data-use-rank": "30",
+    "data-thresholds": "4.5,4.6;4.5,4.6",
+  });
+  dom.pair.appendChild(option);
+  return option;
 }
 
 test("mount is called only with the real left/right containers and phases are announced concisely", async () => {
@@ -1137,6 +1283,159 @@ test("a source swatch selects the source's own preferred foreground use, never a
   assert.equal(dom.swatchCanvas.getAttribute("aria-pressed"), "true");
 });
 
+test("the change-use button opens a modal picker focused on search and closes back to the opener", () => {
+  const { dom } = install(workbenchSession());
+  assert.equal(dom.openPicker.disabled, false, "the opener is enabled by the view");
+  assert.equal(dom.useSearch.disabled, false, "the search is enabled by the view");
+  assert.equal(dom.useCategory.disabled, false, "the category is enabled by the view");
+  assert.equal(dom.pickerDialog.open, false);
+  dom.openPicker.dispatch("click");
+  assert.equal(dom.pickerDialog.open, true, "the native modal is open");
+  assert.equal(dom.useSearch.focused, true, "opening focuses the search field");
+  assert.match(dom.useCount.textContent, /1 uso · pagina 1 di 1/);
+  assert.equal(findAllIn(dom.usesBox, '[data-smart-colors-workbench="use"]').length, 1);
+  dom.closePicker.dispatch("click");
+  assert.equal(dom.pickerDialog.open, false);
+  assert.equal(dom.openPicker.focused, true, "closing returns focus to the stable opener");
+});
+
+test("the picker searches, filters and paginates every real use, then resets only on a source change", async () => {
+  const { dom, controller } = install(workbenchSession());
+  addUseOptions(dom, 10);
+  dom.openPicker.dispatch("click");
+
+  const pageOne = findAllIn(dom.usesBox, '[data-smart-colors-workbench="use"]');
+  assert.equal(pageOne.length, 6, "a page contains at most six real result buttons");
+  assert.match(dom.useCount.textContent, /11 usi · pagina 1 di 2/);
+  assert.equal(dom.usePrev.getAttribute("aria-disabled"), "true");
+  assert.equal(dom.useNext.getAttribute("aria-disabled"), "false");
+  const seen = new Set(pageOne.map((button) => button.getAttribute("data-pair-value")));
+
+  dom.useNext.dispatch("click");
+  assert.equal(dom.useSearch.focused, true, "paging never moves focus out of the search field");
+  const pageTwo = findAllIn(dom.usesBox, '[data-smart-colors-workbench="use"]');
+  assert.equal(pageTwo.length, 5);
+  assert.match(dom.useCount.textContent, /pagina 2 di 2/);
+  for (const button of pageTwo) seen.add(button.getAttribute("data-pair-value"));
+  assert.equal(seen.size, 11, "every matching use is reachable across pages");
+  dom.useNext.dispatch("click");
+  assert.match(dom.useCount.textContent, /pagina 2 di 2/, "the last page does not advance");
+
+  dom.useSearch.value = "extra 9";
+  dom.useSearch.dispatch("input");
+  const searched = findAllIn(dom.usesBox, '[data-smart-colors-workbench="use"]');
+  assert.equal(searched.length, 1);
+  assert.match(flat(searched[0]), /Uso extra 9/);
+  assert.match(dom.useCount.textContent, /1 uso · pagina 1 di 1/);
+
+  dom.useSearch.value = "";
+  dom.useSearch.dispatch("input");
+  dom.useCategory.value = "border";
+  dom.useCategory.dispatch("change");
+  assert.equal(findAllIn(dom.usesBox, '[data-smart-colors-workbench="use"]').length, 5);
+  assert.match(dom.useCount.textContent, /5 usi/);
+
+  // A measurement update with the same source must not reset the user's filters.
+  controller.publish({ phase: "complete", revision: 9, draft: {}, error: null, views: [], suggestion: null, selection: { pairId: "light|color|--color-primary-text|--color-primary-surface", theme: "light", comparison: "themes" } });
+  assert.equal(dom.useSearch.value, "", "the search stays as the user set it");
+  assert.equal(dom.useCategory.value, "border", "the category stays as the user set it");
+  assert.match(dom.useCount.textContent, /5 usi/);
+
+  // A source change resets search, category and page.
+  dom.useSearch.value = "extra";
+  dom.useSearch.dispatch("input");
+  dom.source.value = "--palette-canvas";
+  dom.source.dispatch("change");
+  assert.equal(dom.useSearch.value, "", "a source change clears the search");
+  assert.equal(dom.useCategory.value, "", "a source change clears the category");
+  assert.match(dom.useCount.textContent, /1 uso · pagina 1 di 1/);
+  await tick();
+  assert.ok(controller.calls.select.length >= 1);
+});
+
+test("the picker matches natural multiword queries in any order, ignoring extra spaces and accents", () => {
+  const { dom } = install(workbenchSession());
+  addSearchOption(dom, "--color-card-text", "--color-card", "Testo sulla card");
+  addSearchOption(dom, "--color-city-text", "--color-city", "Testo sulla città");
+  dom.openPicker.dispatch("click");
+  function results(query) {
+    dom.useSearch.value = query;
+    dom.useSearch.dispatch("input");
+    return findAllIn(dom.usesBox, '[data-smart-colors-workbench="use"]');
+  }
+  assert.equal(results("testo card").length, 1, "words may span the natural label");
+  assert.equal(results("card testo").length, 1, "word order is irrelevant");
+  assert.equal(results("  testo   card  ").length, 1, "extra whitespace is ignored");
+  assert.equal(results("testo sulla card").length, 1);
+  assert.equal(results("--color-card-text --color-card").length, 1, "public fg/bg tokens match all words");
+  assert.equal(results("testo nonexistent").length, 0, "an unmatched word yields no results");
+  assert.match(dom.useCount.textContent, /Nessun uso corrisponde/);
+  assert.equal(results("citta").length, 1, "accents are removed from the query");
+  assert.equal(results("città").length, 1);
+  assert.equal(results("CITTÀ testo").length, 1, "case and accents are normalized together");
+  assert.equal(results("testo").length, 3, "the shared word still matches every text use");
+});
+
+test("a known on-color uses the same human label in the picker and current-use summary", () => {
+  const controller = controllerStub({ pairs: () => [{ id: "light|color|--color-warm-ink|--color-warm", foreground: "--color-warm-ink", background: "--color-warm", property: "color" }] });
+  const { dom } = install(workbenchSession(), controller);
+  const warm = optionOf("--color-warm-ink|--color-warm|text", {
+    "data-fg": "--color-warm-ink", "data-bg": "--color-warm", "data-kind": "text",
+    "data-usage": "--color-warm-ink su --color-warm",
+    "data-picker-label": "Testo sul colore Warm",
+    "data-sources": "--palette-brand", "data-fg-sources": "--palette-brand", "data-bg-sources": "--palette-brand",
+    "data-use-bucket": "page", "data-use-rank": "5", "data-thresholds": "4.5,4.6;4.5,4.6",
+  });
+  dom.pair.appendChild(warm);
+  controller.publish({ phase: "complete", revision: 1, draft: {}, error: null, views: [], suggestion: null, selection: { pairId: "light|color|--color-warm-ink|--color-warm", theme: "light", comparison: "themes" } });
+  assert.match(flat(dom.currentUse), /Testo sul colore Warm/);
+  assert.doesNotMatch(flat(dom.currentUse), /--color-warm/);
+  assert.equal(warm.getAttribute("data-usage"), "--color-warm-ink su --color-warm", "technical metadata is not rewritten by the human label");
+  dom.openPicker.dispatch("click");
+  const button = findAllIn(dom.usesBox, '[data-smart-colors-workbench="use"]').find((node) => node.getAttribute("data-pair-value") === "--color-warm-ink|--color-warm|text");
+  assert.ok(button);
+  assert.match(flat(button), /Testo sul colore Warm/);
+  assert.doesNotMatch(flat(button), /--color-warm-ink/, "the known picker label hides the technical identifier");
+  assert.equal(findAllIn(button, "code").length, 0, "the known on-color label has no technical fallback");
+  dom.useSearch.value = "colore warm";
+  dom.useSearch.dispatch("input");
+  assert.equal(findAllIn(dom.usesBox, '[data-smart-colors-workbench="use"]').length, 1, "the authoritative picker label is searchable");
+});
+
+test("choosing a picker result applies the use, closes the dialog and returns focus to the opener", async () => {
+  const { dom, controller } = install(workbenchSession());
+  dom.openPicker.dispatch("click");
+  const selected = findAllIn(dom.usesBox, '[data-smart-colors-workbench="use"]')[0];
+  assert.equal(selected.getAttribute("aria-pressed"), "true", "the current use is selected");
+  selected.dispatch("click");
+  await tick();
+  assert.equal(dom.pickerDialog.open, false, "choosing closes the dialog");
+  assert.equal(dom.openPicker.focused, true, "focus returns to the stable picker opener");
+  assert.equal(controller.calls.select.length, 1);
+  assert.equal(dom.pair.value, selected.getAttribute("data-pair-value"));
+});
+
+test("an external selection syncs the current-use summary, the technical select and the picker selected state", () => {
+  const { dom, controller } = install(workbenchSession());
+  controller.publish({ phase: "complete", revision: 2, draft: {}, error: null, views: [], suggestion: null, selection: { pairId: "light|color|--color-text|--color-bg", theme: "light", comparison: "themes" } });
+  assert.equal(dom.pair.value, "--color-text|--color-bg|text");
+  assert.match(flat(dom.currentUse), /Testo sulla pagina/);
+  assert.equal(dom.source.value, "--palette-canvas", "the technical source follows the selected pair");
+  dom.openPicker.dispatch("click");
+  const selected = findAllIn(dom.usesBox, '[data-smart-colors-workbench="use"]').find((button) => button.getAttribute("data-pair-value") === "--color-text|--color-bg|text");
+  assert.ok(selected, "the externally selected use is in the picker");
+  assert.equal(selected.getAttribute("aria-pressed"), "true");
+});
+
+test("programmatic controller updates never steal focus from the open picker", () => {
+  const { dom, controller } = install(workbenchSession());
+  dom.openPicker.dispatch("click");
+  dom.document.activeElement = dom.useSearch;
+  controller.publish({ phase: "complete", revision: 3, draft: {}, error: null, views: [], suggestion: null, selection: { pairId: "light|color|--color-primary-text|--color-primary-surface", theme: "light", comparison: "themes" } });
+  assert.equal(dom.document.activeElement, dom.useSearch);
+  assert.equal(dom.openPicker.focused, undefined);
+});
+
 test("a source with no verified use clears the result and hides the correction instead of keeping a stale ratio", async () => {
   const { dom, controller } = install(workbenchSession());
   dom.swatchOrphan.dispatch("click");
@@ -1167,6 +1466,58 @@ test("apply stays disabled until a verified suggestion exists", async () => {
   assert.equal(apply.disabled, true, "a non-verified suggestion never enables apply");
   controller.publish({ phase: "complete", revision: 2, draft: {}, error: null, views: [], suggestion: { status: "verified", side: "foreground", control: "--color-tune-primary-text-light", value: "oklch(0.4 0.1 250)", before: 3.1, after: 4.6, reason: null, checked: 1, unmeasured: 0, regressions: [] } });
   assert.equal(apply.disabled, false, "only a verified suggestion enables apply");
+});
+
+test("apply success hands focus to the header export and never steals it on programmatic updates", async () => {
+  const { dom, controller } = install(workbenchSession());
+  const apply = dom.document.getElementById("smart-colors-workbench-apply");
+  const exportButton = dom.document.getElementById("smart-colors-workbench-export");
+  const suggest = dom.document.getElementById("smart-colors-workbench-suggest-foreground");
+  const suggestion = { status: "verified", side: "foreground", control: "--color-tune-primary-text-light", value: "oklch(0.4 0.1 250)", before: 3.1, after: 4.6, checked: 1, unmeasured: 0, regressions: [] };
+  // The real runtime publishes the applied override with the successful apply. Mirror that here so
+  // the shell export command is enabled exactly as it is after a genuine apply.
+  controller.applySuggestion = () => {
+    controller.publish({ ...controller.state(), revision: Number(controller.state().revision || 0) + 1, draft: { "--color-tune-primary-text-light": "oklch(0.4 0.1 250)" }, suggestion: null });
+    return Promise.resolve();
+  };
+
+  // A programmatic publish never moves focus away from the user's current control.
+  dom.document.activeElement = dom.themeDark;
+  controller.publish({ phase: "complete", revision: 1, draft: {}, error: null, views: [], suggestion });
+  assert.equal(exportButton.focused, undefined);
+  assert.equal(suggest.focused, undefined);
+  assert.equal(dom.document.activeElement, dom.themeDark);
+
+  // An explicit apply hands focus to the shell-owned export command.
+  dom.document.activeElement = apply;
+  apply.dispatch("click");
+  await tick();
+  assert.equal(exportButton.focused, true, "focus moves to the header export after apply");
+  assert.equal(suggest.focused, undefined, "the fallback is not used while export is available");
+
+  // A user who moved focus during the action keeps it.
+  exportButton.focused = false;
+  controller.publish({ phase: "complete", revision: 2, draft: {}, error: null, views: [], suggestion });
+  dom.document.activeElement = dom.themeDark;
+  apply.dispatch("click");
+  await tick();
+  assert.equal(exportButton.focused, false, "focus is never stolen when it moved elsewhere");
+});
+
+test("apply focus falls back to a visible correction action when the header export is unavailable", async () => {
+  const { dom, controller } = install(workbenchSession());
+  const apply = dom.document.getElementById("smart-colors-workbench-apply");
+  const exportButton = dom.document.getElementById("smart-colors-workbench-export");
+  const suggest = dom.document.getElementById("smart-colors-workbench-suggest-foreground");
+  exportButton.hidden = true;
+  controller.publish({
+    phase: "complete", revision: 1, draft: {}, error: null, views: [],
+    suggestion: { status: "verified", side: "foreground", control: "--color-tune-primary-text-light", value: "oklch(0.4 0.1 250)", before: 3.1, after: 4.6, checked: 1, unmeasured: 0, regressions: [] },
+  });
+  dom.document.activeElement = apply;
+  apply.dispatch("click");
+  await tick();
+  assert.equal(suggest.focused, true, "the visible correction action is the stable fallback");
 });
 
 test("a below-target status none keeps the project target unmet and never says no change is needed", () => {
@@ -1401,13 +1752,87 @@ test("details keep source, declared role and initial recipe after a runtime refr
 test("export writes the runtime tuning into a selectable textarea with a manual data-URI download", async () => {
   const tuning = ":root { --color-tune-primary-text-light: oklch(0.4 0.1 250); }";
   const { dom } = install(workbenchSession(), controllerStub({ tuning }));
+  assert.equal(dom.exportBox.open, false, "the export disclosure starts closed");
   dom.document.getElementById("smart-colors-workbench-export").dispatch("click");
+  assert.equal(dom.exportBox.open, true, "the shell export command opens the export disclosure");
   const text = dom.document.getElementById("smart-colors-workbench-export-text");
   const download = dom.document.getElementById("smart-colors-workbench-download");
   assert.equal(text.value, tuning);
   assert.equal(download.hidden, false);
   assert.ok(download.href.startsWith("data:text/css;charset=utf-8,"));
   assert.ok(decodeURIComponent(download.href.split(",")[1]).includes("--color-tune-primary-text-light"));
+});
+
+test("the shell session status stays a local preview and names unapplied proposals or unsaved drafts", () => {
+  const { dom, controller } = install(workbenchSession());
+  assert.equal(dom.sessionStatus.textContent, "Anteprima locale");
+
+  controller.publish({
+    phase: "complete", revision: 1, draft: {}, error: null, views: [],
+    suggestion: { status: "verified", side: "foreground", control: "--color-tune-primary-text-light", value: "oklch(0.4 0.1 250)", before: 3.1, after: 4.6, checked: 1, unmeasured: 0, regressions: [] },
+  });
+  assert.match(dom.sessionStatus.textContent, /^Anteprima locale · proposta verificata in attesa$/);
+
+  controller.publish({ phase: "complete", revision: 2, draft: { "--color-tune-primary-text-light": "oklch(0.3 0.1 250)" }, error: null, views: [], suggestion: null });
+  assert.match(dom.sessionStatus.textContent, /^Anteprima locale · 1 modifica in bozza non salvata$/);
+
+  controller.publish({ phase: "running", revision: 3, draft: {}, error: null, views: [], suggestion: null });
+  assert.equal(dom.sessionStatus.textContent, "Anteprima locale · verifica in corso");
+
+  controller.publish({ phase: "idle", revision: 4, draft: {}, error: null, views: [], suggestion: null });
+  assert.equal(dom.sessionStatus.textContent, "Anteprima locale");
+});
+
+test("the session badge never invents a pending proposal for none, unavailable or regression outcomes", () => {
+  const { dom, controller } = install(workbenchSession());
+  for (const [status, expected] of [["none", "minimo già raggiunto"], ["unavailable", "ricerca non disponibile"], ["regression", "candidato scartato"]]) {
+    controller.publish({ phase: "complete", revision: 1, draft: {}, error: null, views: [], suggestion: { status, side: "foreground" } });
+    assert.equal(dom.sessionStatus.textContent, "Anteprima locale · " + expected);
+    assert.equal(dom.document.getElementById("smart-colors-workbench-apply").hidden, true);
+  }
+  controller.publish({ phase: "complete", revision: 2, draft: { "--color-tune-primary-text-light": "oklch(0.3 0.1 250)" }, error: null, views: [], suggestion: { status: "none", side: "foreground" } });
+  assert.equal(dom.sessionStatus.textContent, "Anteprima locale · 1 modifica in bozza non salvata · minimo già raggiunto");
+});
+
+test("all-sources recovery restores the header export without needing a new measurement", async () => {
+  const { dom, controller } = install(workbenchSession());
+  const draft = { "--color-tune-primary-text-light": "oklch(0.4 0.1 250)" };
+  controller.publish({ phase: "complete", revision: 1, draft, error: null, views: [], suggestion: { status: "verified", side: "foreground", control: "--color-tune-primary-text-light", value: "oklch(0.4 0.1 250)" } });
+  dom.swatchOrphan.dispatch("click");
+  await tick();
+  assert.equal(dom.document.getElementById("smart-colors-workbench-export").disabled, true);
+  assert.equal(dom.sessionStatus.textContent, "Anteprima locale · selezione non disponibile");
+  dom.source.value = "";
+  dom.source.dispatch("change");
+  await tick();
+  assert.equal(dom.exportBox.hidden, false);
+  assert.equal(dom.document.getElementById("smart-colors-workbench-export").disabled, false);
+  assert.equal(dom.sessionStatus.textContent, "Anteprima locale · proposta verificata in attesa");
+  assert.deepEqual(controller.state().draft, draft);
+  assert.equal(controller.calls.select.length, 0, "recovery is a presentation change, not a new measurement");
+});
+
+test("Scarta proposta discards only the suggestion and never resets public overrides", async () => {
+  const { dom, controller } = install(workbenchSession());
+  assert.equal(dom.discard.hidden, true, "no suggestion means no discard control");
+  assert.equal(dom.discard.disabled, true, "the hidden discard control is never actionable");
+
+  controller.publish({
+    phase: "complete", revision: 1, draft: { "--color-tune-primary-text-light": "oklch(0.4 0.1 250)" }, error: null, views: [],
+    suggestion: { status: "verified", side: "foreground", control: "--color-tune-primary-text-light", value: "oklch(0.4 0.1 250)", before: 3.1, after: 4.6, checked: 1, unmeasured: 0, regressions: [] },
+  });
+  assert.equal(dom.discard.hidden, false, "an existing suggestion exposes the discard action");
+  assert.equal(dom.discard.disabled, false);
+
+  dom.document.activeElement = dom.discard;
+  dom.discard.dispatch("click");
+  await tick();
+  assert.equal(controller.calls.discard.length, 1, "discard calls the dedicated runtime method");
+  assert.equal(controller.calls.reset.length, 0, "discarding a proposal is not a tuning reset");
+  assert.equal(dom.discard.hidden, true, "the discard action disappears with the suggestion");
+  assert.match(dom.status.textContent, /Proposta scartata/);
+  assert.match(dom.sessionStatus.textContent, /modifica in bozza non salvata/, "saved overrides survive the discard");
+  assert.equal(dom.document.getElementById("smart-colors-workbench-suggest-foreground").focused, true, "focus moves to the stable correction action");
 });
 
 test("destroy unsubscribes and tears the controller down", () => {
@@ -1472,17 +1897,64 @@ test("narrow viewport: the verified proposal stays locally scrollable and never 
     page.setDefaultTimeout(30_000);
     await page.goto(pathToFileURL(file).href, { waitUntil: "load", timeout: 30_000 });
 
-    // Pick the real failing pair through the native selects, then wait for its measured shortfall.
+    // Choose the failing canvas source, then use the primary picker to find the exact use.
     await page.evaluate(() => {
       const source = document.getElementById("smart-colors-workbench-source");
       const canvas = Array.from(source.options).find((option) => option.value === "--palette-canvas");
-      if (canvas) { source.value = canvas.value; source.dispatchEvent(new Event("change", { bubbles: true })); }
-      const pair = document.getElementById("smart-colors-workbench-pair");
-      const option = Array.from(pair.options).find((item) => item.getAttribute("data-fg") === "--color-text" && item.getAttribute("data-bg") === "--color-bg");
-      if (!option) throw new Error("the --color-text/--color-bg option is missing from the preview");
-      pair.value = option.value;
-      pair.dispatchEvent(new Event("change", { bubbles: true }));
+      if (!canvas) throw new Error("the --palette-canvas source is missing from the preview");
+      source.value = canvas.value;
+      source.dispatchEvent(new Event("change", { bubbles: true }));
     });
+    await page.waitForTimeout(200);
+    await page.waitForFunction(() => window.__smartColorsWorkbench && window.__smartColorsWorkbench.state().phase !== "running", null, { timeout: 30_000 });
+
+    await page.click("#smart-colors-workbench-open-picker");
+    const pickerState = await page.evaluate(() => {
+      const dialog = document.getElementById("smart-colors-workbench-picker");
+      const rect = dialog.getBoundingClientRect();
+      return {
+        open: dialog.open,
+        focused: document.activeElement && document.activeElement.id,
+        width: rect.width,
+        viewport: document.documentElement.clientWidth,
+        document: document.documentElement.scrollWidth,
+        results: document.querySelectorAll("#smart-colors-workbench-uses .wb-use").length,
+        count: document.getElementById("smart-colors-workbench-use-count").textContent,
+        categories: Array.from(document.querySelectorAll("#smart-colors-workbench-use-category option")).map((option) => option.textContent),
+        searchDisabled: document.getElementById("smart-colors-workbench-use-search").disabled,
+        technicalPairPresent: Boolean(document.getElementById("smart-colors-workbench-pair")),
+      };
+    });
+    assert.equal(pickerState.open, true, "the native picker opens with showModal");
+    assert.equal(pickerState.focused, "smart-colors-workbench-use-search", "opening focuses the search field");
+    assert.ok(pickerState.width <= pickerState.viewport - 1, "the dialog never exceeds the 320px viewport: " + JSON.stringify(pickerState));
+    assert.ok(pickerState.document <= pickerState.viewport + 1, "the open dialog never widens the document: " + JSON.stringify(pickerState));
+    assert.ok(pickerState.results >= 1 && pickerState.results <= 6, "the first page holds at most six real uses: " + JSON.stringify(pickerState));
+    assert.match(pickerState.count, /pagina 1 di|uso|usi/);
+    assert.equal(pickerState.searchDisabled, false, "JavaScript enables the search field");
+    assert.ok(pickerState.categories.includes("Tutti gli usi"), "the category select starts with all uses");
+    assert.ok(pickerState.technicalPairPresent, "the technical pair fallback stays in the DOM");
+
+    await page.selectOption("#smart-colors-workbench-use-category", "page");
+    await page.waitForFunction(() => /uso|usi/.test(document.getElementById("smart-colors-workbench-use-count").textContent), null, { timeout: 10_000 });
+    await page.fill("#smart-colors-workbench-use-search", "pagina");
+    await page.waitForFunction(() => {
+      const buttons = Array.from(document.querySelectorAll("#smart-colors-workbench-uses .wb-use"));
+      return buttons.some((button) => button.getAttribute("data-pair-value") === "--color-text|--color-bg|text");
+    }, null, { timeout: 10_000 });
+    await page.click('#smart-colors-workbench-uses .wb-use[data-pair-value="--color-text|--color-bg|text"]');
+    await page.waitForFunction(() => !document.getElementById("smart-colors-workbench-picker").open, null, { timeout: 10_000 });
+    const afterPick = await page.evaluate(() => ({
+      open: document.getElementById("smart-colors-workbench-picker").open,
+      focused: document.activeElement && document.activeElement.id,
+      pair: document.getElementById("smart-colors-workbench-pair").value,
+      currentUse: document.getElementById("smart-colors-workbench-current-use").textContent,
+    }));
+    assert.equal(afterPick.open, false, "choosing a use closes the picker");
+    assert.equal(afterPick.focused, "smart-colors-workbench-open-picker", "focus returns to the stable opener");
+    assert.equal(afterPick.pair, "--color-text|--color-bg|text", "the technical select follows the chosen use");
+    assert.match(afterPick.currentUse, /Testo sulla pagina/);
+    assert.doesNotMatch(afterPick.currentUse, /--color-/, "the primary summary stays human");
     // The saved tuning only shows in the tuned comparison, so select it as a real user would.
     await page.click("#smart-colors-workbench-comparison-tuning");
     await page.waitForFunction(() => /Soglia AA per testo normale non raggiunta/.test(document.getElementById("smart-colors-workbench-right-measure").textContent), null, { timeout: 30_000 });
@@ -1552,30 +2024,36 @@ test("narrow viewport: the verified proposal stays locally scrollable and never 
       assert.ok(frame.scrollHeight <= frame.height + 1, "primary text sample " + frame.slot + " fits the main iframe height at 320px: " + JSON.stringify(frame));
     }
     const narrowLayout = await page.evaluate(() => {
-      const layout = document.querySelector("#banco .wb-layout");
-      const rail = document.querySelector("#banco .wb-rail");
+      const workspace = document.querySelector("#banco .wb-workspace");
+      const toolbar = document.querySelector("#banco .wb-toolbar");
       const main = document.querySelector("#banco .wb-main");
       const results = document.getElementById("smart-colors-workbench-result");
-      const railBox = rail.getBoundingClientRect();
+      const toolbarBox = toolbar.getBoundingClientRect();
       const mainBox = main.getBoundingClientRect();
       return {
-        columns: getComputedStyle(layout).gridTemplateColumns.split(" ").length,
+        columns: getComputedStyle(workspace).gridTemplateColumns.split(" ").length,
         specimenColumns: getComputedStyle(results).gridTemplateColumns.split(" ").length,
+        proposalColumns: getComputedStyle(document.getElementById("smart-colors-workbench-proposal-frames")).gridTemplateColumns.split(" ").length,
         paletteDisplay: getComputedStyle(document.querySelector("#banco .wb-palette")).display,
         sourceDisplay: getComputedStyle(document.querySelector("#banco .wb-source-select")).display,
+        currentUseDisplay: getComputedStyle(document.querySelector("#banco .wb-current-use")).display,
+        openerDisplay: getComputedStyle(document.querySelector("#banco .wb-open-picker")).display,
         specimenTop: window.scrollY + document.getElementById("smart-colors-workbench-left").getBoundingClientRect().top,
-        railTop: railBox.top,
+        toolbarTop: toolbarBox.top,
         mainTop: mainBox.top,
-        railWidth: railBox.width,
+        toolbarWidth: toolbarBox.width,
       };
     });
-    assert.equal(narrowLayout.columns, 1, "the workspace is a single column at 320px: " + JSON.stringify(narrowLayout));
+    assert.equal(narrowLayout.columns, 1, "the workspace is a single full-width column at 320px: " + JSON.stringify(narrowLayout));
     assert.equal(narrowLayout.specimenColumns, 1, "the two specimens stack at 320px: " + JSON.stringify(narrowLayout));
-    assert.equal(narrowLayout.paletteDisplay, "none", "the full swatch rail is not used at 320px: " + JSON.stringify(narrowLayout));
+    assert.equal(narrowLayout.proposalColumns, 1, "the proposal frames stack at 320px: " + JSON.stringify(narrowLayout));
+    assert.equal(narrowLayout.paletteDisplay, "none", "the horizontal swatch strip is not used at 320px: " + JSON.stringify(narrowLayout));
     assert.notEqual(narrowLayout.sourceDisplay, "none", "the compact native source select is visible at 320px");
+    assert.notEqual(narrowLayout.currentUseDisplay, "none", "the human current use is visible at 320px");
+    assert.notEqual(narrowLayout.openerDisplay, "none", "the change-use opener is visible at 320px");
     assert.ok(narrowLayout.specimenTop < 1200, "the result stays reasonably reachable at 320px: " + narrowLayout.specimenTop);
-    assert.ok(narrowLayout.railTop < narrowLayout.mainTop, "the rail keeps the natural DOM order above the comparison at 320px");
-    assert.ok(narrowLayout.railWidth <= measured.viewport, "the rail never exceeds the 320px viewport: " + narrowLayout.railWidth);
+    assert.ok(narrowLayout.toolbarTop < narrowLayout.mainTop, "the toolbar precedes the comparison at 320px");
+    assert.ok(narrowLayout.toolbarWidth <= measured.viewport, "the toolbar never exceeds the 320px viewport: " + narrowLayout.toolbarWidth);
     for (const container of measured.containers) {
       assert.equal(container.overflowX, "auto", "the proposal container scrolls locally");
       assert.equal(container.tabIndex, 0, "the proposal container is keyboard focusable");
@@ -1603,39 +2081,55 @@ test("narrow viewport: the verified proposal stays locally scrollable and never 
     }
     assert.ok(tabbed.includes("smart-colors-workbench-proposal-before") && tabbed.includes("smart-colors-workbench-proposal-after"), "both proposal regions are keyboard reachable: " + JSON.stringify(tabbed));
 
-    // Desktop: the same DOM becomes the two-column workspace inside the preview container.
+    // Desktop: the same DOM becomes the full-width workspace with the horizontal palette toolbar.
     await page.setViewportSize({ width: 1280, height: 900 });
     const wideLayout = await page.evaluate(() => {
-      const layout = document.querySelector("#banco .wb-layout");
-      const rail = document.querySelector("#banco .wb-rail");
+      const workspace = document.querySelector("#banco .wb-workspace");
+      const toolbar = document.querySelector("#banco .wb-toolbar");
       const main = document.querySelector("#banco .wb-main");
       const results = document.getElementById("smart-colors-workbench-result");
-      const railBox = rail.getBoundingClientRect();
+      const toolbarBox = toolbar.getBoundingClientRect();
       const mainBox = main.getBoundingClientRect();
       const sourceBox = document.querySelector("#banco .wb-source-select");
+      const palette = document.querySelector("#banco .wb-palette");
       return {
-        columns: getComputedStyle(layout).gridTemplateColumns.split(" ").length,
+        columns: getComputedStyle(workspace).gridTemplateColumns.split(" ").length,
         specimenColumns: getComputedStyle(results).gridTemplateColumns.split(" ").length,
-        paletteDisplay: getComputedStyle(document.querySelector("#banco .wb-palette")).display,
+        proposalColumns: getComputedStyle(document.getElementById("smart-colors-workbench-proposal-frames")).gridTemplateColumns.split(" ").length,
+        proposalFrames: [...document.querySelectorAll("#smart-colors-workbench-proposal-frames .wb-frame")].map((node) => {
+          const frame = node.querySelector("iframe");
+          return { overflowX: getComputedStyle(node).overflowX, width: frame ? frame.offsetWidth : null, height: frame ? frame.offsetHeight : null };
+        }),
+        paletteDisplay: getComputedStyle(palette).display,
+        paletteOverflow: getComputedStyle(palette).overflowX,
+        paletteScroll: palette.scrollWidth > palette.clientWidth,
         sourceDisplay: getComputedStyle(sourceBox).display,
         specimenTop: window.scrollY + document.getElementById("smart-colors-workbench-left").getBoundingClientRect().top,
-        railWidth: railBox.width,
-        railTop: railBox.top,
+        toolbarWidth: toolbarBox.width,
+        toolbarTop: toolbarBox.top,
         mainTop: mainBox.top,
-        railLeft: railBox.left,
+        toolbarLeft: toolbarBox.left,
         mainLeft: mainBox.left,
         viewport: document.documentElement.clientWidth,
         document: document.documentElement.scrollWidth,
       };
     });
-    assert.equal(wideLayout.columns, 2, "the workspace splits into rail + comparison: " + JSON.stringify(wideLayout));
+    assert.equal(wideLayout.columns, 1, "the workspace stays one full-width column: " + JSON.stringify(wideLayout));
     assert.equal(wideLayout.specimenColumns, 2, "light and dark specimens sit side by side: " + JSON.stringify(wideLayout));
-    assert.equal(wideLayout.paletteDisplay, "grid", "the swatch rail is the desktop counterpart");
+    assert.equal(wideLayout.proposalColumns, 2, "the fixed proposal frames sit side by side from 48rem: " + JSON.stringify(wideLayout));
+    assert.equal(wideLayout.proposalFrames.length, 2, "both proposal frames are mounted");
+    for (const frame of wideLayout.proposalFrames) {
+      assert.equal(frame.overflowX, "auto", "each proposal container keeps local scrolling");
+      assert.equal(frame.width, 360, "the proposal viewport stays 360px wide");
+      assert.equal(frame.height, 480, "the proposal viewport stays 480px tall");
+    }
+    assert.equal(wideLayout.paletteDisplay, "flex", "the swatch strip is the desktop counterpart");
+    assert.equal(wideLayout.paletteOverflow, "auto", "the palette strip is bounded and scrolls locally");
     assert.equal(wideLayout.sourceDisplay, "none", "the native select is removed on desktop, with no invisible focus stop: " + JSON.stringify(wideLayout));
     assert.ok(wideLayout.specimenTop < 450, "the specimen starts above 450px at 1280: " + wideLayout.specimenTop);
-    assert.ok(wideLayout.railWidth >= 240 && wideLayout.railWidth <= 272, "the selection rail keeps its 15-17rem width: " + wideLayout.railWidth);
-    assert.ok(Math.abs(wideLayout.railTop - wideLayout.mainTop) <= 1, "rail and comparison start on the same row");
-    assert.ok(wideLayout.mainLeft > wideLayout.railLeft, "the comparison area is the right column");
+    assert.ok(wideLayout.toolbarWidth > 600, "the toolbar spans the full workbench width: " + wideLayout.toolbarWidth);
+    assert.ok(Math.abs(wideLayout.toolbarLeft - wideLayout.mainLeft) <= 1, "toolbar and comparison share the same full-width column");
+    assert.ok(wideLayout.toolbarTop < wideLayout.mainTop, "toolbar and comparison start in the same column, toolbar first");
     assert.ok(wideLayout.document <= wideLayout.viewport + 1, "the desktop layout never widens the document: " + JSON.stringify(wideLayout));
 
     assert.ok(requests.every((url) => url.startsWith("file:")), "offline: no remote request " + JSON.stringify(requests));
@@ -1703,8 +2197,26 @@ test("blocked source leaves the theme recovery control visible and a valid swatc
     });
     assert.equal(blocked.correctionHidden, true, "the correction action is hidden while blocked");
     assert.ok(blocked.fieldsetVisible && blocked.fieldsetHeight > 0, "the theme recovery control stays visible: " + JSON.stringify(blocked));
-    assert.equal(blocked.sourceDisplay, "none", "desktop uses the swatch counterpart, not a hidden focusable select");
-    assert.equal(blocked.paletteDisplay, "grid", "desktop swatches are visible");
+    assert.equal(blocked.sourceDisplay, "none", "desktop uses the swatch strip, not a hidden focusable select");
+    assert.equal(blocked.paletteDisplay, "flex", "desktop swatches are visible");
+
+    // The picker stays available as a recovery surface: it opens with an explicit empty state and
+    // returns focus to its opener.
+    await page.click("#smart-colors-workbench-open-picker");
+    const blockedPicker = await page.evaluate(() => ({
+      open: document.getElementById("smart-colors-workbench-picker").open,
+      focused: document.activeElement && document.activeElement.id,
+      count: document.getElementById("smart-colors-workbench-use-count").textContent,
+      results: document.querySelectorAll("#smart-colors-workbench-uses .wb-use").length,
+      currentUse: document.getElementById("smart-colors-workbench-current-use").textContent,
+    }));
+    assert.equal(blockedPicker.open, true);
+    assert.equal(blockedPicker.focused, "smart-colors-workbench-use-search");
+    assert.match(blockedPicker.count, /Nessun uso disponibile|Nessun uso corrisponde/);
+    assert.equal(blockedPicker.results, 0);
+    assert.match(blockedPicker.currentUse, /Nessun uso disponibile/);
+    await page.click("#smart-colors-workbench-close-picker");
+    assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.id), "smart-colors-workbench-open-picker");
 
     // The theme radio remains operable while the correction box is hidden.
     await page.click("#smart-colors-workbench-theme-dark");

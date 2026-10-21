@@ -233,6 +233,7 @@ test("createContrastWorkbenchSource is one self-contained classic script with no
   assert.ok(source.includes("createDomVerifier"));
   assert.ok(source.includes("createContrastAdvice"));
   assert.ok(source.includes("createContrastWorkbench"));
+  assert.ok(source.includes("discardSuggestion"), "the additive discard API is embedded in the emitted runtime");
   // The emitted runtime carries the shared task-A factory verbatim and no local search copy.
   assert.ok(source.includes("No lightness on the 0..1 grid"), "the shared createContrastAdvice implementation is embedded");
   assert.ok(!source.includes("no lightness on the 0.0001 grid"), "no local advice fallback is embedded");
@@ -506,6 +507,35 @@ test("suggest before a measured pick is unavailable and applySuggestion rejects"
   await controller.suggest("sideways");
   assert.match(controller.state().error, /foreground/);
   assert.deepEqual(controller.state().selection, selectionBefore, "a rejected suggest does not change the selection");
+});
+
+test("discardSuggestion is synchronous, clears the suggestion and preserves draft, selection and export", async () => {
+  const { controller } = makeWorkbench(syntheticPayload());
+  await controller.setOverride("--color-tune-text-light", "oklch(0.5 0 0)");
+  const before = controller.state();
+  const exported = controller.exportTuning();
+  await controller.suggest("foreground");
+  assert.ok(controller.state().suggestion, "the unmeasured suggestion metadata is present before discard");
+
+  const reasons = [];
+  controller.subscribe((state, reason) => reasons.push({ state, reason }));
+  const returned = controller.discardSuggestion();
+  assert.equal(returned.suggestion, null);
+  assert.deepEqual(returned.draft, before.draft, "discard never mutates the draft");
+  assert.deepEqual(returned.selection, before.selection, "discard never changes the selection");
+  assert.equal(returned.revision, before.revision, "discard never invalidates the measured revision");
+  assert.equal(controller.exportTuning(), exported, "discard never changes the export");
+  assert.ok(reasons.some((entry) => entry.reason === "discard-suggestion"), "discard publishes its reason");
+  assert.ok(reasons.every((entry) => entry.state.suggestion === null), "every published snapshot is already cleared");
+
+  const again = controller.discardSuggestion();
+  assert.equal(again.suggestion, null, "discarding an empty suggestion is a safe no-op");
+  assert.deepEqual(again.draft, before.draft);
+  await controller.applySuggestion();
+  assert.match(controller.state().error, /no verified suggestion/, "a discarded suggestion can never be applied");
+
+  controller.destroy();
+  assert.throws(() => controller.discardSuggestion(), /destroyed/);
 });
 
 test("the shared createContrastAdvice factory returns the documented candidate shape", () => {
@@ -966,8 +996,8 @@ test("browser proof: visible specimen, real CSS measurement, verified suggestion
     assert.equal(frame.rootColorScheme, "light");
     assert.equal(frame.themeAttribute, "light");
     assert.equal(frame.reportPreference, false);
-    assert.equal(frame.specimenTitle, "Un messaggio da leggere", "the sample shows a human title, not a token caption");
-    assert.equal(frame.specimenText, "Il colore deve aiutarti a leggere, non mettersi in mezzo.", "the sample shows human copy, not diagnostics");
+    assert.equal(frame.specimenTitle, "Le modifiche sono pronte", "the sample shows a human title, not a token caption");
+    assert.equal(frame.specimenText, "Controlla i dettagli prima di continuare. Puoi modificare questa scelta in qualsiasi momento.", "the sample shows human copy, not diagnostics");
     assert.equal(frame.house, 0, "the unrelated overview strip is removed");
     assert.equal(frame.selected, true);
     assert.ok(frame.styles.includes("baseline"));
@@ -1055,8 +1085,8 @@ test("browser proof: visible specimen, real CSS measurement, verified suggestion
   assert.ok(!/muted text/.test(aria), "no probe-only label is exposed to assistive tech");
   assert.ok(!/focus \/ canvas/.test(aria), "no probe-only label is exposed to assistive tech");
   assert.ok(!/on-brand/.test(aria), "no probe-only label is exposed to assistive tech");
-  assert.ok(/Un messaggio da leggere/.test(aria), "the human sample title remains exposed");
-  assert.ok(/Il colore deve aiutarti a leggere, non mettersi in mezzo\./.test(aria), "the human sample copy remains exposed");
+  assert.ok(/Le modifiche sono pronte/.test(aria), "the human sample title remains exposed");
+  assert.ok(/Controlla i dettagli prima di continuare\. Puoi modificare questa scelta in qualsiasi momento\./.test(aria), "the human sample copy remains exposed");
   assert.ok(!/proprietà/.test(aria), "no technical property metadata is exposed in the visible sample");
 
   const visible = await main.page.evaluate(() => {
@@ -1795,6 +1825,191 @@ test("browser proof: the proposal preview shows base and candidate without writi
 });
 
 // ---------------------------------------------------------------------------
+// Discard: the additive synchronous API drops only the suggestion layer. The draft, the selection,
+// the main measurements and the export must survive both a verified discard and a discard that
+// happens while the trial frames are live; the invalidated call can never publish afterwards.
+// ---------------------------------------------------------------------------
+test("browser proof: discardSuggestion clears verified and pending suggestions without touching the draft", { skip: NATIVE_PROOF ? false : "opt-in: set SMART_COLORS_NATIVE_PROOF=1 to run the Chromium proof" }, async (t) => {
+  if (!NATIVE_PROOF) return;
+  const playwright = resolvePlaywright();
+  const browser = await openChromium(playwright.chromium);
+  t.after(() => browser.close());
+  const source = createContrastWorkbenchSource();
+  const dir = await mkdtemp(path.join(tmpdir(), "smart-colors-workbench-discard-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const real = await createRealPayload(t);
+  const file = path.join(dir, "discard.html");
+  await writeFile(file, buildFixtureHtml({ title: "Workbench discard", payload: real, source, hostColorScheme: "light" }), "utf8");
+  const context = await browser.newContext({ colorScheme: "light", reducedMotion: "reduce" });
+  t.after(() => context.close());
+  const loaded = await loadFixture(context, file);
+  await loaded.page.evaluate(() => {
+    window.__smartColorsWorkbench.mount({
+      left: document.getElementById("scw-left"),
+      right: document.getElementById("scw-right"),
+      proposalBefore: document.getElementById("scw-proposal-before"),
+      proposalAfter: document.getElementById("scw-proposal-after"),
+    });
+  });
+  await loaded.page.waitForFunction(() => {
+    const controller = window.__smartColorsWorkbench;
+    return controller && ["complete", "incomplete", "unavailable"].includes(controller.state().phase);
+  }, null, { timeout: 30_000 });
+
+  const verified = await loaded.page.evaluate(async () => {
+    const controller = window.__smartColorsWorkbench;
+    const count = (kind) => document.querySelectorAll('iframe[data-smart-colors-workbench-frame="' + kind + '"]').length;
+    const snapshot = () => {
+      const state = controller.state();
+      return {
+        phase: state.phase,
+        revision: state.revision,
+        draft: state.draft,
+        selection: state.selection,
+        suggestion: state.suggestion,
+        exportNow: controller.exportTuning(),
+        views: state.views.map((view) => ({
+          slot: view.slot,
+          variant: view.variant,
+          theme: view.theme,
+          status: view.measurement ? view.measurement.status : null,
+          ratio: view.measurement ? view.measurement.ratio : null,
+        })),
+        proposal: count("proposal"),
+        trial: count("trial"),
+        visible: count("visible"),
+      };
+    };
+    // A real draft on the other side of the pair is the base the suggestion is verified against.
+    await controller.setOverride("--color-tune-bg-light", "oklch(0.8 0 0)");
+    await controller.suggest("foreground");
+    const before = snapshot();
+    const reasons = [];
+    const unsubscribe = controller.subscribe((state, reason) => reasons.push(reason));
+    const returned = controller.discardSuggestion();
+    const immediate = {
+      suggestion: returned.suggestion,
+      draft: returned.draft,
+      selection: returned.selection,
+      revision: returned.revision,
+      exportNow: controller.exportTuning(),
+      proposal: count("proposal"),
+      trial: count("trial"),
+      visible: count("visible"),
+    };
+    unsubscribe();
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    const later = snapshot();
+    await controller.applySuggestion();
+    const applyError = controller.state().error;
+    await controller.suggest("foreground");
+    const recovered = controller.state().suggestion ? controller.state().suggestion.status : null;
+    controller.discardSuggestion();
+    return { before, immediate, later, reasons, applyError, recovered };
+  });
+
+  assert.equal(verified.before.suggestion.status, "verified", JSON.stringify(verified.before.suggestion));
+  assert.equal(verified.before.proposal, 2, "the verified suggestion renders the proposal preview");
+  assert.equal(verified.before.trial, 0);
+  assert.equal(verified.before.visible, 2);
+  assert.ok(verified.before.draft["--color-tune-bg-light"], "the draft is present before the discard");
+  assert.equal(verified.immediate.suggestion, null, "discard clears verified metadata synchronously");
+  assert.deepEqual(verified.immediate.draft, verified.before.draft, "discard never mutates the draft");
+  assert.deepEqual(verified.immediate.selection, verified.before.selection, "discard never changes the selection");
+  assert.equal(verified.immediate.revision, verified.before.revision, "discard does not invalidate the measured revision");
+  assert.equal(verified.immediate.exportNow, verified.before.exportNow, "discard never changes the export");
+  assert.equal(verified.immediate.proposal, 0, "discard removes the proposal frames");
+  assert.equal(verified.immediate.trial, 0);
+  assert.equal(verified.immediate.visible, 2, "the main comparison frames survive a discard");
+  assert.equal(verified.later.suggestion, null);
+  assert.equal(verified.later.proposal, 0, "the discarded preview never comes back");
+  assert.equal(verified.later.trial, 0);
+  assert.equal(verified.later.visible, 2);
+  assert.deepEqual(verified.later.draft, verified.before.draft);
+  assert.deepEqual(verified.later.selection, verified.before.selection);
+  assert.deepEqual(verified.later.views, verified.before.views, "the main measurement is untouched");
+  assert.equal(verified.later.exportNow, verified.before.exportNow);
+  assert.ok(verified.reasons.includes("discard-suggestion"), "discard publishes its reason");
+  assert.match(verified.applyError, /no verified suggestion/, "a discarded suggestion can never be applied");
+  assert.equal(verified.recovered, "verified", "a later suggest still works after a discard");
+
+  // The MutationObserver callback runs as a microtask right after the trial frames are inserted and
+  // therefore before their load events: `discardSuggestion` is guaranteed to hit a live in-flight
+  // verification rather than a settled one.
+  const pending = await loaded.page.evaluate(async () => {
+    const controller = window.__smartColorsWorkbench;
+    const count = (kind) => document.querySelectorAll('iframe[data-smart-colors-workbench-frame="' + kind + '"]').length;
+    const snapshot = () => {
+      const state = controller.state();
+      return {
+        phase: state.phase,
+        revision: state.revision,
+        draft: state.draft,
+        selection: state.selection,
+        suggestion: state.suggestion,
+        exportNow: controller.exportTuning(),
+        views: state.views.map((view) => ({
+          slot: view.slot,
+          variant: view.variant,
+          theme: view.theme,
+          status: view.measurement ? view.measurement.status : null,
+          ratio: view.measurement ? view.measurement.ratio : null,
+        })),
+        proposal: count("proposal"),
+        trial: count("trial"),
+        visible: count("visible"),
+      };
+    };
+    const before = snapshot();
+    let observed = 0;
+    let discarded = false;
+    let immediate = null;
+    const observer = new MutationObserver(() => {
+      if (discarded) return;
+      const live = count("trial");
+      if (live === 0) return;
+      observed = live;
+      discarded = true;
+      observer.disconnect();
+      const returned = controller.discardSuggestion();
+      immediate = {
+        suggestion: returned.suggestion,
+        draft: returned.draft,
+        revision: returned.revision,
+        proposal: count("proposal"),
+        trial: count("trial"),
+        visible: count("visible"),
+      };
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    const running = controller.suggest("foreground");
+    await running;
+    observer.disconnect();
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    return { before, observed, discarded, immediate, after: snapshot() };
+  });
+
+  assert.ok(pending.observed > 0, "discard was called while trial frames were live");
+  assert.equal(pending.discarded, true);
+  assert.equal(pending.immediate.suggestion, null, "the pending metadata is cleared synchronously");
+  assert.equal(pending.immediate.trial, 0, "the in-flight trial frames are removed synchronously");
+  assert.equal(pending.immediate.proposal, 0);
+  assert.equal(pending.immediate.visible, 2);
+  assert.deepEqual(pending.immediate.draft, pending.before.draft);
+  assert.equal(pending.immediate.revision, pending.before.revision);
+  assert.equal(pending.after.suggestion, null, "an invalidated suggest can never publish itself later");
+  assert.equal(pending.after.trial, 0);
+  assert.equal(pending.after.proposal, 0);
+  assert.equal(pending.after.visible, 2);
+  assert.deepEqual(pending.after.draft, pending.before.draft, "the draft survives a pending discard");
+  assert.deepEqual(pending.after.selection, pending.before.selection);
+  assert.deepEqual(pending.after.views, pending.before.views, "the main measurement survives a pending discard");
+  assert.equal(pending.after.exportNow, pending.before.exportNow, "the export survives a pending discard");
+
+  await loaded.page.close();
+});
+
+// ---------------------------------------------------------------------------
 // Chromium regression: an offset ring must be adjacent to the measured surface.
 //
 // The light canvas is white while the surface/active background is black. A border's outer edge
@@ -1958,12 +2173,12 @@ test("browser regression: border/outline samples sit on the measured surface wit
   };
   await selectPair("outlineColor");
   const outlineAria = await loaded.page.locator('iframe[data-smart-colors-workbench-slot="right"]').contentFrame().locator("body").ariaSnapshot();
-  assert.doesNotMatch(outlineAria, /Un messaggio da leggere/, "the outline sample exposes no unmeasured copy");
+  assert.doesNotMatch(outlineAria, /Le modifiche sono pronte/, "the outline sample exposes no unmeasured copy");
   assert.match(outlineAria, /Campione statico dell.{1,2}anello/);
   assert.match(outlineAria, /non il comportamento di focus/);
   await selectPair("borderColor");
   const borderAria = await loaded.page.locator('iframe[data-smart-colors-workbench-slot="right"]').contentFrame().locator("body").ariaSnapshot();
-  assert.doesNotMatch(borderAria, /Un messaggio da leggere/, "the border sample exposes no unmeasured copy");
+  assert.doesNotMatch(borderAria, /Le modifiche sono pronte/, "the border sample exposes no unmeasured copy");
   assert.match(borderAria, /Campione statico del bordo/);
   assert.match(borderAria, /non il comportamento di focus/);
 

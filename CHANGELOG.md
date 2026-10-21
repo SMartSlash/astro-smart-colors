@@ -69,12 +69,15 @@ the `v0.4.0` tag.
   documents that the generated value is the fallback and the override is a
   runtime change that must be re-measured. It never activates arbitrary palette
   overrides or `--_color-*` internals.
-- The guided contrast workbench in the preview. The **source palette comes first**: the
-  exact captured `@property` declaration, the raw authored source value, the role and
-  `dark-blend`, with the captured palette path and SHA-256. The **declared** role is shown
-  first and the **effective** configured role only when it differs. The full source CSS is
-  selectable in a textarea and downloadable **manually** as `palette.css`; opening the
-  page writes nothing. The workbench follows it.
+- The guided contrast workbench in the preview. The source selector leads into real
+  consumer specimens and contextual correction actions. The following source archive retains
+  the exact captured `@property` declaration, raw authored value, role and `dark-blend`,
+  with the palette path and SHA-256. The **declared** role is shown first and the
+  **effective** configured role only when it differs. Full source CSS remains selectable
+  and downloadable **manually** as `palette.css`; opening the page writes nothing.
+- Synchronous `discardSuggestion()` controller API and **Scarta proposta**: invalidate
+  in-flight suggestions and remove trial/proposal frames without changing the draft,
+  selection, main measurements, revision or export. Discard is not a tuning reset.
 - Real consumer specimens instead of painted RGB: every visible sample and every
   measurement is a `var(--color-*)` consumer inside an isolated `iframe srcdoc`
   (`sandbox="allow-same-origin"`, no scripts in the frame) that reads the embedded
@@ -104,7 +107,7 @@ the `v0.4.0` tag.
   so a candidate is never verified against the saved-only view and then silently merged with a
   hidden override.
 - Individual reset (**Azzera i controlli della coppia**), full reset (**Azzera tutto il
-  tuning** / **Ripristina**) and **Esporta CSS pubblico**. The export is the `:root { … }`
+  tuning** / **Ripristina**) and the header's **Esporta CSS**. The export is the `:root { … }`
   block of the temporary draft declarations, published in a readonly textarea with a
   manual `colors-tuning.css` download. The export is recomputed from the current draft whenever
   it changes, the download link is hidden while there is no draft, and the copy action recomputes
@@ -172,18 +175,28 @@ the `v0.4.0` tag.
 - `check` labels its model result as **Contrasti non misurati (stima del modello)**.
 - Blocking model errors are now also echoed once on stderr for `build`/`report`,
   bounded and deduplicated with the rest of the technical detail.
-- The preview is re-organised **palette-first**: the source palette and roles, then the
-  guided contrast workbench on the real `var(--color-*)` frames, then the technical archive
+- The preview leads with source/pair selection and the guided contrast workbench on real
+  `var(--color-*)` frames, followed by the source palette/roles archive, then the technical archive
   of resolved samples, then the extended local browser verification (kept as a secondary
   archive), then a **Correzioni e problemi** section only when there is something to correct
   or review, and finally the technical data and the automation evidence. The workbench is
   the main path; in the archive samples the first family is open and the rest are native
   `<details>`, and the model samples are an **estimate**, never a verification.
-- The workbench now opens as **Colori a confronto**: a left rail lists the declared palette
-  values and the generated catalogue pairs for the selected source, while the right
-  comparison area shows the pair identity, the scoped criterion and the real CSS specimens
-  before their measured result. The archived raw source metadata and the manual palette
-  download stay in a closed technical detail, and the old **Dove lo usi?** wording is gone.
+- The **Smart Colors** preview adopts a compact horizontal toolbar instead of a sidebar:
+  source swatches (native source select on narrow containers), a human current-use summary
+  and **Cambia uso**, all three comparison modes and theme controls, with full-width specimens
+  side by side on desktop and stacked on mobile. The header has an honest local/pending/
+  draft badge and one **Esporta CSS** action. Correction/apply/discard actions sit together
+  below the specimens; proposal reasoning and manual controls remain secondary disclosures.
+  Fixed `360×480` proposal verification frames scroll locally rather than resizing. Explicit
+  apply/discard keeps keyboard focus on a stable export/correction control. Raw source
+  metadata and manual palette download remain in their closed technical detail.
+- Replaced the long primary pairing dropdown and duplicate catalogue disclosure with a
+  native **Cambia uso** dialog: source-scoped categories, normalized word-AND search,
+  explicit empty results and six results per page. Every match remains reachable through
+  pagination; Escape preserves selection and choosing a result restores opener focus.
+  The full technical select remains in the technical disclosure. Known on-color uses get
+  readable labels without changing the measured pair or its technical metadata.
 - The bench states its scope in the UI: the catalogue is **generated**, not a site scan or
   detected usage; the **4.5:1 normal-text threshold** is the WCAG minimum (with static
   SC 1.4.3, 1.4.6 and 1.4.11 references) while the project target stays a separate objective;

@@ -836,7 +836,6 @@ export function createContrastWorkbench(deps) {
       ".scw-selected-ring { padding: 0; inline-size: 100%; block-size: 48px; }",
       ".scw-selected-title { margin: 0 0 8px; font-size: 22px; line-height: 1.25; font-weight: 650; }",
       ".scw-selected-text { margin: 0; font-size: 16px; line-height: 1.55; }",
-      ".scw-selected-note { margin: 12px 0 0; font-size: 14px; line-height: 1.4; }",
       // The technical probe host is pushed out of flow and out of the accessibility tree. It stays
       // rendered (never `display:none`) so every collateral pair is still computed, and it never
       // contains the selected visible specimen.
@@ -877,16 +876,12 @@ export function createContrastWorkbench(deps) {
       node = frameDocument.createElement("article");
       const title = frameDocument.createElement("h2");
       title.className = "scw-selected-title";
-      title.textContent = "Un messaggio da leggere";
+      title.textContent = "Le modifiche sono pronte";
       const paragraph = frameDocument.createElement("p");
       paragraph.className = "scw-selected-text";
-      paragraph.textContent = "Il colore deve aiutarti a leggere, non mettersi in mezzo.";
-      const note = frameDocument.createElement("p");
-      note.className = "scw-selected-note";
-      note.textContent = "3 min di lettura";
+      paragraph.textContent = "Controlla i dettagli prima di continuare. Puoi modificare questa scelta in qualsiasi momento.";
       node.appendChild(title);
       node.appendChild(paragraph);
-      node.appendChild(note);
     }
     node.className = pair.property === "borderColor" || pair.property === "outlineColor" ? "scw-selected scw-selected-ring" : "scw-selected";
     node.setAttribute(VISIBLE_SPECIMEN_ATTRIBUTE, "selected");
@@ -1728,6 +1723,21 @@ export function createContrastWorkbench(deps) {
     return invalidateDraftState("reset");
   }
 
+  // `discardSuggestion` is a synchronous, additive escape hatch for the host UI. It drops only the
+  // suggestion layer: the pending metadata, any in-flight trial/verification frames and the visible
+  // proposal frames. Bumping the generation first makes a suggestion that is still resolving fail its
+  // own staleness checks, so it can never publish itself afterwards. The draft, the selection, the
+  // main measurements and the export are untouched: this is neither a reset nor a rerun.
+  function discardSuggestion() {
+    if (destroyed) throw new Error("the workbench has been destroyed");
+    suggestGeneration += 1;
+    destroyTrialFrames();
+    destroyProposalFrames();
+    suggestion = null;
+    publish("discard-suggestion");
+    return state();
+  }
+
   async function applySuggestion() {
     if (destroyed) throw new Error("the workbench has been destroyed");
     if (!suggestion || suggestion.status !== "verified") return setError("no verified suggestion is available to apply");
@@ -1878,6 +1888,7 @@ export function createContrastWorkbench(deps) {
     setOverride,
     reset,
     suggest,
+    discardSuggestion,
     applySuggestion,
     exportTuning,
     state,

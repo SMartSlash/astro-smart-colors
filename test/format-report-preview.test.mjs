@@ -761,7 +761,12 @@ test("the presenter degrades to technical wording when no designer language is a
 
 test("a session preview stays useful without JavaScript and keeps the model out of any verified verdict", () => {
   const html = preview(diagSession());
-  assert.match(html, /<h1>Colori a confronto\.<\/h1>/);
+  assert.match(html, /<h1>Smart Colors<\/h1>/);
+  const header = html.match(/<header class="studio-header">([\s\S]*?)<\/header>/)[1];
+  assert.match(header, /id="smart-colors-workbench-session-status"[^>]*>Anteprima locale/);
+  assert.match(header, /id="smart-colors-workbench-export"[^>]*disabled>Esporta CSS/);
+  assert.equal((html.match(/id="smart-colors-workbench-export"/g) ?? []).length, 1);
+  assert.doesNotMatch(header, /class="lede"|<nav/);
   assert.equal((html.match(/<h1>/g) ?? []).length, 1);
   assert.match(html, /<main id="contenuto">/);
   // Three explicit channels, never one global verdict: model forecast, this browser, automation.
@@ -780,7 +785,7 @@ test("a session preview stays useful without JavaScript and keeps the model out 
   assert.match(html, /Automazione disattivata/);
   assert.match(html, /Misure locali non eseguite: serve JavaScript nel browser/);
   assert.match(html, /Snapshot incorporato: <code>snap-123<\/code> · Versione tool: <code>0\.3\.0<\/code>/);
-  assert.match(html, /<a href="smart-colors\.html">/);
+  assert.match(html, /<a[^>]*href="smart-colors\.html">/);
 });
 
 test("session markup follows the navigation, keeps a logical heading order and never moves focus", () => {

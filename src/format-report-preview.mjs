@@ -194,11 +194,14 @@ const PREVIEW_CSS = `
 // the legacy static preview output stays byte-identical.
 const LOCAL_CSS = `
 @layer pages {
-  .preview-studio { background: var(--paper); }
-  .preview-studio h1 { font-size: 2rem; letter-spacing: -.04em; }
+  .preview-studio { background: var(--paper-soft); }
+  .preview-studio h1 { font-size: var(--text-base); letter-spacing: -.025em; }
   .preview-studio .studio-header { border-color: var(--line); }
-  .studio-topline { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-3); margin-block-end: var(--space-2); }
-  .studio-topline a { font-size: var(--text-sm); }
+  .studio-session { color: var(--ink-soft); background: var(--soft); border-radius: var(--radius-sm); padding: .2rem .5rem; font-size: var(--text-xs); }
+  .studio-export { min-height: 44px; padding: .5rem 1rem; border: 1px solid var(--ink); border-radius: var(--radius-sm); font: inherit; font-size: var(--text-sm); font-weight: 650; color: var(--paper); background: var(--ink); cursor: pointer; }
+  .studio-export:hover { background: var(--ink-soft); }
+  .studio-export:disabled { cursor: not-allowed; opacity: .65; }
+  .studio-report-link { font-size: var(--text-sm); }
   .preview-studio nav { border: 0; background: none; backdrop-filter: none; }
   .preview-studio .skip:not(:focus) { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   .preview-studio .preview-technical { border-block-start: 1px solid var(--line); padding-block: var(--space-4); }
@@ -208,7 +211,14 @@ const LOCAL_CSS = `
   .preview-studio footer { border-color: var(--line); }
 }
 @layer layout {
-  .preview-studio .studio-header { padding-block: var(--space-2); }
+  .preview-studio .shell { max-width: 96rem; padding-block-start: 0; container: studio-shell / inline-size; }
+  .preview-studio .studio-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2); padding-block: var(--space-2); }
+  .studio-brand { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; }
+  .studio-session { max-width: 100%; }
+  @container studio-shell (max-width: 30rem) {
+    .studio-brand { flex: 1 1 9rem; }
+    .studio-session { flex-basis: 100%; }
+  }
   .preview-studio main > section { margin-block: var(--space-4); }
   .preview-studio nav { position: static; }
   .preview-studio nav ul { padding-inline: 0; }
@@ -1434,7 +1444,7 @@ function renderDiagnosticPreview(value) {
   // A positive badge is scoped to the executed environments and only ever shown when the automation
   // is complete. There is no global "non verificato" headline.
   const badgeLine = verification && verification.verified
-    ? `<p>${badge("outline", "Verifica automatizzata completa negli ambienti eseguiti")}</p>`
+    ? `<p class="preview-automation-badge">${badge("outline", "Verifica automatizzata completa negli ambienti eseguiti")}</p>`
     : "";
   const cssDetails = cssEmbed ? `<details><summary>CSS incorporato nello snapshot</summary>${cssEmbed}</details>` : "";
   const notesHtml = list(report.notes).length ? `<h3>Note</h3><ul>${list(report.notes).map((note) => `<li>${escape(note)}</li>`).join("")}</ul>` : "";
@@ -1466,17 +1476,15 @@ ${problemsHtml(groups, proposals, verified, language)}</section>`
 <style>${PREVIEW_CSS}${LOCAL_CSS}${CONTRAST_WORKBENCH_CSS}</style></head><body class="preview-studio"><div class="shell">
 <a class="skip" href="#contenuto">Vai al contenuto</a>
 <header class="studio-header">
-<div class="studio-topline"><p class="eyebrow">Smart Colors</p><a href="smart-colors.html">Report completo ↗</a></div>
-<h1>Colori a confronto.</h1>
-<p class="lede">Esplora gli abbinamenti generati dalla palette e misura il loro contrasto in chiaro e in scuro.</p>
-${badgeLine}
-${nav}
+<div class="studio-brand"><h1>Smart Colors</h1><span id="smart-colors-workbench-session-status" class="studio-session">Anteprima locale</span></div>
+<button type="button" id="smart-colors-workbench-export" data-smart-colors-workbench="export" class="studio-export" disabled>Esporta CSS</button>
 </header>
 <main id="contenuto">
 ${severeNotice}
 ${cssMeta.status !== "current" ? `<div class="notice">${cssSourceHtml(value)}</div>` : ""}
 ${renderContrastWorkbench(value)}
 <details id="diagnostica" class="preview-technical"><summary>Diagnostica e archivio completo</summary>
+${badgeLine}
 ${stateDetails}
 ${cssMeta.status === "current" ? cssSourceHtml(value) : ""}
 <section id="usi" aria-labelledby="usi-titolo"><h2 id="usi-titolo">Archivio tecnico: colori risolti e stime del modello</h2>
@@ -1499,7 +1507,8 @@ ${automationDetails}</section>
 </details>
 </main>
 <footer>
-<p>Le prove restano in questa pagina. Nessun file viene modificato automaticamente.</p>
+${nav}
+<p><a class="studio-report-link" href="smart-colors.html">Report completo ↗</a> · Le prove restano in questa pagina. Nessun file viene modificato automaticamente.</p>
 <details><summary>Ambito e limiti della verifica</summary><p>Anteprima dello stesso snapshot del report completo. Le misure usano i CSS incorporati, senza leggere il progetto o contattare la rete. Riferimento WCAG 2.x clipped-sRGB sui colori opachi risolti dal browser; trasparenze, foto, gradienti e stati non misurati restano fuori. Un contrasto sufficiente non garantisce che due colori siano distinguibili per ogni persona e non sostituisce un audit completo di accessibilità.</p></details>
 </footer>
 </div>

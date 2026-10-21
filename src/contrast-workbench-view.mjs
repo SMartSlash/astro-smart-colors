@@ -1,13 +1,16 @@
 // Guided contrast workbench for the diagnostic preview.
 //
 // Build-time responsibilities:
-// - `renderContrastWorkbench(session)` emits the guided workbench first: a compact source rail with
-//   clickable source swatches (source name + secondary role, never a token string) and the generated
-//   catalogue pairs for that source, then the comparison area with the visible pair identity, the real
-//   CSS consumer specimens and their scoped results. The verbose source-palette archive (raw authored
-//   values, roles, explicit/automatic dark blend, real `@property` declarations, full captured CSS and
-//   a manual download) follows it inside a closed native detail. The legacy resolved-color gallery
-//   stays elsewhere as a collapsed technical archive.
+// - `renderContrastWorkbench(session)` emits the guided workbench first: a compact horizontal
+//   toolbar with the bounded source strip, a human current-use summary with a "Cambia uso" opener,
+//   the comparison modes and the theme control, then the full-width comparison area with the visible
+//   pair identity, the real CSS consumer specimens and their scoped results. The opener reveals a
+//   native modal picker with search, a category filter and paginated real uses; a single contextual
+//   correction/action strip follows the specimens. The native pairing select stays in the technical
+//   disclosure as a fallback. The verbose source-palette archive (raw authored values, roles,
+//   explicit/automatic dark blend, real `@property` declarations, full captured CSS and a manual
+//   download) follows it inside a closed native detail. The legacy resolved-color gallery stays
+//   elsewhere as a collapsed technical archive.
 // - `CONTRAST_WORKBENCH_CSS` is presentation-only CSS that reuses the preview
 //   tokens; it never paints an actual specimen. Specimens are real CSS consumer
 //   frames rendered by the browser runtime with `var(--token)`.
@@ -27,9 +30,18 @@ import { colorCss, escape, list, record } from "./format-report-html.mjs";
 
 const HOOK = "data-smart-colors-workbench";
 const HOST_ID = "smart-colors-workbench";
-// Primary use choices stay visible; the remainder is one native <details>, so access is never lost
-// and a background dependency can never dump the whole catalogue at once.
+// Primary use choices are paginated inside one native dialog. The category list is derived from the
+// real diagnostic buckets, never invented, and the known labels are stable across the build and the
+// browser view.
 const USE_VISIBLE_LIMIT = 6;
+const PICKER_CATEGORIES = Object.freeze([
+  Object.freeze(["page", "Testo su pagina"]),
+  Object.freeze(["callout", "Riquadri"]),
+  Object.freeze(["button", "Pulsanti"]),
+  Object.freeze(["border", "Bordi"]),
+  Object.freeze(["focus", "Indicatore statico"]),
+  Object.freeze(["other", "Altri usi"]),
+]);
 
 const finite = (value) => typeof value === "number" && Number.isFinite(value);
 const text = (value) => typeof value === "string" && value.trim() ? value.trim() : null;
@@ -37,57 +49,89 @@ const text = (value) => typeof value === "string" && value.trim() ? value.trim()
 // Presentation-only chrome for the guided flow. It reuses the preview tokens, adds
 // no paint of its own to the specimens and keeps native control chrome readable in
 // forced-colors mode. The ordinary layout is driven by named container queries
-// (`preview-section` for the workspace split, `wb-main` for the specimen pair),
+// (`preview-section` for the bounded swatch strip, `wb-main` for the specimen pair),
 // never by a viewport media query.
 export const CONTRAST_WORKBENCH_CSS = `
 @layer components {
-  /* --- Guided flow: quiet neutral chrome, broad primary targets, no nested bordered boxes. --- */
+  /* Quiet warm neutral chrome, black primary actions, no nested decorative boxes. */
   .wb-visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 
-  /* Workspace chrome: the rail states what the source values are and what the pair rows are. */
-  .wb-rail-title { margin: 0; font-size: var(--text-sm); font-weight: 750; }
-  .wb-rail-note { margin: 0; font-size: var(--text-xs); color: var(--ink-soft); }
-  .wb-head { display: grid; gap: var(--space-1); }
+  /* The toolbar is the only selection surface: palette, pair, comparison and theme stay together. */
+  .wb-workspace { min-width: 0; }
+  .wb-toolbar { min-width: 0; padding: var(--space-2); border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper-soft); }
+  .wb-toolbar-line { display: flex; flex-wrap: wrap; align-items: end; gap: var(--space-2) var(--space-3); min-width: 0; }
+  .wb-toolbar-line > * { min-width: 0; max-width: 100%; }
+  .wb-toolbar-line + .wb-toolbar-line { margin-block-start: var(--space-2); padding-block-start: var(--space-2); border-block-start: 1px solid var(--line); }
+  .wb-palette-line { align-items: center; }
+  .wb-control-line { align-items: end; }
+  .wb-source-select { flex: 1 1 13rem; min-width: 0; }
+  .wb-pair-field { flex: 1 1 20rem; min-width: 0; }
+  .wb-current-use { flex: 1 1 16rem; min-width: 0; display: grid; gap: .15rem; align-content: center; }
+  .wb-current-use-label { font-size: var(--text-xs); font-weight: 750; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-soft); }
+  .wb-current-use-value { margin: 0; font-size: var(--text-base); overflow-wrap: anywhere; }
+  .wb-current-use-kind { margin-inline-start: var(--space-2); font-size: var(--text-xs); font-weight: 650; color: var(--ink-soft); }
+  .wb-current-use-tech { display: block; font-size: var(--text-xs); overflow-wrap: anywhere; }
+  .wb-open-picker { flex: 0 0 auto; min-height: 2.75rem; font: inherit; color: var(--paper); background: var(--ink); border: 1px solid var(--ink); border-radius: var(--radius-sm); padding: var(--space-1) var(--space-3); cursor: pointer; }
+  .wb-open-picker:hover { background: var(--ink-soft); }
+  .wb-open-picker:disabled { cursor: not-allowed; opacity: .65; }
+
+  /* Source swatches: compact horizontal chips with a 44px target and a bounded scroll strip. */
+  .wb-swatch { display: grid; grid-template-columns: .9rem minmax(0, 1fr); grid-template-areas: "bar name"; align-items: center; gap: .4rem; width: auto; min-width: 8.5rem; max-width: 13rem; height: 44px; min-height: 44px; padding: 0 var(--space-2); font: inherit; text-align: start; color: var(--ink); background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius-sm); cursor: pointer; }
+  .wb-swatch-block { grid-area: bar; width: .9rem; height: 1.5rem; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--sample-color, var(--soft)); }
+  .wb-swatch-name { grid-area: name; display: block; min-width: 0; font-size: var(--text-sm); font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .wb-swatch-mark { display: none; margin-inline-end: .35em; color: var(--ink); font-weight: 750; }
+  .wb-swatch:hover { border-color: var(--ink-soft); }
+  .wb-swatch:disabled { cursor: default; }
+  .wb-swatch[aria-pressed="true"] { border-color: var(--ink); background: var(--soft); box-shadow: inset 0 0 0 1px var(--ink); }
+  .wb-swatch[aria-pressed="true"] .wb-swatch-mark { display: inline; }
+
+  /* Generated pairs: readable rows in the paginated picker. */
+  .wb-use { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "main mark" "kind mark"; align-items: center; gap: 0 var(--space-2); width: 100%; min-height: 44px; padding: var(--space-1) var(--space-2); font: inherit; font-size: var(--text-sm); text-align: start; color: var(--ink); background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius-sm); cursor: pointer; }
+  .wb-use-main { grid-area: main; display: grid; gap: 1px; min-width: 0; }
+  .wb-use-label { overflow-wrap: anywhere; }
+  .wb-use-tech { font-size: var(--text-xs); color: var(--ink-muted); overflow-wrap: anywhere; }
+  .wb-use-tech code { padding: 0; background: none; }
+  .wb-use-kind { grid-area: kind; font-size: var(--text-xs); color: var(--ink-muted); }
+  .wb-use:hover { border-color: var(--ink-soft); }
+  .wb-use:disabled { cursor: default; }
+  .wb-use[aria-pressed="true"] { border-color: var(--ink); background: var(--soft); font-weight: 650; }
+  .wb-use-mark { grid-area: mark; display: none; color: var(--ink); }
+  .wb-use[aria-pressed="true"] .wb-use-mark { display: inline; }
+  .wb-uses-empty, .wb-uses-note { margin: 0; font-size: var(--text-sm); color: var(--ink-soft); }
+
+  /* Native picker dialog: human search, category and paginated real uses. */
+  .wb-picker-dialog { width: min(40rem, calc(100vw - 2rem)); max-width: 40rem; max-block-size: 90dvh; padding: 0; border: 1px solid var(--ink); border-radius: var(--radius); background: var(--paper); color: var(--ink); box-shadow: 0 1.5rem 3rem rgb(0 0 0 / .22); }
+  .wb-picker-dialog::backdrop { background: color-mix(in oklab, var(--ink) 35%, transparent); }
+  .wb-picker-panel { display: grid; grid-template-rows: auto auto auto minmax(0, 1fr) auto; gap: var(--space-2); max-block-size: 90dvh; padding: var(--space-3); overflow: hidden; }
+  .wb-picker-header { display: grid; gap: var(--space-1); }
+  .wb-picker-header h2 { margin: 0; font-size: var(--text-md); }
+  .wb-picker-filters { display: flex; flex-wrap: wrap; align-items: end; gap: var(--space-2); }
+  .wb-picker-filters .wb-field { flex: 1 1 12rem; }
+  .wb-picker-filters .wb-ghost { flex: 0 0 auto; }
+  .wb-picker-count { margin: 0; font-size: var(--text-xs); color: var(--ink-soft); }
+  .wb-picker-results { min-height: 0; overflow: auto; overscroll-behavior: contain; }
+  .wb-picker-footer { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; justify-content: space-between; padding-block-start: var(--space-2); border-block-start: 1px solid var(--line); }
+  .wb-picker-footer button { min-height: 2.75rem; font: inherit; color: var(--ink); background: var(--paper-soft); border: 1px solid var(--ink); border-radius: var(--radius-sm); padding: var(--space-1) var(--space-3); cursor: pointer; }
+  .wb-picker-footer button:hover { background: var(--soft); }
+  .wb-picker-footer button[aria-disabled="true"] { opacity: .55; cursor: not-allowed; }
+  .wb-picker-footer button:disabled { cursor: not-allowed; opacity: .65; }
+
+  /* Comparison: identity first, then the full-width specimens and their compact results. */
+  .wb-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-2); }
   .wb-current { margin: 0; font-size: var(--text-md); }
   .wb-identity { margin: 0; font-size: var(--text-sm); color: var(--ink-soft); overflow-wrap: anywhere; }
   .wb-identity code { overflow-wrap: anywhere; }
-  .wb-purpose { margin: 0; font-size: var(--text-sm); color: var(--ink-soft); }
+  .wb-purpose { flex-basis: 100%; margin: 0; font-size: var(--text-sm); color: var(--ink-soft); }
   .wb-status { margin: 0; font-size: var(--text-sm); color: var(--ink-soft); }
   .wb-scope-note { margin: 0; font-size: var(--text-xs); color: var(--ink-muted); }
-
-  /* 1. Source swatches: one-row color bar plus source name, always a 44px target. The human role
-     stays in the source archive, not in the compact rail. */
-  .wb-swatch { display: grid; grid-template-columns: .9rem minmax(0, 1fr); grid-template-areas: "bar name"; align-items: center; gap: .4rem; width: 100%; height: 44px; min-height: 44px; padding: 0 var(--space-2); font: inherit; text-align: start; color: var(--ink); background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius-sm); cursor: pointer; }
-  .wb-swatch-block { grid-area: bar; width: .9rem; height: 1.5rem; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--sample-color, var(--soft)); }
-  .wb-swatch-name { grid-area: name; display: block; min-width: 0; font-size: var(--text-sm); font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .wb-swatch-mark { display: none; margin-inline-end: .25em; color: var(--accent); font-weight: 750; }
-  .wb-swatch:hover { border-color: var(--ink-soft); }
-  .wb-swatch:disabled { cursor: default; }
-  .wb-swatch[aria-pressed="true"] { border-color: var(--accent); background: var(--soft); box-shadow: inset 0 0 0 1px var(--accent); }
-  .wb-swatch[aria-pressed="true"] .wb-swatch-mark { display: inline; }
-
-  /* 2. Generated pairs: readable full-width rows with a secondary kind, never a pill cloud. */
-  .wb-use { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-2); width: 100%; min-height: 44px; padding: var(--space-1) var(--space-2); font: inherit; font-size: var(--text-sm); text-align: start; color: var(--ink); background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius-sm); cursor: pointer; }
-  .wb-use-label { overflow-wrap: anywhere; }
-  .wb-use-kind { flex: none; font-size: var(--text-xs); color: var(--ink-muted); }
-  .wb-use:hover { border-color: var(--ink-soft); }
-  .wb-use:disabled { cursor: default; }
-  .wb-use[aria-pressed="true"] { border-color: var(--accent); background: var(--soft); font-weight: 650; }
-  .wb-use-mark { display: none; flex: none; color: var(--accent); }
-  .wb-use[aria-pressed="true"] .wb-use-mark { display: inline; }
-  .wb-uses-empty, .wb-uses-note { margin: 0; font-size: var(--text-sm); color: var(--ink-soft); }
-  .wb-more > summary { cursor: pointer; font-size: var(--text-sm); color: var(--ink-soft); }
-
-  /* 3. Comparison: scoped heading, exact tokens, criterion, specimens, then results. */
   .wb-view-title { font-size: var(--text-base); }
   .wb-ratio { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2); margin: 0; }
-  .wb-ratio-value { font-size: var(--text-xl); font-weight: 750; font-variant-numeric: tabular-nums; }
+  .wb-ratio-value { font-size: var(--text-lg); font-weight: 750; font-variant-numeric: tabular-nums; }
   .wb-verdict { font-size: var(--text-sm); font-weight: 750; }
-  .wb-verdict[data-status="pass"], .wb-verdict[data-status="below-target"] { color: var(--accent); }
+  .wb-verdict[data-status="pass"], .wb-verdict[data-status="below-target"] { color: var(--ink); }
   .wb-verdict[data-status="below-minimum"] { color: var(--ink); }
   .wb-verdict[data-status="unmeasured"] { color: var(--ink-muted); }
   .wb-coverage { display: block; margin-block-start: var(--space-1); font-size: var(--text-xs); color: var(--ink-muted); }
-  .wb-picker { display: grid; gap: var(--space-3); margin-block-end: var(--space-3); }
   .wb-ghost { font: inherit; font-size: var(--text-sm); color: var(--ink-soft); background: none; border: 1px solid var(--line); border-radius: var(--radius-sm); padding: var(--space-2) var(--space-3); min-height: 2.25rem; cursor: pointer; }
   .wb-ghost:hover { color: var(--ink); border-color: var(--ink-soft); }
 
@@ -102,16 +146,16 @@ export const CONTRAST_WORKBENCH_CSS = `
   .wb-source-copy textarea, .wb-suggestions textarea { width: 100%; min-height: 8rem; font: inherit; font-size: var(--text-sm); color: var(--ink); background: var(--paper); border: 1px solid var(--ink-muted); border-radius: var(--radius); padding: var(--space-2); }
 
   .wb-selection { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--space-3); margin: 0; padding: 0; }
-  .wb-compare { display: grid; gap: var(--space-1); margin: 0; padding: var(--space-2) 0; border-block: 1px solid var(--line); }
-  .wb-compare .wb-fieldset { flex: none; padding: 0; gap: var(--space-1) var(--space-3); border: 0; }
+  .wb-compare { display: flex; flex-wrap: wrap; align-items: end; gap: var(--space-2) var(--space-4); flex: 1 1 auto; min-width: 0; max-width: 100%; margin: 0; padding: 0; border: 0; }
+  .wb-compare .wb-fieldset { flex: 1 1 12rem; min-width: 0; max-width: 100%; padding: 0; gap: var(--space-1) var(--space-3); border: 0; }
+  .wb-compare .wb-theme-fieldset { flex: 0 1 auto; }
   .wb-compare .wb-fieldset legend { font-size: var(--text-xs); font-weight: 750; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-soft); }
   .wb-compare .wb-fieldset label { min-height: 1.75rem; }
-  /* The theme control belongs next to the correction action, but stays form-associated with the
-     selection form via the form attribute. */
-  .wb-theme-fieldset { flex: none; display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); margin: 0 0 var(--space-2); padding: 0; border: 0; }
+  /* The theme control stays form-associated with the selection form via the form attribute. */
+  .wb-theme-fieldset { flex: 0 1 auto; min-width: 0; max-width: 100%; display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); margin: 0; padding: 0; border: 0; }
   .wb-field { display: grid; gap: .3rem; min-width: 0; }
   .wb-field > label { font-size: var(--text-sm); font-weight: 650; }
-  .wb-field input, .wb-field select { width: 100%; min-height: 2.5rem; font: inherit; color: var(--ink); background: var(--paper); border: 1px solid var(--ink-muted); border-radius: var(--radius-sm); padding: var(--space-1) var(--space-2); }
+  .wb-field input, .wb-field select { width: 100%; min-width: 0; max-width: 100%; min-height: 2.75rem; font: inherit; color: var(--ink); background: var(--paper); border: 1px solid var(--ink-muted); border-radius: var(--radius-sm); padding: var(--space-1) var(--space-2); }
   .wb-fieldset { flex: 1 1 12rem; display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); margin: 0; padding: var(--space-2) 0; border: 0; border-block-start: 1px solid var(--line); }
   .wb-fieldset legend { padding: 0; font-size: var(--text-sm); font-weight: 650; }
   .wb-fieldset label { display: inline-flex; align-items: center; gap: .35rem; min-height: 2rem; font-size: var(--text-sm); }
@@ -122,19 +166,34 @@ export const CONTRAST_WORKBENCH_CSS = `
   .wb-controls, .wb-suggestions { padding-block: var(--space-2); }
   .wb-control-grid { display: grid; gap: var(--space-3); }
   .wb-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-block: var(--space-2); }
-  .wb-actions button { min-height: 2.5rem; font: inherit; color: var(--ink); background: var(--paper-soft); border: 1px solid var(--ink); border-radius: var(--radius-sm); padding: var(--space-1) var(--space-3); cursor: pointer; }
+  .wb-actions button { min-height: 2.75rem; font: inherit; color: var(--ink); background: var(--paper-soft); border: 1px solid var(--ink); border-radius: var(--radius-sm); padding: var(--space-1) var(--space-3); cursor: pointer; }
   .wb-actions button:hover { background: var(--soft); }
   .wb-actions button:disabled { cursor: not-allowed; opacity: .65; }
-  .wb-actions .wb-download { display: inline-flex; align-items: center; min-height: 2.5rem; padding: var(--space-1) var(--space-3); border: 1px solid var(--accent); border-radius: var(--radius-sm); font-weight: 650; }
-  .wb-proposal { margin-block: var(--space-2); padding-inline-start: var(--space-3); border-inline-start: .3rem solid var(--line); font-size: var(--text-sm); }
+  /* Black primary: the three contextual actions that change or accept a correction. */
+  .wb-actions button[data-smart-colors-workbench="suggest-foreground"],
+  .wb-actions button[data-smart-colors-workbench="suggest-background"],
+  .wb-actions button[data-smart-colors-workbench="apply"] { color: var(--paper); background: var(--ink); }
+  .wb-actions button[data-smart-colors-workbench="suggest-foreground"]:hover,
+  .wb-actions button[data-smart-colors-workbench="suggest-background"]:hover,
+  .wb-actions button[data-smart-colors-workbench="apply"]:hover { background: var(--ink-soft); }
+  .wb-actions .wb-download { display: inline-flex; align-items: center; min-height: 2.75rem; padding: var(--space-1) var(--space-3); border: 1px solid var(--ink); border-radius: var(--radius-sm); font-weight: 650; }
+
+  /* One contextual action strip below the specimens: state, actions, proposal and frames. */
+  .wb-action-strip { padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); }
+  .wb-strip-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--space-1) var(--space-3); }
+  .wb-strip-head h3 { margin: 0; }
+  .wb-strip-head .wb-action-theme { margin: 0; }
+  .wb-proposal[hidden] { display: none; }
+  .wb-proposal { margin-block: var(--space-2) 0; padding-inline-start: var(--space-3); border-inline-start: .3rem solid var(--line); font-size: var(--text-sm); }
   .wb-proposal-title { font-weight: 750; }
-  .wb-proposal-value { display: block; margin-block: var(--space-2); padding: var(--space-2); border: 1px dashed var(--ink-muted); border-radius: var(--radius-sm); background: var(--paper); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .wb-proposal-value { display: block; margin-block: var(--space-2); padding: var(--space-2); border: 1px dashed var(--ink-muted); border-radius: var(--radius-sm); background: var(--paper-soft); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   .wb-proposal-frames { padding-block-start: var(--space-3); border-block-start: 1px solid var(--line); }
   .wb-proposal-frames > h4 { grid-column: 1 / -1; margin-block-end: var(--space-2); }
   /* The proposal frames are the exact fixed verification viewport (360x480). On a narrow host the
      frame is intentionally wider than its column: scroll locally instead of clipping it or resizing
      the measured viewport. Scoped to the proposal containers only; the main views keep clipping. */
-  .wb-proposal-frames .wb-frame { overflow: auto; overscroll-behavior: contain; }
+  .wb-proposal-frames .wb-frame { overflow: auto; overscroll-behavior: contain; background: var(--soft); }
+  .wb-proposal-frames .wb-frame iframe { margin-inline: auto; box-shadow: 0 0 0 1px var(--line); }
   .wb-catalogue { padding-inline-start: 1.2rem; font-size: var(--text-sm); color: var(--ink-soft); }
   .wb-catalogue li { margin-block: var(--space-1); max-width: none; }
   /* Criterion reference: a closed native detail, never a banner of universal compliance. */
@@ -142,64 +201,69 @@ export const CONTRAST_WORKBENCH_CSS = `
   .wb-criteria-list > div { display: grid; grid-template-columns: minmax(9rem, auto) minmax(0, 1fr); gap: var(--space-2); }
   .wb-criteria-list dt { font-weight: 650; }
   .wb-criteria-list dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
-  .wb-action-theme { margin: 0 0 var(--space-2); font-size: var(--text-sm); color: var(--ink-soft); }
-  .wb-measure { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr)); gap: var(--space-1) var(--space-4); margin-block: var(--space-1); font-size: var(--text-sm); align-self: start; }
-    .wb-measure > .wb-measure-row { grid-column: 1 / -1; }
-    .wb-measure > .wb-threshold { grid-column: auto; display: block; }
-  .wb-measure-row { display: grid; grid-template-columns: minmax(6rem, auto) minmax(0, 1fr); gap: var(--space-2); max-width: none; }
+  .wb-action-theme { margin: 0; font-size: var(--text-sm); color: var(--ink-soft); }
+
+  /* Compact per-frame results: ratio, criterion and target stay scannable. */
+  .wb-measure { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr)); gap: 0 var(--space-4); margin-block: var(--space-1) 0; font-size: var(--text-xs); align-self: start; }
+  .wb-measure > .wb-measure-row { grid-column: 1 / -1; }
+  .wb-measure > .wb-threshold { grid-column: auto; display: block; }
+  .wb-measure-row { display: grid; grid-template-columns: minmax(6rem, auto) minmax(0, 1fr); gap: var(--space-1) var(--space-2); max-width: none; padding-block: 1px; }
   .wb-measure-row dt { font-weight: 650; }
   .wb-measure-row dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
-  /* Minimo and target share one compact row when the view is wide enough; when it is not they
-     collapse to the normal stacked rows. The dt/dd semantics are unchanged. */
   .wb-threshold { max-width: none; }
   .wb-nojs { font-size: var(--text-sm); color: var(--ink-soft); }
   .wb-frame { min-height: 7rem; border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); overflow: hidden; }
   .wb-frame iframe { display: block; width: 100%; min-height: 7rem; border: 0; }
 }
 @layer layout {
-  /* Single column by default; the split is a container query on the existing preview section. */
-  .wb-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4); align-items: start; }
-  .wb-rail { display: grid; gap: var(--space-2); align-content: start; min-width: 0; }
-  .wb-main { display: grid; gap: var(--space-3); align-content: start; min-width: 0; container-name: wb-main; container-type: inline-size; }
-  /* Narrow: one compact native source select. The full swatch rail is a desktop affordance only. */
-  .wb-palette { display: none; gap: var(--space-1); grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0; padding: 0; list-style: none; }
+  /* A single full-width workspace: toolbar above, specimens and action strip below. */
+  .wb-workspace { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); align-items: start; }
+  .wb-main { display: grid; gap: var(--space-2); align-content: start; min-width: 0; container-name: wb-main; container-type: inline-size; }
+  /* The shell's generic header rule must not paint the nested workbench identity as a page header. */
+  .wb-head { padding-block-end: var(--space-1); border-block-end: 1px solid var(--line); }
+  /* Narrow: one native source select. Desktop: the compact horizontal swatch strip. */
+  .wb-palette { display: none; flex: 1 1 28rem; gap: var(--space-1); margin: 0; padding: 0 0 var(--space-1); list-style: none; overflow-x: auto; overscroll-behavior-inline: contain; scrollbar-width: thin; }
+  .wb-palette > li { flex: none; }
   .wb-source-select { min-width: 0; }
+  .wb-palette-label { display: none; flex: 0 0 auto; font-size: var(--text-sm); font-weight: 650; color: var(--ink-soft); }
+  .wb-control-line .wb-compare { flex: 1 1 26rem; }
   .wb-uses { display: grid; gap: var(--space-1); margin: 0; padding: 0; list-style: none; }
-  .wb-more { margin-block-start: var(--space-1); }
-  .wb-more .wb-uses { margin-block-start: var(--space-1); }
-  .wb-frames { display: grid; gap: var(--space-3); grid-template-columns: minmax(0, 1fr); align-items: stretch; margin-block-start: var(--space-1); }
-  /* The hidden attribute must beat the grid display: this rule lives in the layout layer, the same
-     layer as .wb-frames, so a stale/empty result or an unverified proposal is never rendered. */
+  /* Two full-width specimens when the workbench itself is wide enough; stacked on mobile. */
+  .wb-frames { display: grid; gap: var(--space-2); grid-template-columns: minmax(0, 1fr); align-items: stretch; margin-block-start: var(--space-1); }
   .wb-frames[hidden] { display: none; }
   .wb-proposal-frames[hidden] { display: none; }
+  .wb-action-strip [hidden] { display: none; }
   .wb-view { display: grid; grid-template-rows: auto auto 1fr; align-content: start; gap: var(--space-1); min-width: 0; }
-  /* Wrapped sample text needs more room in narrow cards; proposal viewports stay fixed. */
   .wb-frames:not(.wb-proposal-frames) .wb-frame iframe { block-size: 18rem; }
-  @container wb-main (min-width: 44rem) {
-    .wb-frames:not(.wb-proposal-frames) .wb-frame iframe { block-size: 12.5rem; }
+  @container wb-main (min-width: 40rem) {
+    .wb-frames:not(.wb-proposal-frames) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .wb-frames:not(.wb-proposal-frames) .wb-frame iframe { block-size: 15rem; }
   }
-  @container preview-section (min-width: 60rem) {
-    .wb-layout { grid-template-columns: minmax(15rem, 17rem) minmax(0, 1fr); }
-    .wb-palette { display: grid; }
-    /* Desktop uses the visible swatch buttons as the source control. The native select is removed
+  /* The fixed 360x480 proposal frames sit side by side only when the workbench itself can hold two
+     of them. Below that width they stay stacked and each container scrolls locally. */
+  @container wb-main (min-width: 48rem) {
+    .wb-proposal-frames { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @container preview-section (min-width: 45rem) {
+    .wb-palette-label { display: block; }
+    .wb-palette { display: flex; }
+    /* Desktop uses the visible swatch strip as the source control. The native select is removed
        from layout and the tab order entirely; it is not an invisible focus stop. */
     .wb-source-select { display: none; }
-  }
-  @container wb-main (min-width: 34rem) {
-    .wb-frames { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
 }
 @layer preferences {
   @media (forced-colors: active) {
-    .wb-swatch, .wb-use, .wb-compare, .wb-details, .wb-controls, .wb-suggestions, .wb-frame, .wb-field input, .wb-field select, .wb-fieldset, .wb-source-copy textarea, .wb-suggestions textarea { border: 1px solid CanvasText; }
-    .wb-actions button, .wb-ghost { border: 1px solid ButtonText; color: ButtonText; background: ButtonFace; }
+    .wb-toolbar, .wb-swatch, .wb-use, .wb-details, .wb-controls, .wb-suggestions, .wb-action-strip, .wb-frame, .wb-field input, .wb-field select, .wb-fieldset, .wb-source-copy textarea, .wb-suggestions textarea, .wb-picker-dialog { border: 1px solid CanvasText; }
+    .wb-actions button, .wb-ghost, .wb-open-picker, .wb-picker-footer button { border: 1px solid ButtonText; color: ButtonText; background: ButtonFace; }
     .wb-swatch[aria-pressed="true"], .wb-use[aria-pressed="true"] { border-color: Highlight; background: HighlightText; color: Highlight; }
     .wb-swatch-mark, .wb-use-mark { color: Highlight; }
   }
   @media print {
-    .wb-layout { display: block; }
+    .wb-workspace { display: block; }
     .wb-actions, .wb-controls, .wb-suggestions, .wb-selection { break-inside: avoid; }
     .wb-frame { min-height: 4rem; }
+    .wb-picker-dialog { display: none; }
   }
 }
 `;
@@ -407,7 +471,7 @@ ${declaration}
 <p class="margin-note">Il download è manuale: aprire l'anteprima non scrive file.</p></details>`
     : `<p class="margin-note">Copia completa non disponibile in questa sessione. Il download non viene simulato.</p>`;
   return `<section id="palette" aria-labelledby="palette-titolo"><h2 id="palette-titolo">Palette sorgente e ruoli</h2>
-<p class="lede">Valori sorgente del file di palette, ruoli e dark-blend di sola lettura. La scelta avviene dalla rail; qui resta l'archivio esatto dei byte.</p>
+<p class="lede">Valori sorgente del file di palette, ruoli e dark-blend di sola lettura. La scelta avviene dalla barra dei colori; qui resta l'archivio esatto dei byte.</p>
 <details class="is-detail wb-palette-details"><summary>Dettagli tecnici della palette sorgente</summary>
 ${paletteProvenance(model, session)}
 ${listHtml}
@@ -735,18 +799,20 @@ function pairOptionsHtml(pairs, selected) {
     const value = `${pair.foreground}|${pair.background}|${pair.kind}`;
     const chosen = selected && selected.key === pair.key;
     const thresholds = `${thresholdPack(pair.themes.light)};${thresholdPack(pair.themes.dark)}`;
-    return `<option value="${escape(value)}"${chosen ? " selected" : ""} data-fg="${escape(pair.foreground)}" data-bg="${escape(pair.background)}" data-kind="${escape(pair.kind)}" data-catalogue-kind="${escape(pair.catalogueKind || pair.kind)}" data-usage="${escape(pair.title)}" data-sources="${escape(sourcesAttribute(pair))}" data-fg-sources="${escape(foregroundSourcesAttribute(pair))}" data-bg-sources="${escape(backgroundSourcesAttribute(pair))}" data-use-bucket="${escape(pair.useBucket || "other")}" data-use-rank="${escape(String(finite(pair.useRank) ? pair.useRank : 999))}" data-thresholds="${escape(thresholds)}">${escape(`${pair.title} · ${pair.foreground} su ${pair.background}`)}</option>`;
+    const pickerLabel = pairPickerLabel(pair);
+    // Most labels already exist in data-usage. Only embed a distinct human fallback when needed,
+    // keeping the offline artifact bounded even with a full automation session.
+    const pickerAttribute = pickerLabel && pickerLabel !== pair.title ? ` data-picker-label="${escape(pickerLabel)}"` : "";
+    return `<option value="${escape(value)}"${chosen ? " selected" : ""} data-fg="${escape(pair.foreground)}" data-bg="${escape(pair.background)}" data-kind="${escape(pair.kind)}" data-catalogue-kind="${escape(pair.catalogueKind || pair.kind)}" data-usage="${escape(pair.title)}"${pickerAttribute} data-sources="${escape(sourcesAttribute(pair))}" data-fg-sources="${escape(foregroundSourcesAttribute(pair))}" data-bg-sources="${escape(backgroundSourcesAttribute(pair))}" data-use-bucket="${escape(pair.useBucket || "other")}" data-use-rank="${escape(String(finite(pair.useRank) ? pair.useRank : 999))}" data-thresholds="${escape(thresholds)}">${escape(pair.title)}</option>`;
   }).join("");
 }
 
 function sourceOptionsHtml(sources, selected) {
   const chosen = selected && selected.sources.length ? selected.sources[0] : null;
   const options = sources.map((entry) => {
-    // Never present the configured role as the authored one: the label says which fact it is.
-    const role = entry.declaredRole
-      ? ` · ruolo dichiarato: ${entry.declaredRole}`
-      : entry.effectiveRole ? ` · ruolo effettivo: ${entry.effectiveRole}` : "";
-    return `<option value="${escape(entry.token)}"${chosen === entry.token ? " selected" : ""}>${escape(`${entry.token}${role}`)}</option>`;
+    // The compact native fallback uses the same human name as the swatch strip; the exact token
+    // remains visible so the choice is unambiguous. Declared roles stay in the source archive.
+    return `<option value="${escape(entry.token)}"${chosen === entry.token ? " selected" : ""}>${escape(`${sourceSwatchName(entry)} · ${entry.token}`)}</option>`;
   });
   return `<option value=""${chosen ? "" : " selected"}>Tutte le sorgenti</option>${options.join("")}`;
 }
@@ -843,7 +909,7 @@ function sourceSwatchesHtml(entries, selectedToken) {
 <span class="wb-swatch-name"><span class="wb-swatch-mark" aria-hidden="true">✓</span>${escape(sourceSwatchName(entry))}</span>
 </button></li>`;
   });
-  return `<ul class="wb-palette">${items.join("")}</ul>`;
+  return `<ul class="wb-palette" aria-labelledby="smart-colors-workbench-palette-label">${items.join("")}</ul>`;
 }
 
 // Uses for one source, derived from the real diagnostics only. Foreground bindings win; a source
@@ -862,9 +928,9 @@ function usesForSource(pairs, design, sourceToken) {
   return { pairs: [], backgroundOnly: false };
 }
 
-// Round-robin across semantic buckets so the primary choices are diverse (text, button, callout,
+// Round-robin across semantic buckets so the first pages are diverse (text, button, callout,
 // border, focus) instead of six borders. With a single bucket (for example the ink source) it still
-// yields six text choices. No pair is dropped: the remainder stays in "Altre coppie".
+// yields six text choices. No pair is dropped: the paginated picker exposes every match.
 function diversifyPairs(list) {
   const buckets = new Map();
   for (const pair of list) {
@@ -886,32 +952,147 @@ function diversifyPairs(list) {
   return ordered;
 }
 
-function sourceUsesHtml(pairs, design, sourceToken) {
-  if (!sourceToken) return `<p class="wb-uses-empty">Scegli un colore per vedere le coppie generate che lo usano.</p>`;
-  const result = usesForSource(pairs, design, sourceToken);
-  if (!result.pairs.length) return `<p class="wb-uses-empty">Nessuna coppia diagnostica per questo colore. Il catalogo non ne inventa.</p>`;
-  const ordered = diversifyPairs(result.pairs);
-  const visible = ordered.slice(0, USE_VISIBLE_LIMIT);
-  const rest = ordered.slice(USE_VISIBLE_LIMIT);
-  const note = result.backgroundOnly
-    ? `<p class="wb-uses-note">Questo colore compare come sfondo nelle coppie del catalogo: è una dipendenza del token di sfondo.</p>`
-    : "";
-  const more = rest.length
-    ? `<details class="is-detail wb-more"><summary>Altre coppie (${rest.length})</summary><ul class="wb-uses">${usesChips(rest)}</ul></details>`
-    : "";
-  return `<ul class="wb-uses">${usesChips(visible)}</ul>${note}${more}`;
+function pickerValue(pair) {
+  return `${pair.foreground}|${pair.background}|${pair.kind}`;
 }
 
-function usesChips(pairs) {
-  return pairs.map((pair) => `<li><button type="button" class="wb-use" data-smart-colors-workbench="use" data-pair-value="${escape(`${pair.foreground}|${pair.background}|${pair.kind}`)}" aria-pressed="false" disabled><span class="wb-use-label">${escape(pair.title)}</span><span class="wb-use-kind">${escape(pairKindLabel(pair))}</span><span class="wb-use-mark" aria-hidden="true"> ✓</span></button></li>`).join("");
+function pairFallbackLabel(pair) {
+  return `${pair.foreground} su ${pair.background}`;
+}
+
+function pairHasHumanName(pair) {
+  return Boolean(pair && pair.title) && pair.title !== pairFallbackLabel(pair);
+}
+
+
+// Human selection label. A known on-color pair (`<base>-ink` on the exact `<base>`) gets a
+// readable identity label without changing the pair title / `data-usage` technical contract.
+function pairPickerLabel(pair) {
+  if (pairHasHumanName(pair)) return pair.title;
+  const ink = /^--color-(.+)-ink$/.exec(pair.foreground);
+  if (pair.kind !== "non-text" && pair.catalogueKind === "on-color" && ink && pair.background === `--color-${ink[1]}`) {
+    return `Testo sul colore ${sourceSwatchName({ token: pair.background })}`;
+  }
+  return "";
+}
+
+function pairHasPickerLabel(pair) {
+  return Boolean(pairPickerLabel(pair));
+}
+
+function pairPickerDisplay(pair) {
+  return pairPickerLabel(pair) || "Uso senza nome";
+}
+
+
+function foldSearch(value) {
+  const raw = String(value == null ? "" : value).toLowerCase();
+  return typeof raw.normalize === "function" ? raw.normalize("NFD").replace(/[\u0300-\u036f]/g, "") : raw;
+}
+
+// Search spans the human label, the exact public tokens and the friendly source names. It never
+// invents a pair: it only filters the real candidates already derived from the diagnostics.
+function pairSearchText(pair, design) {
+  const sourceNames = [];
+  for (const source of pair.sources || []) {
+    const meta = designSource(design, source);
+    sourceNames.push(meta && meta.name ? meta.name : source);
+  }
+  return foldSearch([pair.title, pairPickerLabel(pair), pair.foreground, pair.background, pairKindLabel(pair), ...(pair.sources || []), ...sourceNames].join(" "));
+}
+
+// Preferred foreground uses win; a source that only appears as a background dependency falls back to
+// that explicit scope. The current option is kept visible even if the scope would otherwise hide it,
+// so an external runtime selection always has a truthful selected row.
+function pickerCandidates(pairs, design, sourceToken, activeValue) {
+  let pool = [];
+  let backgroundOnly = false;
+  if (!sourceToken) {
+    pool = pairs.slice();
+  } else {
+    const result = usesForSource(pairs, design, sourceToken);
+    pool = result.pairs.slice();
+    backgroundOnly = result.backgroundOnly;
+  }
+  const active = activeValue ? pool.find((pair) => pickerValue(pair) === activeValue) || null : null;
+  let ordered = diversifyPairs(pool);
+  if (active) ordered = [active, ...ordered.filter((pair) => pair !== active)];
+  return { pairs: ordered, backgroundOnly, active };
+}
+
+function pickerFiltered(candidates, query, category, design) {
+  const words = foldSearch(query).split(/\s+/).filter(Boolean);
+  return candidates.filter((pair) => {
+    if (category && (pair.useBucket || "other") !== category) return false;
+    if (!words.length) return true;
+    const haystack = pairSearchText(pair, design);
+    return words.every((word) => haystack.includes(word));
+  });
+}
+
+function pickerCountText(total, query, category) {
+  if (total === 0) {
+    return query || category
+      ? "Nessun uso corrisponde ai filtri. Modifica la ricerca o scegli Tutti gli usi."
+      : "Nessun uso disponibile per questa sorgente.";
+  }
+  const pages = Math.max(1, Math.ceil(total / USE_VISIBLE_LIMIT));
+  return `${total} ${total === 1 ? "uso" : "usi"} · pagina 1 di ${pages}`;
+}
+
+function pickerCategoryOptionsHtml(candidates) {
+  const present = new Set(candidates.map((pair) => pair.useBucket || "other"));
+  return PICKER_CATEGORIES
+    .filter(([bucket]) => present.has(bucket))
+    .map(([bucket, label]) => `<option value="${escape(bucket)}">${escape(label)}</option>`)
+    .join("");
+}
+
+function pickerSourceNote(sourceToken, sources) {
+  const entries = sources && Array.isArray(sources.entries) ? sources.entries : [];
+  const entry = sourceToken ? entries.find((item) => item.token === sourceToken) : null;
+  const label = entry ? sourceSwatchName(entry) : sourceToken || "Tutte le sorgenti";
+  return `Sorgente: ${label}. Usi generati dalla palette, non rilevati nel sito.`;
+}
+
+function usesChips(pairs, activeValue) {
+  return pairs.map((pair) => {
+    const value = pickerValue(pair);
+    const pressed = activeValue && value === activeValue;
+    const tech = pairHasPickerLabel(pair)
+      ? ""
+      : `<span class="wb-use-tech"><code>${escape(pair.foreground)}</code> su <code>${escape(pair.background)}</code></span>`;
+    return `<li><button type="button" class="wb-use" data-smart-colors-workbench="use" data-pair-value="${escape(value)}" aria-pressed="${pressed ? "true" : "false"}" disabled><span class="wb-use-main"><span class="wb-use-label">${escape(pairPickerDisplay(pair))}</span>${tech}</span><span class="wb-use-kind">${escape(pairKindLabel(pair))}</span><span class="wb-use-mark" aria-hidden="true"> ✓</span></button></li>`;
+  }).join("");
+}
+
+function pickerModel(pairs, design, sources, sourceToken, activeValue) {
+  const candidates = pickerCandidates(pairs, design, sourceToken, activeValue);
+  const filtered = pickerFiltered(candidates.pairs, "", "", design);
+  const visible = filtered.slice(0, USE_VISIBLE_LIMIT);
+  const empty = pickerCountText(0, "", "");
+  const list = visible.length
+    ? `<ul class="wb-uses">${usesChips(visible, activeValue)}</ul>`
+    : `<p class="wb-uses-empty">${escape(empty)}</p>`;
+  const note = candidates.backgroundOnly
+    ? `<p class="wb-uses-note">Questo colore compare come sfondo nelle coppie del catalogo: è una dipendenza del token di sfondo.</p>`
+    : "";
+  return {
+    total: filtered.length,
+    count: pickerCountText(filtered.length, "", ""),
+    categoriesHtml: pickerCategoryOptionsHtml(candidates.pairs),
+    resultsHtml: `${list}${note}`,
+    sourceNote: pickerSourceNote(sourceToken, sources),
+  };
 }
 
 /**
- * Static guided workbench. The interactive workspace is the main content: a compact source rail with
- * clickable source swatches and generated catalogue pair rows, then the comparison area with the
- * visible pair identity, the criterion, the real CSS specimens and their scoped results. The verbose
- * source-palette archive follows it inside a closed native detail. Every action is a native control
- * and remains inert without JS.
+ * Static guided workbench. The interactive workspace is the main content: a compact horizontal toolbar
+ * with the bounded source strip, a human current-use summary and a "Cambia uso" opener, the
+ * comparison modes and the theme, then the full-width comparison area with the visible pair identity,
+ * the real CSS specimens and their scoped results. The opener reveals a native modal with search,
+ * category and paginated uses. The verbose source-palette archive follows it inside a closed native
+ * detail. Every action is a native control and remains inert without JS.
  */
 export function renderContrastWorkbench(session) {
   const value = record(session) ? session : {};
@@ -927,36 +1108,61 @@ export function renderContrastWorkbench(session) {
   // sync with the active selection.
   const defaultSource = selected && selected.sources.length ? selected.sources[0] : "";
   const currentTitle = selected ? selected.title : "Nessuna coppia selezionata";
+  const currentHuman = selected ? pairPickerDisplay(selected) : "Nessuna coppia selezionata";
+  const currentKind = selected ? pairKindLabel(selected) : "";
+  const currentTech = selected && !pairHasPickerLabel(selected) ? `${selected.foreground} su ${selected.background}` : "";
+  const picker = pickerModel(pairs, design, sources, defaultSource, selected ? pickerValue(selected) : "");
   const identityHtml = pairIdentityHtml(selected);
   const purposeText = pairPurposeText(selected);
   return `<section id="banco" aria-labelledby="banco-titolo"><h2 id="banco-titolo" class="wb-visually-hidden">Banco di contrasto guidato</h2>
 <div id="${HOST_ID}" ${HOOK}="host" role="region" aria-label="Banco di contrasto guidato">
 <noscript><p class="wb-nojs">JavaScript è disattivato: i pulsanti dei colori restano inerti e nessuna misura live viene eseguita.</p></noscript>
-<div class="wb-layout">
-<aside class="wb-rail" aria-labelledby="smart-colors-workbench-choose-title">
-<h3 id="smart-colors-workbench-choose-title" class="wb-rail-title">Colori sorgente</h3>
-<p class="wb-rail-note">Colori originali da palette.css.</p>
-<div class="wb-field wb-source-select"><label for="smart-colors-workbench-source">Sorgente della palette</label><select id="smart-colors-workbench-source" ${HOOK}="source">${sourceOptionsHtml(sources.entries, selected)}</select></div>
+<div class="wb-workspace">
+<section class="wb-toolbar" aria-labelledby="smart-colors-workbench-toolbar-title">
+<h3 id="smart-colors-workbench-toolbar-title" class="wb-visually-hidden">Selezione e confronto</h3>
+<div class="wb-toolbar-line wb-palette-line">
+<div class="wb-field wb-source-select"><label for="smart-colors-workbench-source">Colore sorgente</label><select id="smart-colors-workbench-source" ${HOOK}="source">${sourceOptionsHtml(sources.entries, selected)}</select></div>
+<span id="smart-colors-workbench-palette-label" class="wb-palette-label">Colore sorgente</span>
 ${sourceSwatchesHtml(sources.entries, defaultSource)}
-<h3 id="smart-colors-workbench-uses-title" class="wb-rail-title">Coppie del catalogo generato</h3>
-<p class="wb-rail-note">Abbinamenti generati, non usi rilevati nel sito.</p>
-<div id="smart-colors-workbench-uses" ${HOOK}="uses">${sourceUsesHtml(pairs, design, defaultSource)}</div>
-</aside>
+</div>
+<div class="wb-toolbar-line wb-control-line">
+<div class="wb-current-use">
+<span class="wb-current-use-label">Uso attuale</span>
+<p id="smart-colors-workbench-current-use" ${HOOK}="current-use" class="wb-current-use-value"><strong>${escape(currentHuman)}</strong>${currentKind ? `<span class="wb-current-use-kind">${escape(currentKind)}</span>` : ""}${currentTech ? `<code class="wb-current-use-tech">${escape(currentTech)}</code>` : ""}</p>
+</div>
+<button type="button" id="smart-colors-workbench-open-picker" ${HOOK}="open-picker" class="wb-open-picker" disabled>Cambia uso</button>
+<form id="smart-colors-workbench-selection" class="wb-compare" data-smart-colors-workbench="selection">
+<fieldset class="wb-fieldset"><legend>Confronta</legend><label><input id="smart-colors-workbench-comparison-themes" type="radio" name="smart-colors-workbench-comparison" value="themes" checked> Chiaro / scuro</label><label><input id="smart-colors-workbench-comparison-tuning" type="radio" name="smart-colors-workbench-comparison" value="tuning"${tuning.available ? "" : " disabled"}> Generato / personalizzato</label><label><input id="smart-colors-workbench-comparison-draft" type="radio" name="smart-colors-workbench-comparison" value="draft"${tuning.available ? "" : " disabled"}> Prima / dopo</label>${tuning.available ? "" : `<span class="margin-note">Confronti personalizzati non disponibili: ${escape(tuning.reason)}.</span>`}</fieldset>
+<fieldset class="wb-fieldset wb-theme-fieldset"><legend>Tema da modificare</legend><label><input id="smart-colors-workbench-theme-light" type="radio" name="smart-colors-workbench-theme" value="light" form="smart-colors-workbench-selection" checked> chiaro</label><label><input id="smart-colors-workbench-theme-dark" type="radio" name="smart-colors-workbench-theme" value="dark" form="smart-colors-workbench-selection"> scuro</label></fieldset>
+</form>
+</div>
+</section>
 <div class="wb-main">
 <header class="wb-head">
 <h3 id="smart-colors-workbench-current" ${HOOK}="current" class="wb-current"><strong>${escape(currentTitle)}</strong></h3>
 <p id="smart-colors-workbench-identity" ${HOOK}="identity" class="wb-identity">${identityHtml}</p>
 <p id="smart-colors-workbench-purpose" ${HOOK}="purpose" class="wb-purpose">${escape(purposeText)}</p>
 </header>
-<form id="smart-colors-workbench-selection" class="wb-selection wb-compare" data-smart-colors-workbench="selection">
-<fieldset class="wb-fieldset"><legend>Confronta</legend><label><input id="smart-colors-workbench-comparison-themes" type="radio" name="smart-colors-workbench-comparison" value="themes" checked> Chiaro / scuro</label><label><input id="smart-colors-workbench-comparison-tuning" type="radio" name="smart-colors-workbench-comparison" value="tuning"${tuning.available ? "" : " disabled"}> Generato / personalizzato</label><label><input id="smart-colors-workbench-comparison-draft" type="radio" name="smart-colors-workbench-comparison" value="draft"${tuning.available ? "" : " disabled"}> Prima / dopo</label>${tuning.available ? "" : `<span class="margin-note">Confronti personalizzati non disponibili: ${escape(tuning.reason)}.</span>`}</fieldset>
-</form>
 <p id="smart-colors-workbench-status" ${HOOK}="status" role="status" aria-live="polite" class="wb-status">Misura non disponibile senza JavaScript.</p>
 <div id="smart-colors-workbench-result" ${HOOK}="result" class="wb-frames" aria-label="Campioni CSS del consumatore">
 <section class="wb-view" aria-labelledby="smart-colors-workbench-left-title"><h3 id="smart-colors-workbench-left-title" class="wb-view-title">Tema chiaro</h3><div id="smart-colors-workbench-left" ${HOOK}="left" class="wb-frame" role="group" aria-label="Vista CSS sinistra"></div><dl id="smart-colors-workbench-left-measure" ${HOOK}="left-measure" class="wb-measure"><div class="wb-measure-row"><dt>Rapporto</dt><dd><span class="wb-verdict" data-status="unmeasured">Non misurato</span> · serve JavaScript</dd></div></dl></section>
 <section class="wb-view" aria-labelledby="smart-colors-workbench-right-title"><h3 id="smart-colors-workbench-right-title" class="wb-view-title">Tema scuro</h3><div id="smart-colors-workbench-right" ${HOOK}="right" class="wb-frame" role="group" aria-label="Vista CSS destra"></div><dl id="smart-colors-workbench-right-measure" ${HOOK}="right-measure" class="wb-measure"><div class="wb-measure-row"><dt>Rapporto</dt><dd><span class="wb-verdict" data-status="unmeasured">Non misurato</span> · serve JavaScript</dd></div></dl></section>
 </div>
+<p id="smart-colors-workbench-empty" ${HOOK}="empty" class="wb-uses-empty" hidden>Nessuna coppia diagnostica per questa sorgente. Scegli un altro colore.</p>
 <p class="wb-scope-note">Le misure valgono per la coppia e il tema mostrati: non sono un verdetto di conformità globale.</p>
+<section class="wb-action-strip wb-suggestions" data-smart-colors-workbench="correction" aria-labelledby="smart-colors-workbench-suggestions-title">
+<div class="wb-strip-head"><h3 id="smart-colors-workbench-suggestions-title">Cerca una correzione</h3><p id="smart-colors-workbench-action-theme" ${HOOK}="action-theme" class="wb-action-theme">Tema per proposta e override: chiaro.</p></div>
+<div class="wb-actions"><button type="button" id="smart-colors-workbench-suggest-foreground" ${HOOK}="suggest-foreground">Correggi testo</button><button type="button" id="smart-colors-workbench-suggest-background" ${HOOK}="suggest-background">Correggi sfondo</button><button type="button" id="smart-colors-workbench-discard-suggestion" ${HOOK}="discard-suggestion" hidden disabled>Scarta proposta</button><button type="button" id="smart-colors-workbench-apply" ${HOOK}="apply" hidden disabled>Prova proposta</button></div>
+<div id="smart-colors-workbench-proposal" ${HOOK}="proposal" class="wb-proposal">Nessuna proposta richiesta.</div>
+<section id="smart-colors-workbench-proposal-frames" ${HOOK}="proposal-frames" class="wb-frames wb-proposal-frames" hidden aria-labelledby="smart-colors-workbench-proposal-frames-title">
+<h4 id="smart-colors-workbench-proposal-frames-title">Viste verificate della proposta</h4>
+<section class="wb-view" aria-labelledby="smart-colors-workbench-proposal-before-title"><h4 id="smart-colors-workbench-proposal-before-title">Attuale</h4><div id="smart-colors-workbench-proposal-before" ${HOOK}="proposal-before" class="wb-frame" role="region" tabindex="0" aria-label="Vista CSS attuale della proposta: viewport di verifica fisso 360×480; scorri orizzontalmente per vedere tutta la vista"></div></section>
+<section class="wb-view" aria-labelledby="smart-colors-workbench-proposal-after-title"><h4 id="smart-colors-workbench-proposal-after-title">Proposta</h4><div id="smart-colors-workbench-proposal-after" ${HOOK}="proposal-after" class="wb-frame" role="region" tabindex="0" aria-label="Vista CSS proposta: viewport di verifica fisso 360×480; scorri orizzontalmente per vedere tutta la vista"></div></section>
+</section>
+<details class="is-detail wb-how"><summary>Come funziona la ricerca della correzione</summary>
+<p class="margin-note">La ricerca varia la luminosità quanto basta per raggiungere il minimo dichiarato, non il target del progetto, e non cerca il colore più vicino in ΔE.</p>
+</details>
+</section>
 <details class="is-detail wb-criteria" data-smart-colors-workbench="criteria"><summary>Soglie di riferimento e testo grande</summary>
 <dl class="wb-criteria-list">
 <div><dt>Testo normale · AA</dt><dd>4,5:1 · <a href="https://www.w3.org/TR/WCAG22/#contrast-minimum">SC 1.4.3</a></dd></div>
@@ -968,28 +1174,9 @@ ${sourceSwatchesHtml(sources.entries, defaultSource)}
 <div><dt>Target del progetto</dt><dd>Obiettivo separato dal minimo WCAG; per esempio 7,5:1 non è una soglia WCAG.</dd></div>
 </dl>
 </details>
-<p id="smart-colors-workbench-empty" ${HOOK}="empty" class="wb-uses-empty" hidden>Nessuna coppia diagnostica per questa sorgente. Scegli un altro colore.</p>
-<fieldset class="wb-fieldset wb-theme-fieldset"><legend>Tema da modificare</legend><label><input id="smart-colors-workbench-theme-light" type="radio" name="smart-colors-workbench-theme" value="light" form="smart-colors-workbench-selection" checked> chiaro</label><label><input id="smart-colors-workbench-theme-dark" type="radio" name="smart-colors-workbench-theme" value="dark" form="smart-colors-workbench-selection"> scuro</label></fieldset>
-<section class="wb-suggestions" data-smart-colors-workbench="correction" aria-labelledby="smart-colors-workbench-suggestions-title">
-<h3 id="smart-colors-workbench-suggestions-title">Cerca una correzione</h3>
-<p id="smart-colors-workbench-action-theme" ${HOOK}="action-theme" class="wb-action-theme">Tema per proposta e override: chiaro.</p>
-<div class="wb-actions"><button type="button" id="smart-colors-workbench-suggest-foreground" ${HOOK}="suggest-foreground">Correggi testo</button><button type="button" id="smart-colors-workbench-suggest-background" ${HOOK}="suggest-background">Correggi sfondo</button></div>
-<div id="smart-colors-workbench-proposal" ${HOOK}="proposal" class="wb-proposal">Nessuna proposta richiesta.</div>
-<section id="smart-colors-workbench-proposal-frames" ${HOOK}="proposal-frames" class="wb-frames wb-proposal-frames" hidden aria-labelledby="smart-colors-workbench-proposal-frames-title">
-<h4 id="smart-colors-workbench-proposal-frames-title">Proposta verificata: confronto CSS</h4>
-<section class="wb-view" aria-labelledby="smart-colors-workbench-proposal-before-title"><h4 id="smart-colors-workbench-proposal-before-title">Attuale</h4><div id="smart-colors-workbench-proposal-before" ${HOOK}="proposal-before" class="wb-frame" role="region" tabindex="0" aria-label="Vista CSS attuale della proposta: viewport di verifica fisso 360×480; scorri orizzontalmente per vedere tutta la vista"></div></section>
-<section class="wb-view" aria-labelledby="smart-colors-workbench-proposal-after-title"><h4 id="smart-colors-workbench-proposal-after-title">Proposta</h4><div id="smart-colors-workbench-proposal-after" ${HOOK}="proposal-after" class="wb-frame" role="region" tabindex="0" aria-label="Vista CSS proposta: viewport di verifica fisso 360×480; scorri orizzontalmente per vedere tutta la vista"></div></section>
-</section>
-<div class="wb-actions"><button type="button" id="smart-colors-workbench-apply" ${HOOK}="apply" disabled>Prova proposta</button></div>
-<details class="is-detail wb-how"><summary>Come funziona la ricerca della correzione</summary>
-<p class="margin-note">La ricerca varia la luminosità quanto basta per raggiungere il minimo dichiarato, non il target del progetto, e non cerca il colore più vicino in ΔE.</p>
-</details>
-</section>
 <details class="is-detail wb-technical"><summary>Dettagli tecnici della coppia e selezione completa</summary>
 <button type="submit" form="smart-colors-workbench-selection" id="smart-colors-workbench-submit" class="wb-ghost">Aggiorna il confronto</button>
-<div class="wb-picker">
-<div class="wb-field"><label for="smart-colors-workbench-pair">Coppia dal catalogo generato</label><select id="smart-colors-workbench-pair" ${HOOK}="pair"${pairs.length ? "" : " disabled"}>${pairOptionsHtml(pairs, selected)}</select><span class="margin-note">Solo coppie presenti nella diagnostica generata; nessuna coppia inventata.</span></div>
-</div>
+<div class="wb-field wb-pair-field"><label for="smart-colors-workbench-pair">Abbinamento tecnico</label><select id="smart-colors-workbench-pair" ${HOOK}="pair"${pairs.length ? "" : " disabled"}>${pairOptionsHtml(pairs, selected)}</select><span class="margin-note">Fallback tecnico: la scelta principale è «Cambia uso»; questo selettore resta per l'accesso diretto al catalogo completo.</span></div>
 <div id="smart-colors-workbench-details" ${HOOK}="details">${pairDetailsHtml(selected, value, design, language, sources.entries, "light")}</div>
 <details id="smart-colors-workbench-catalogue" ${HOOK}="catalogue" class="is-detail"><summary>Catalogo completo dei token</summary>
 ${tokenCatalogueHtml(design, pairs, sources)}
@@ -1005,13 +1192,35 @@ ${tokenCatalogueHtml(design, pairs, sources)}
 </form>
 </details>
 <details class="is-detail wb-export" data-smart-colors-workbench="export"><summary>Esporta modifiche</summary>
-<div class="wb-actions"><button type="button" id="smart-colors-workbench-export" ${HOOK}="export">Esporta CSS pubblico</button><button type="button" id="smart-colors-workbench-copy-export" ${HOOK}="copy-export">Seleziona il CSS esportato</button></div>
+<p class="margin-note">Il comando di esportazione è nell'intestazione della pagina. Qui restano il CSS generato e il download manuale.</p>
+<div class="wb-actions"><button type="button" id="smart-colors-workbench-copy-export" ${HOOK}="copy-export">Seleziona il CSS esportato</button></div>
+<p id="smart-colors-workbench-export-note" class="margin-note">Nessun tuning pubblico da esportare: nessun override attivo.</p>
 <label for="smart-colors-workbench-export-text">CSS pubblico esportato, selezionabile senza permessi clipboard</label>
-<textarea id="smart-colors-workbench-export-text" ${HOOK}="export-text" readonly rows="8"></textarea>
+<textarea id="smart-colors-workbench-export-text" ${HOOK}="export-text" aria-describedby="smart-colors-workbench-export-note" readonly rows="8"></textarea>
 <a id="smart-colors-workbench-download" ${HOOK}="download" download="colors-tuning.css" hidden>Scarica colors-tuning.css (azione manuale)</a>
 </details>
 </div>
 </div>
+<dialog id="smart-colors-workbench-picker" class="wb-picker-dialog" aria-labelledby="smart-colors-workbench-picker-title" aria-describedby="smart-colors-workbench-picker-source">
+<div class="wb-picker-panel">
+<div class="wb-picker-header">
+<h2 id="smart-colors-workbench-picker-title">Scegli cosa verificare</h2>
+<p id="smart-colors-workbench-picker-source" ${HOOK}="picker-source" class="margin-note">${escape(picker.sourceNote)}</p>
+</div>
+<div class="wb-picker-filters">
+<div class="wb-field"><label for="smart-colors-workbench-use-search">Cerca un uso</label><input id="smart-colors-workbench-use-search" ${HOOK}="use-search" type="search" placeholder="es. testo card" autocomplete="off" spellcheck="false" disabled></div>
+<div class="wb-field"><label for="smart-colors-workbench-use-category">Tipo di uso</label><select id="smart-colors-workbench-use-category" ${HOOK}="use-category" disabled><option value="">Tutti gli usi</option>${picker.categoriesHtml}</select></div>
+<button type="button" id="smart-colors-workbench-clear-search" ${HOOK}="clear-search" class="wb-ghost" disabled>Azzera filtri</button>
+</div>
+<p id="smart-colors-workbench-use-count" ${HOOK}="use-count" role="status" aria-live="polite" class="wb-picker-count">${escape(picker.count)}</p>
+<div id="smart-colors-workbench-uses" ${HOOK}="uses" class="wb-picker-results">${picker.resultsHtml}</div>
+<div class="wb-picker-footer">
+<button type="button" id="smart-colors-workbench-use-prev" ${HOOK}="use-prev" class="wb-pager" aria-disabled="true" disabled>Precedenti</button>
+<button type="button" id="smart-colors-workbench-use-next" ${HOOK}="use-next" class="wb-pager" aria-disabled="true" disabled>Successivi</button>
+<button type="button" id="smart-colors-workbench-close-picker" ${HOOK}="close-picker" disabled>Chiudi</button>
+</div>
+</div>
+</dialog>
 </div>
 </section>
 ${sourcePaletteHtml(value, design, tools, language)}`;
@@ -1067,8 +1276,11 @@ export function createContrastWorkbenchView(deps) {
   var proposalBefore = byId("smart-colors-workbench-proposal-before");
   var proposalAfter = byId("smart-colors-workbench-proposal-after");
   var applyButton = byId("smart-colors-workbench-apply");
+  var discardButton = byId("smart-colors-workbench-discard-suggestion");
   var exportButton = byId("smart-colors-workbench-export");
+  var sessionStatus = byId("smart-colors-workbench-session-status");
   var exportText = byId("smart-colors-workbench-export-text");
+  var exportNote = byId("smart-colors-workbench-export-note");
   var download = byId("smart-colors-workbench-download");
   var copyPalette = byId("smart-colors-workbench-copy-palette");
   var paletteSource = byId("smart-colors-workbench-palette-source");
@@ -1083,10 +1295,22 @@ export function createContrastWorkbenchView(deps) {
   var leftTitle = byId("smart-colors-workbench-left-title");
   var rightTitle = byId("smart-colors-workbench-right-title");
   var usesBox = host.querySelector("[" + HOOK + '="uses"]');
+  var currentUse = byId("smart-colors-workbench-current-use");
+  var openPicker = byId("smart-colors-workbench-open-picker");
+  var pickerDialog = byId("smart-colors-workbench-picker");
+  var pickerSource = byId("smart-colors-workbench-picker-source");
+  var useSearch = byId("smart-colors-workbench-use-search");
+  var useCategory = byId("smart-colors-workbench-use-category");
+  var useClear = byId("smart-colors-workbench-clear-search");
+  var useCount = byId("smart-colors-workbench-use-count");
+  var usePrev = byId("smart-colors-workbench-use-prev");
+  var useNext = byId("smart-colors-workbench-use-next");
+  var closePicker = byId("smart-colors-workbench-close-picker");
   var currentHeading = byId("smart-colors-workbench-current");
   var identityNode = byId("smart-colors-workbench-identity");
   var purposeNode = byId("smart-colors-workbench-purpose");
   var actionThemeNode = byId("smart-colors-workbench-action-theme");
+  var suggestionsTitle = byId("smart-colors-workbench-suggestions-title");
   var resultBox = byId("smart-colors-workbench-result");
   var emptyNote = byId("smart-colors-workbench-empty");
   var correctionBox = host.querySelector("[" + HOOK + '="correction"]');
@@ -1106,6 +1330,10 @@ export function createContrastWorkbenchView(deps) {
   var controlInputs = [];
   var useButtons = [];
   var lastUsesSource = null;
+  var lastUsesKey = null;
+  var pickerQuery = "";
+  var pickerCategory = "";
+  var pickerPage = 0;
   var busy = false;
   // Local copy: the serialized factory must not depend on any module-scope binding.
   var useVisibleLimit = 6;
@@ -1116,6 +1344,7 @@ export function createContrastWorkbenchView(deps) {
   var blockedSource = null;
   var blockedPairId = null;
   var suggestionVerified = false;
+  var suggestionPresent = false;
   var unsubscribe = null;
   var mounted = false;
   var payload = null;
@@ -1732,13 +1961,20 @@ export function createContrastWorkbenchView(deps) {
     var suggestion = state && isRecord(state.suggestion) ? state.suggestion : null;
     if (!suggestion) {
       suggestionVerified = false;
+      suggestionPresent = false;
       setProposalFrames(false);
-      proposal.appendChild(make("p", "margin-note", "Nessuna proposta richiesta."));
-      if (applyButton) applyButton.disabled = true;
+      if (proposal) proposal.hidden = true;
+      if (suggestionsTitle) suggestionsTitle.textContent = "Cerca una correzione";
+      if (applyButton) { applyButton.disabled = true; applyButton.hidden = true; }
+      if (discardButton) { discardButton.hidden = true; discardButton.disabled = true; }
       return;
     }
+    suggestionPresent = true;
+    if (proposal) proposal.hidden = false;
+    if (discardButton) { discardButton.hidden = false; discardButton.disabled = busy || typeof controller.discardSuggestion !== "function"; }
     var statusValue = suggestion.status;
     var verified = statusValue === "verified";
+    if (suggestionsTitle) suggestionsTitle.textContent = verified ? "Proposta di correzione" : "Esito della ricerca";
     setProposalFrames(verified);
     var side = sideName(suggestion.side);
     var title = verified
@@ -1759,17 +1995,20 @@ export function createContrastWorkbenchView(deps) {
       valueLine.appendChild(make("code", "wb-proposal-value", proposedValue));
       proposal.appendChild(valueLine);
     }
-    var identity = [];
-    if (suggestion.control) identity.push("controllo " + suggestion.control);
-    if (suggestion.token) identity.push("token " + suggestion.token);
-    identity.push("lato " + side);
-    proposal.appendChild(make("p", "margin-note", identity.join(" · ") + "."));
     var threshold = suggestionThresholds(state);
     if (suggestion.before !== undefined || suggestion.after !== undefined) {
       proposal.appendChild(make("p", null, "Prima: " + (finite(suggestion.before) ? ratioText(suggestion.before, threshold.list) : "non misurata") + " · Dopo: " + (finite(suggestion.after) ? ratioText(suggestion.after, threshold.list) : "non misurata") + "."));
     }
+    // The identity and the runtime reasoning stay available, but the decision surface stays short:
+    // only the values that change and the before/after ratios remain visible by default.
+    var technical = [];
+    var identity = [];
+    if (suggestion.control) identity.push("controllo " + suggestion.control);
+    if (suggestion.token) identity.push("token " + suggestion.token);
+    identity.push("lato " + side);
+    technical.push(make("p", "margin-note", identity.join(" · ") + "."));
     if ((threshold.minimum !== null || threshold.target !== null) && statusValue !== "none") {
-      proposal.appendChild(make("p", "margin-note", "Soglia rilevante: " + (threshold.minimum !== null ? "minimo " + ratioText(threshold.minimum) : "minimo non dichiarato") + " · " + (threshold.target !== null ? "target " + ratioText(threshold.target) : "target non dichiarato") + "."));
+      technical.push(make("p", "margin-note", "Soglia rilevante: " + (threshold.minimum !== null ? "minimo " + ratioText(threshold.minimum) : "minimo non dichiarato") + " · " + (threshold.target !== null ? "target " + ratioText(threshold.target) : "target non dichiarato") + "."));
     }
     var delta = deltaText(suggestion.deltaL);
     var gamut = suggestion.gamutAdjusted === true;
@@ -1777,23 +2016,44 @@ export function createContrastWorkbenchView(deps) {
       var deltaLine = delta !== null ? "ΔL " + delta + "." : "";
       if (gamut) deltaLine += (deltaLine ? " " : "") + "Il fit di gamut ha ridotto il chroma: hue resta l'intento, ma non è garantito identico.";
       else deltaLine += (deltaLine ? " " : "") + "Nessun aggiustamento di gamut applicato.";
-      proposal.appendChild(make("p", "margin-note", deltaLine));
+      technical.push(make("p", "margin-note", deltaLine));
     }
     var checked = countOf(suggestion.checked);
-    if (checked !== null) proposal.appendChild(make("p", "margin-note", "Controlli eseguiti: " + checked + (countOf(suggestion.unmeasured) !== null ? " · non misurati: " + countOf(suggestion.unmeasured) : "") + "."));
+    if (checked !== null) technical.push(make("p", "margin-note", "Controlli eseguiti: " + checked + (countOf(suggestion.unmeasured) !== null ? " · non misurati: " + countOf(suggestion.unmeasured) : "") + "."));
     var regressions = Array.isArray(suggestion.regressions) ? suggestion.regressions : [];
-    if (regressions.length) proposal.appendChild(make("p", "margin-note", "Regressioni: " + regressions.map(regressionText).join("; ") + "."));
+    if (regressions.length) technical.push(make("p", "margin-note", "Regressioni: " + regressions.map(regressionText).join("; ") + "."));
     var scope = scopeText(suggestion.scope);
-    if (scope) proposal.appendChild(make("p", "margin-note", scope));
-    if (suggestion.reason) {
-      var reasonDetails = make("details");
-      reasonDetails.appendChild(make("summary", null, "Dettaglio tecnico"));
-      reasonDetails.appendChild(make("p", "margin-note", String(suggestion.reason)));
-      proposal.appendChild(reasonDetails);
+    if (scope) technical.push(make("p", "margin-note", scope));
+    if (suggestion.reason) technical.push(make("p", "margin-note", String(suggestion.reason)));
+    if (technical.length) {
+      var technicalDetails = make("details", "is-detail");
+      technicalDetails.appendChild(make("summary", null, "Dettagli tecnici della proposta"));
+      for (var technicalIndex = 0; technicalIndex < technical.length; technicalIndex += 1) technicalDetails.appendChild(technical[technicalIndex]);
+      proposal.appendChild(technicalDetails);
     }
-    if (verified) proposal.appendChild(make("p", "margin-note", "La proposta è temporanea: applicala come override e verifica le due viste. Non rigenera il generatore."));
+    if (verified) proposal.appendChild(make("p", "margin-note", "Anteprima non applicata: usa Prova proposta per applicarla come override temporaneo."));
     suggestionVerified = Boolean(verified);
-    if (applyButton) applyButton.disabled = !verified;
+    if (applyButton) { applyButton.hidden = !verified; applyButton.disabled = !verified; }
+  }
+  // Honest session line owned by the shell: a local preview is not a saved report. A verified but
+  // unapplied proposal and unsaved draft changes are named explicitly instead of implying persistence.
+  function renderSessionStatus(state) {
+    if (!sessionStatus) return;
+    var suggestion = state && isRecord(state.suggestion) ? state.suggestion : null;
+    var draft = state && isRecord(state.draft) ? state.draft : {};
+    var draftCount = Object.keys(draft).length;
+    var phase = state && state.phase ? String(state.phase) : "idle";
+    var message = "Anteprima locale";
+    if (sourceBlocked) message += " · selezione non disponibile";
+    else if (suggestion && suggestion.status === "verified") message += " · proposta verificata in attesa";
+    else if (draftCount) message += " · " + (draftCount === 1 ? "1 modifica in bozza non salvata" : draftCount + " modifiche in bozza non salvate");
+    if (!sourceBlocked && suggestion && suggestion.status !== "verified") {
+      if (suggestion.status === "none") message += " · minimo già raggiunto";
+      else if (suggestion.status === "regression") message += " · candidato scartato";
+      else message += " · ricerca non disponibile";
+    }
+    if (phase === "running") message += " · verifica in corso";
+    setIfChanged(sessionStatus, message);
   }
   // Details depend on the active selection and on the current draft (the draft line changes when an
   // override is saved). The signature avoids rebuilding the panel on unrelated renders, which would
@@ -1921,6 +2181,17 @@ export function createContrastWorkbenchView(deps) {
     if (!actionThemeNode) return;
     setIfChanged(actionThemeNode, "Tema per proposta e override: " + themeName(checkedTheme()) + ".");
   }
+  // The toolbar summary is a human use, not a token list. An unknown catalogue pair keeps a neutral
+  // label and exposes the exact tokens only as a secondary technical identifier.
+  function renderCurrentUse() {
+    if (!currentUse) return;
+    clear(currentUse);
+    var option = sourceBlocked ? null : selectedOption();
+    if (!option) { currentUse.appendChild(make("span", null, "Nessun uso disponibile")); return; }
+    currentUse.appendChild(make("strong", null, pickerHuman(option)));
+    currentUse.appendChild(make("span", "wb-current-use-kind", optionKindLabel(option)));
+    if (!pickerHasHuman(option)) currentUse.appendChild(make("code", "wb-current-use-tech", pickerTech(option)));
+  }
   function renderCurrent() {
     var option = selectedOption();
     if (currentHeading) {
@@ -1933,6 +2204,7 @@ export function createContrastWorkbenchView(deps) {
       }
     }
     renderIdentity(sourceBlocked ? null : option);
+    renderCurrentUse();
     if (purposeNode) setIfChanged(purposeNode, sourceBlocked ? "Nessun criterio applicato: la sorgente non ha una coppia disponibile." : purposeFor(option));
     renderActionTheme();
   }
@@ -1994,15 +2266,190 @@ export function createContrastWorkbenchView(deps) {
     if (matched.foreground.length) return { options: rankOptions(matched.foreground), backgroundOnly: false };
     return { options: rankOptions(matched.background), backgroundOnly: matched.background.length > 0 };
   }
+  function pickerFold(value) {
+    var raw = textOf(value).toLowerCase();
+    if (typeof raw.normalize === "function") {
+      try { return raw.normalize("NFD").replace(/[\u0300-\u036f]/g, ""); } catch (error) { return raw; }
+    }
+    return raw;
+  }
+  function pickerSourceName(token) {
+    if (!token) return "Tutte le sorgenti";
+    var meta = designEntry(token);
+    if (meta && typeof meta.name === "string" && meta.name) return meta.name.charAt(0).toUpperCase() + meta.name.slice(1);
+    var short = token.replace(/^--/, "").replace(/^(palette|color)-/, "");
+    var words = short.split("-").filter(Boolean);
+    if (!words.length) return token;
+    var out = [];
+    for (var index = 0; index < words.length; index += 1) out.push(words[index].charAt(0).toUpperCase() + words[index].slice(1));
+    return out.join(" ");
+  }
+  function pickerFallback(option) {
+    return (attribute(option, "data-fg") || "") + " su " + (attribute(option, "data-bg") || "");
+  }
+  function usageHasHuman(option) {
+    var usage = attribute(option, "data-usage") || "";
+    return Boolean(usage) && usage !== pickerFallback(option) && usage.indexOf("--") !== 0;
+  }
+  function usageHuman(option) {
+    return usageHasHuman(option) ? attribute(option, "data-usage") || "" : "Uso senza nome";
+  }
+  // Picker labels are authoritative and serialized per option. A known on-color pair can be
+  // readable in the picker while the existing data-usage / full heading contract stays untouched.
+  function pickerHasHuman(option) {
+    var label = attribute(option, "data-picker-label");
+    if (label !== null) return Boolean(label);
+    return usageHasHuman(option);
+  }
+  function pickerHuman(option) {
+    var label = attribute(option, "data-picker-label");
+    if (label !== null) return label || "Uso senza nome";
+    return usageHuman(option);
+  }
+  function pickerTech(option) {
+    return pickerFallback(option);
+  }
+  function pickerBucket(option) {
+    return attribute(option, "data-use-bucket") || "other";
+  }
+  function pickerBucketLabel(bucket) {
+    if (bucket === "page") return "Testo su pagina";
+    if (bucket === "callout") return "Riquadri";
+    if (bucket === "button") return "Pulsanti";
+    if (bucket === "border") return "Bordi";
+    if (bucket === "focus") return "Indicatore statico";
+    return "Altri usi";
+  }
+  function pickerSearchText(option) {
+    var parts = [
+      attribute(option, "data-usage"),
+      attribute(option, "data-picker-label"),
+      attribute(option, "data-fg"),
+      attribute(option, "data-bg"),
+      optionKindLabel(option),
+      attribute(option, "data-sources"),
+      attribute(option, "data-fg-sources"),
+      attribute(option, "data-bg-sources"),
+    ];
+    var sources = [attribute(option, "data-sources"), attribute(option, "data-fg-sources"), attribute(option, "data-bg-sources")].join(" ").split(/\s+/);
+    for (var index = 0; index < sources.length; index += 1) {
+      if (sources[index]) parts.push(pickerSourceName(sources[index]));
+    }
+    return pickerFold(parts.join(" "));
+  }
+  // Preferred foreground uses win; a source that only appears as a background dependency falls back
+  // to that explicit scope. The current option is kept in the pool when it is compatible, so an
+  // external runtime selection always has a truthful selected row.
+  function pickerCandidates(chosen) {
+    var list = options();
+    var pool = [];
+    var backgroundOnly = false;
+    var active = null;
+    var activeValue = pairSelect ? pairSelect.value : "";
+    if (!chosen) {
+      pool = list.slice();
+      for (var allIndex = 0; allIndex < list.length; allIndex += 1) if (list[allIndex].value === activeValue) { active = list[allIndex]; break; }
+    } else {
+      var matched = matchUses(chosen);
+      backgroundOnly = !matched.foreground.length && matched.background.length > 0;
+      pool = matched.foreground.length ? matched.foreground.slice() : matched.background.slice();
+      var union = matched.foreground.concat(matched.background);
+      for (var match = 0; match < union.length; match += 1) if (union[match].value === activeValue) { active = union[match]; break; }
+      if (active && pool.indexOf(active) === -1) pool.unshift(active);
+    }
+    return { options: diversified(pool, active), backgroundOnly: backgroundOnly, active: active };
+  }
+  function pickerFiltered(scope) {
+    var words = pickerFold(pickerQuery).split(/\s+/).filter(Boolean);
+    var filtered = [];
+    for (var index = 0; index < scope.options.length; index += 1) {
+      var option = scope.options[index];
+      if (pickerCategory && pickerBucket(option) !== pickerCategory) continue;
+      if (words.length) {
+        var haystack = pickerSearchText(option);
+        var matched = true;
+        for (var word = 0; word < words.length; word += 1) {
+          if (haystack.indexOf(words[word]) === -1) { matched = false; break; }
+        }
+        if (!matched) continue;
+      }
+      filtered.push(option);
+    }
+    return filtered;
+  }
+  function pickerCountText(total) {
+    var pages = Math.max(1, Math.ceil(total / useVisibleLimit));
+    if (total === 0) {
+      return pickerQuery || pickerCategory
+        ? "Nessun uso corrisponde ai filtri. Modifica la ricerca o scegli Tutti gli usi."
+        : "Nessun uso disponibile per questa sorgente.";
+    }
+    var page = Math.min(pickerPage, pages - 1);
+    return total + (total === 1 ? " uso" : " usi") + " · pagina " + (page + 1) + " di " + pages;
+  }
+  function renderPickerSource(chosen) {
+    if (!pickerSource) return;
+    setIfChanged(pickerSource, "Sorgente: " + pickerSourceName(chosen) + ". Usi generati dalla palette, non rilevati nel sito.");
+  }
+  function buildPickerCategories(scope) {
+    if (!useCategory) return;
+    var present = {};
+    for (var index = 0; index < scope.options.length; index += 1) present[pickerBucket(scope.options[index])] = true;
+    var keep = pickerCategory && present[pickerCategory] ? pickerCategory : "";
+    clear(useCategory);
+    var all = make("option", null, "Tutti gli usi");
+    all.value = "";
+    useCategory.appendChild(all);
+    var order = ["page", "callout", "button", "border", "focus", "other"];
+    for (var bucket = 0; bucket < order.length; bucket += 1) {
+      if (!present[order[bucket]]) continue;
+      var option = make("option", null, pickerBucketLabel(order[bucket]));
+      option.value = order[bucket];
+      useCategory.appendChild(option);
+    }
+    useCategory.value = keep;
+    pickerCategory = keep;
+  }
+  function setPagerState(button, enabled) {
+    if (!button) return;
+    // Keep the pager focusable: aria-disabled communicates the boundary without dropping focus
+    // to the body when the user reaches the first or last page.
+    button.disabled = false;
+    button.setAttribute("aria-disabled", enabled ? "false" : "true");
+  }
+  function updateUsePressed(active) {
+    for (var index = 0; index < useButtons.length; index += 1) {
+      var button = useButtons[index];
+      var on = attribute(button, "data-pair-value") === active;
+      button.setAttribute("aria-pressed", on ? "true" : "false");
+      button.disabled = false;
+    }
+  }
+  function resetPickerFilters() {
+    pickerQuery = "";
+    pickerCategory = "";
+    pickerPage = 0;
+    if (useSearch && useSearch.value !== "") useSearch.value = "";
+    if (useCategory && useCategory.value !== "") useCategory.value = "";
+  }
   function useButton(option) {
     var li = make("li");
     var button = make("button", "wb-use");
     button.type = "button";
     setAttribute(button, "data-smart-colors-workbench", "use");
     setAttribute(button, "data-pair-value", option.value);
-    button.setAttribute("aria-pressed", "false");
+    button.setAttribute("aria-pressed", pairSelect && pairSelect.value === option.value ? "true" : "false");
     button.disabled = false;
-    button.appendChild(make("span", "wb-use-label", attribute(option, "data-usage") || option.value));
+    var main = make("span", "wb-use-main");
+    main.appendChild(make("span", "wb-use-label", pickerHuman(option)));
+    if (!pickerHasHuman(option)) {
+      var tech = make("span", "wb-use-tech");
+      tech.appendChild(make("code", null, attribute(option, "data-fg") || ""));
+      tech.appendChild(make("span", null, " su "));
+      tech.appendChild(make("code", null, attribute(option, "data-bg") || ""));
+      main.appendChild(tech);
+    }
+    button.appendChild(main);
     button.appendChild(make("span", "wb-use-kind", optionKindLabel(option)));
     var mark = make("span", "wb-use-mark", "✓");
     mark.setAttribute("aria-hidden", "true");
@@ -2012,54 +2459,53 @@ export function createContrastWorkbenchView(deps) {
     bindUse(button);
     return li;
   }
-  // The uses list is rebuilt only when the source changes. The primary choices stay visible (max six)
-  // and the remainder lives in one native detail, so a background dependency never dumps the whole
-  // catalogue. The active option is pinned first so an external selection is always visible.
-  function buildUses(chosen) {
+  function buildUses(scope) {
     useButtons = [];
     if (!usesBox) return;
     clear(usesBox);
-    if (!chosen) { usesBox.appendChild(make("p", "wb-uses-empty", "Scegli un colore per vedere le coppie generate che lo usano.")); return; }
-    var matched = matchUses(chosen);
-    var uses = matched.foreground.length ? matched.foreground : matched.background;
-    var backgroundOnly = !matched.foreground.length && matched.background.length > 0;
-    if (!uses.length) { usesBox.appendChild(make("p", "wb-uses-empty", "Nessuna coppia diagnostica per questo colore. Il catalogo non ne inventa.")); return; }
-    var active = pairSelect ? pairSelect.value : "";
-    var activeOption = null;
-    for (var match = 0; match < uses.length; match += 1) if (uses[match].value === active) activeOption = uses[match];
-    if (!activeOption && active) {
-      var union = matched.foreground.concat(matched.background);
-      for (var find = 0; find < union.length; find += 1) if (union[find].value === active) { activeOption = union[find]; break; }
+    if (pickerCategory) {
+      var categoryFound = false;
+      for (var candidate = 0; candidate < scope.options.length; candidate += 1) {
+        if (pickerBucket(scope.options[candidate]) === pickerCategory) { categoryFound = true; break; }
+      }
+      if (!categoryFound) { pickerCategory = ""; if (useCategory) useCategory.value = ""; }
     }
-    var ordered = diversified(uses, activeOption);
-    var visible = ordered.slice(0, useVisibleLimit);
-    var rest = ordered.slice(useVisibleLimit);
-    var list = make("ul", "wb-uses");
-    for (var index = 0; index < visible.length; index += 1) list.appendChild(useButton(visible[index]));
-    usesBox.appendChild(list);
-    if (backgroundOnly) usesBox.appendChild(make("p", "wb-uses-note", "Questo colore compare come sfondo nelle coppie del catalogo: è una dipendenza del token di sfondo."));
-    if (rest.length) {
-      var more = make("details", "is-detail wb-more");
-      more.appendChild(make("summary", null, "Altre coppie (" + rest.length + ")"));
-      var moreList = make("ul", "wb-uses");
-      for (var extra = 0; extra < rest.length; extra += 1) moreList.appendChild(useButton(rest[extra]));
-      more.appendChild(moreList);
-      usesBox.appendChild(more);
+    var filtered = pickerFiltered(scope);
+    var pages = Math.max(1, Math.ceil(filtered.length / useVisibleLimit));
+    if (pickerPage >= pages) pickerPage = pages - 1;
+    if (pickerPage < 0) pickerPage = 0;
+    var start = pickerPage * useVisibleLimit;
+    var visible = filtered.slice(start, start + useVisibleLimit);
+    if (visible.length) {
+      var list = make("ul", "wb-uses");
+      for (var index = 0; index < visible.length; index += 1) list.appendChild(useButton(visible[index]));
+      usesBox.appendChild(list);
+    } else {
+      usesBox.appendChild(make("p", "wb-uses-empty", pickerCountText(0)));
     }
+    if (scope.backgroundOnly) usesBox.appendChild(make("p", "wb-uses-note", "Questo colore compare come sfondo nelle coppie del catalogo: è una dipendenza del token di sfondo."));
+    if (useCount) setIfChanged(useCount, pickerCountText(filtered.length));
+    setPagerState(usePrev, pickerPage > 0);
+    setPagerState(useNext, pickerPage < pages - 1);
   }
-  // Pressed/disabled state is updated in place when the source did not change, so a click on an use
-  // chip never rebuilds the list and never moves focus.
+  // The result list is the only region rebuilt by paging and filtering. Query, category and pager
+  // controls keep their focus; a source change resets all filters, while a measurement update with
+  // the same source updates only the pressed state in place.
   function renderUses(chosen) {
-    if (chosen !== lastUsesSource) {
+    var sourceChanged = chosen !== lastUsesSource;
+    if (sourceChanged) {
       lastUsesSource = chosen;
-      buildUses(chosen);
+      resetPickerFilters();
+      renderPickerSource(chosen);
     }
-    var active = pairSelect ? pairSelect.value : "";
-    for (var index = 0; index < useButtons.length; index += 1) {
-      var button = useButtons[index];
-      var on = attribute(button, "data-pair-value") === active;
-      button.setAttribute("aria-pressed", on ? "true" : "false");
-      button.disabled = false;
+    var scope = pickerCandidates(chosen);
+    if (sourceChanged) buildPickerCategories(scope);
+    var key = chosen + "|" + pickerQuery + "|" + pickerCategory + "|" + pickerPage;
+    if (sourceChanged || key !== lastUsesKey) {
+      buildUses(scope);
+      lastUsesKey = chosen + "|" + pickerQuery + "|" + pickerCategory + "|" + pickerPage;
+    } else {
+      updateUsePressed(pairSelect ? pairSelect.value : "");
     }
   }
   function syncPalette() {
@@ -2076,7 +2522,13 @@ export function createContrastWorkbenchView(deps) {
     listen(button, "click", function () { if (busy) return; applySourceSelection(attribute(button, "data-token")); });
   }
   function bindUse(button) {
-    listen(button, "click", function () { if (busy) return; applyUse(button); });
+    listen(button, "click", function () {
+      if (busy) { announce("Verifica in corso: attendi la misura prima di cambiare uso."); return; }
+      var pending = applyUse(button);
+      if (!pending) return;
+      closePickerDialog();
+      if (typeof pending.then === "function") pending.then(function () {}, function () {});
+    });
   }
   function setPairOption(option) {
     if (!pairSelect || !option) return;
@@ -2093,6 +2545,8 @@ export function createContrastWorkbenchView(deps) {
     if (manualBox) manualBox.hidden = sourceBlocked;
     if (exportBox) exportBox.hidden = sourceBlocked;
     if (details) details.hidden = sourceBlocked;
+    if (exportButton) exportButton.disabled = sourceBlocked || busy;
+    renderSessionStatus(stateNow());
   }
   function setSourceBlocked(message, source) {
     sourceBlocked = true;
@@ -2152,18 +2606,48 @@ export function createContrastWorkbenchView(deps) {
     applySelection();
   }
   function applyUse(button) {
-    if (!pairSelect || !button) return;
+    if (!pairSelect || !button) return null;
     var value = attribute(button, "data-pair-value");
-    if (!value) return;
+    if (!value) return null;
     var list = options();
     var found = null;
     for (var index = 0; index < list.length; index += 1) if (list[index].value === value) found = list[index];
-    if (!found) return;
+    if (!found) return null;
     clearSourceBlocked();
     setPairOption(found);
     renderDetails(stateNow());
     renderControls(stateNow());
-    applySelection();
+    return applySelection();
+  }
+  function closePickerDialog() {
+    if (!pickerDialog) return;
+    try {
+      if (typeof pickerDialog.close === "function" && pickerDialog.open) pickerDialog.close();
+      else pickerDialog.open = false;
+    } catch (error) {
+      try { pickerDialog.open = false; } catch (ignored) { /* the dialog is already inert */ }
+    }
+    if (openPicker && !openPicker.disabled && typeof openPicker.focus === "function") openPicker.focus();
+  }
+  function openPickerDialog() {
+    if (!pickerDialog) return;
+    // Opening starts on the first page so the pinned current use is visible and selected.
+    pickerPage = 0;
+    lastUsesKey = null;
+    renderUses(sourceSelect ? sourceSelect.value : "");
+    try {
+      if (typeof pickerDialog.showModal === "function") {
+        if (!pickerDialog.open) pickerDialog.showModal();
+      } else {
+        pickerDialog.open = true;
+      }
+    } catch (error) {
+      try { pickerDialog.open = true; } catch (ignored) { /* the opener remains inert */ }
+    }
+    if (useSearch) {
+      if (typeof useSearch.focus === "function") useSearch.focus();
+      if (typeof useSearch.select === "function") useSearch.select();
+    }
   }
   // The primary path starts on the light/dark comparison, but ONLY from a clean idle state: an already
   // mounted, already running selection or a preexisting draft is never changed. Initialised from the
@@ -2230,18 +2714,20 @@ export function createContrastWorkbenchView(deps) {
       else announce("Misura incompleta: nessun esito globale." + error);
     }
     renderSuggestion(state);
+    renderSessionStatus(state);
     renderControls(state);
     // The exported text is derived from the CURRENT draft: whenever the draft changes, an already
     // published export is recomputed so it can never show a stale previous state.
-    var draftSignature = JSON.stringify(state && isRecord(state.draft) ? state.draft : {});
+    var draftObject = state && isRecord(state.draft) ? state.draft : {};
+    var hasDraft = Object.keys(draftObject).length > 0;
+    var draftSignature = JSON.stringify(draftObject);
     var revision = state && state.revision !== undefined && state.revision !== null ? String(state.revision) : "";
     if (draftSignature !== lastDraftSignature || revision !== lastRevision) {
       lastDraftSignature = draftSignature;
       lastRevision = revision;
-      var hasDraft = state && isRecord(state.draft) && Object.keys(state.draft).length > 0;
       if (hasDraft || (exportText && exportText.value !== "")) refreshExport();
     }
-    if (exportButton) exportButton.disabled = Boolean(state && state.phase === "running");
+    if (exportButton) exportButton.disabled = Boolean(state && state.phase === "running") || sourceBlocked || busy;
     if (state && state.phase === "running" && applyButton) applyButton.disabled = true;
   }
   function run(action, success, failure) {
@@ -2280,7 +2766,35 @@ export function createContrastWorkbenchView(deps) {
     for (var index = 0; index < buttons.length; index += 1) {
       if (buttons[index]) buttons[index].disabled = busy;
     }
+    if (discardButton) discardButton.disabled = busy || !suggestionPresent || typeof controller.discardSuggestion !== "function";
     if (applyButton) applyButton.disabled = busy || !suggestionVerified;
+  }
+  // Focus continuity for actions whose own control is disabled or hidden by the successful publish
+  // that follows. These helpers are called ONLY from explicit click handlers, never from render or
+  // subscribe, so a programmatic state update never moves focus. A user who has already moved focus
+  // to another control keeps it: only a lost/body/own-button focus is recovered.
+  function canTakeFocus(node) {
+    if (!node || node.disabled || node.hidden || typeof node.focus !== "function") return false;
+    if (typeof node.getClientRects === "function" && node.getClientRects().length === 0) return false;
+    if (typeof node.closest === "function" && node.closest("details:not([open])")) return false;
+    return true;
+  }
+  function focusAfterAction(kind) {
+    var active = doc.activeElement;
+    var body = doc.body || null;
+    var root = doc.documentElement || null;
+    var focusLost = !active || active === body || active === root || active === host || active === applyButton || active === discardButton;
+    if (!focusLost) return false;
+    // Apply hands focus to the shell-owned export command (the action that makes the change
+    // durable), falling back to the visible contextual correction if the header is unavailable.
+    var order = kind === "discard"
+      ? [suggestForeground, suggestBackground, exportButton, submit]
+      : [exportButton, suggestForeground, suggestBackground, submit];
+    for (var index = 0; index < order.length; index += 1) {
+      if (!canTakeFocus(order[index])) continue;
+      try { order[index].focus(); return true; } catch (error) { /* try the next stable control */ }
+    }
+    return false;
   }
   function applySelection() {
     var option = selectedOption();
@@ -2375,11 +2889,18 @@ export function createContrastWorkbenchView(deps) {
     var css = controller.exportTuning();
     if (typeof css !== "string") css = "";
     if (exportText) exportText.value = css;
+    if (exportNote) exportNote.textContent = css === ""
+      ? "Nessun tuning pubblico da esportare: nessun override attivo."
+      : "CSS della bozza corrente. Copia o scarica il file per conservarlo: l'anteprima non modifica il progetto.";
     setDownload(css);
     return css;
   }
   function exportTuning() {
+    // The header owns the only export command; opening it reveals the real generated CSS and the
+    // manual download in the secondary disclosure. No second export button exists in the workbench.
+    if (exportBox) exportBox.open = true;
     var css = refreshExport();
+    if (exportText && typeof exportText.focus === "function") exportText.focus();
     if (css === "") { announce("Nessun tuning pubblico da esportare: nessun override attivo."); return; }
     announce("CSS pubblico esportato nel campo selezionabile. Il download resta un'azione manuale.");
   }
@@ -2431,6 +2952,38 @@ export function createContrastWorkbenchView(deps) {
     if (sourceSelect.value === "") { clearSourceBlocked(); filterPairs(); syncPalette(); return; }
     applySourceSelection(sourceSelect.value);
   });
+  listen(openPicker, "click", openPickerDialog);
+  listen(closePicker, "click", closePickerDialog);
+  listen(pickerDialog, "close", function () {
+    if (openPicker && !openPicker.disabled && typeof openPicker.focus === "function") openPicker.focus();
+  });
+  listen(useSearch, "input", function () {
+    pickerQuery = useSearch.value || "";
+    pickerPage = 0;
+    renderUses(sourceSelect ? sourceSelect.value : "");
+  });
+  listen(useCategory, "change", function () {
+    pickerCategory = useCategory.value || "";
+    pickerPage = 0;
+    renderUses(sourceSelect ? sourceSelect.value : "");
+  });
+  listen(useClear, "click", function () {
+    pickerQuery = "";
+    if (useSearch) useSearch.value = "";
+    pickerPage = 0;
+    renderUses(sourceSelect ? sourceSelect.value : "");
+    if (useSearch && typeof useSearch.focus === "function") useSearch.focus();
+  });
+  listen(usePrev, "click", function () {
+    if (attribute(usePrev, "aria-disabled") === "true") return;
+    pickerPage -= 1;
+    renderUses(sourceSelect ? sourceSelect.value : "");
+  });
+  listen(useNext, "click", function () {
+    if (attribute(useNext, "aria-disabled") === "true") return;
+    pickerPage += 1;
+    renderUses(sourceSelect ? sourceSelect.value : "");
+  });
   listen(pairSelect, "change", function () { renderDetails(); renderControls(stateNow()); applySelection(); });
   // A theme change is an immediate selection and a recovery path: a blocked source is re-attempted.
   // The visible identity, criterion and action theme follow the checked radio immediately.
@@ -2455,7 +3008,41 @@ export function createContrastWorkbenchView(deps) {
   listen(resetAll, "click", function () { run(function () { return controller.reset(); }, "Tutto il tuning pubblico è stato azzerato."); });
   listen(suggestForeground, "click", function () { run(function () { return controller.suggest("foreground"); }, "Ricerca della proposta per il primo piano richiesta."); });
   listen(suggestBackground, "click", function () { run(function () { return controller.suggest("background"); }, "Ricerca della proposta per lo sfondo richiesta."); });
-  listen(applyButton, "click", function () { run(function () { return controller.applySuggestion(); }, "Proposta applicata come override temporaneo. Esporta il CSS pubblico per conservarla."); });
+  listen(applyButton, "click", function () {
+    var failed = false;
+    var pending = run(
+      function () { return controller.applySuggestion(); },
+      "Proposta applicata come override temporaneo. Esporta il CSS pubblico per conservarla.",
+      function () { failed = true; }
+    );
+    if (pending && typeof pending.then === "function") {
+      pending.then(function () {
+        // run() calls the failure callback only when the action rejects: only a successful apply hands focus on.
+        if (!failed) focusAfterAction("apply");
+      }, function () { /* the failure path already announced its own error */ });
+    }
+  });
+  // Discarding a proposal is not a reset: the synchronous runtime method clears/invalidates
+  // the suggestion while leaving every saved public override exactly as it is.
+  listen(discardButton, "click", function () {
+    if (!suggestionPresent) { announce("Nessuna proposta da scartare."); return; }
+    if (typeof controller.discardSuggestion !== "function") { announce("Il runtime non espone lo scarto della proposta. Nessun override viene modificato."); return; }
+    try {
+      var discarded = controller.discardSuggestion();
+      var finish = function () {
+        render(stateNow());
+        announce("Proposta scartata: nessun override pubblico è stato modificato.");
+        focusAfterAction("discard");
+      };
+      var failed = function (error) {
+        announce("Scarto non riuscito: " + (error && error.message ? error.message : String(error)) + ". Nessun override viene modificato.");
+      };
+      if (discarded && typeof discarded.then === "function") discarded.then(finish, failed);
+      else finish();
+    } catch (error) {
+      announce("Scarto non riuscito: " + (error && error.message ? error.message : String(error)) + ". Nessun override viene modificato.");
+    }
+  });
   listen(exportButton, "click", exportTuning);
   listen(copyPalette, "click", function () { copyTextarea(paletteSource, "Sorgente palette"); });
   var copyExport = byId("smart-colors-workbench-copy-export");
@@ -2473,6 +3060,11 @@ export function createContrastWorkbenchView(deps) {
     window.addEventListener("pagehide", function () { if (unsubscribe) unsubscribe(); });
   }
   // The source swatches are inert until the factory wires them: only then are they enabled.
+  if (openPicker) openPicker.disabled = false;
+  if (useSearch) useSearch.disabled = false;
+  if (useCategory) useCategory.disabled = false;
+  if (useClear) useClear.disabled = false;
+  if (closePicker) closePicker.disabled = false;
   for (var swatchBind = 0; swatchBind < swatchButtons.length; swatchBind += 1) bindSwatch(swatchButtons[swatchBind]);
   render(stateNow());
   return {
@@ -2498,7 +3090,9 @@ export function createContrastWorkbenchViewSource(globalName) {
   return [
     "(function () {",
     '  "use strict";',
-    "  var createContrastWorkbenchView = " + createContrastWorkbenchView.toString() + ";",
+    // This self-contained factory uses quoted strings, not multiline template literals. Removing
+    // line indentation saves artifact space without stripping comments, newlines or executable code.
+    "  var createContrastWorkbenchView = " + createContrastWorkbenchView.toString().replace(/^[\t ]+/gm, "") + ";",
     "  createContrastWorkbenchView({ controller: globalThis[" + JSON.stringify(name) + "], document: document });",
     "})();",
     "",

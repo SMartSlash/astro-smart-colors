@@ -632,19 +632,22 @@ async function runPreferenceFixture(page, requests, url, contract) {
   const afterRetry = await page.evaluate(async () => {
     const controller = window.__smartColorsDiagnostic;
     const before = controller.report().measuredAt;
-    controller.button.click();
+    const reasons = [];
     await new Promise((resolve) => {
-      const stop = controller.subscribe((snapshot) => {
+      const stop = controller.subscribe((snapshot, reason) => {
+        reasons.push(reason);
         if (snapshot.state === "complete" && snapshot.report && snapshot.report.measuredAt !== before) {
           stop();
           resolve();
         }
       });
+      controller.button.click();
     });
-    return { active: document.activeElement ? document.activeElement.tagName : null, measuredAt: controller.report().measuredAt, before };
+    return { active: document.activeElement ? document.activeElement.tagName : null, measuredAt: controller.report().measuredAt, before, reasons };
   });
   assert.notEqual(afterRetry.measuredAt, afterRetry.before, "the retry button must run the verification again");
   assert.equal(afterRetry.active, "BODY", "focus must not be moved automatically");
+  assert.ok(afterRetry.reasons.includes("retry"), "the retry trigger is published as its own reason, not a generic run");
 
   const serializable = await page.evaluate(() => {
     const json = JSON.stringify(window.__smartColorsDiagnostic.report());

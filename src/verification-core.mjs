@@ -275,6 +275,7 @@ export function createVerificationCore() {
   const STATUS_BELOW_TARGET = "below-target";
   const STATUS_BELOW_MINIMUM = "below-minimum";
   const STATUS_UNMEASURED = "unmeasured";
+  const MEASURED = [STATUS_PASS, STATUS_BELOW_TARGET, STATUS_BELOW_MINIMUM];
 
   // Exploration catalog: a separate, bounded, advisory set of opaque cross-color pairs on the
   // guaranteed base tokens. It never enters the primary catalog, coverage or exit policy. It uses
@@ -531,7 +532,7 @@ export function createVerificationCore() {
       const unexpected = measured.filter((pairId) => !declared.has(pairId));
       const duplicate = duplicates.filter((entry) => entry.scenarioId === id).map((entry) => entry.pairId);
       const unmeasured = measurements
-        .filter((measurement) => measurement.scenarioId === id && measurement.status === STATUS_UNMEASURED)
+        .filter((measurement) => measurement.scenarioId === id && !MEASURED.includes(measurement.status))
         .map((measurement) => measurement.pairId);
       return {
         id,
@@ -559,14 +560,14 @@ export function createVerificationCore() {
         && unexpectedScenarios.length === 0
         && scenarios.every((scenario) => scenario.complete),
       expectedCount: scenarios.reduce((total, scenario) => total + scenario.expected.length, 0),
-      measuredCount: measurements.length,
+      measuredCount: measurements.filter((measurement) => MEASURED.includes(measurement.status)).length,
       scenarios,
       duplicateScenarios,
       missingScenarios: scenarios.filter((scenario) => scenario.measured.length === 0).map((scenario) => scenario.id),
       unexpectedScenarios,
       duplicates,
       unmeasured: measurements
-        .filter((measurement) => measurement.status === STATUS_UNMEASURED)
+        .filter((measurement) => !MEASURED.includes(measurement.status))
         .map((measurement) => ({ scenarioId: measurement.scenarioId, pairId: measurement.pairId })),
     };
   }

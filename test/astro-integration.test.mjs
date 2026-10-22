@@ -79,6 +79,42 @@ test("Astro rejects an explicitly selected missing config before writing outputs
   assert.equal(await readFile(path.join(root, "src/styles/tokens/palette.css"), "utf8"), PALETTE);
 });
 
+test("setup generates and watches from one config snapshot", async (t) => {
+  const root = await createProject(t);
+  const configFile = "smart-colors.config.mjs";
+  const configPath = path.join(root, configFile);
+  const palettePath = path.join(root, "theme/brand.css");
+  await mkdir(path.join(root, "theme"), { recursive: true });
+  await writeFile(palettePath, PALETTE, "utf8");
+  await writeFile(configPath, 'export default { palette: "theme/brand.css", output: "theme/colors.css" };\n', "utf8");
+
+  // A second config load would reject setup, so the count asserts one snapshot per run.
+  let loads = 0;
+  mockFsMethod(t, "access", async (original, file, ...args) => {
+    if (filePath(file) === configPath) {
+      loads += 1;
+      if (loads > 1) throw new Error("config loaded twice");
+    }
+    return original(file, ...args);
+  });
+
+  const watched = [];
+  let vitePlugin;
+  await smartColors({ configFile }).hooks["astro:config:setup"]({
+    config: { root: pathToFileURL(`${root}${path.sep}`) },
+    command: "build",
+    addWatchFile(file) { watched.push(filePath(file)); },
+    updateConfig(config) { [vitePlugin] = config.vite.plugins; },
+    logger: { info() {}, warn() {}, error() {} },
+  });
+  t.after(() => vitePlugin.closeBundle?.());
+
+  assert.equal(loads, 1);
+  // Output and watch list both describe the same snapshot: the configured custom layout.
+  assert.match(await readFile(path.join(root, "theme/colors.css"), "utf8"), /--_color-primary-source: oklch\(0\.62 0\.16 32\);/);
+  assert.deepEqual(watched.sort(), [configPath, palettePath].sort());
+});
+
 const WATCH_EVENTS = ["add", "change", "unlink"];
 
 async function createIntegration(t, { root, options = {}, configure = true } = {}) {

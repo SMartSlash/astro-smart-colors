@@ -36,6 +36,19 @@ const PALETTE = [
   "",
 ].join("\n");
 const TUNING = ":root {\n  --color-tune-text-light: oklch(0.66 0 0);\n}\n";
+// A complete catalogue without any root-file dependency: 16 authored sources, generated scales
+// (`--color-<name>-<step>`) and the design metadata the preview embeds as inert data.
+const LARGE_PALETTE = [
+  ["canvas", "canvas"], ["ink", "ink"], ["lagoon2", "ui"], ["sea-gull", "feedback"],
+  ["citta", "ui"], ["foresta", "ui"], ["montagna", "feedback"], ["deserto", "ui"],
+  ["corallo", "feedback"], ["notte", "ui"], ["grano", "decorative"], ["sabbia", "decorative"],
+  ["rame", "decorative"], ["salvia", "decorative"], ["lavanda", "decorative"], ["arancio", "decorative"],
+].map(([name, role], index) => `@property --palette-${name} { syntax: "<color>"; inherits: true; initial-value: oklch(0.${40 + index} 0.1 ${(index * 37) % 360}); role: ${role}; }`).join("\n");
+const SCALES_CONFIG = "// Budget fixture: generated scales and design metadata, temporary output only.\nexport default { scales: { enabled: true, applyTo: [] } };\n";
+// The approved preview budget (768 KiB). This fixture (16 sources + generated scales, 195 public
+// tokens, 272 diagnostics) renders 761.480 B. The assertion is the contract; the measured number is
+// only orientation and must never be raised to make the test pass.
+const PREVIEW_BUDGET_BYTES = 768 * 1024;
 
 function resolvePlaywright() {
   const base = createRequire(path.join(WORKSPACE_ROOT, "package.json"));
@@ -51,11 +64,11 @@ function resolvePlaywright() {
   return null;
 }
 
-async function buildPreview() {
+async function buildPreview(palette = PALETTE, config = "// Preview UX fixture. Only the temporary output is written.\nexport default {};\n") {
   const root = await mkdtemp(path.join(tmpdir(), "smart-colors-preview-ux-"));
   await mkdir(path.join(root, "src/styles/tokens"), { recursive: true });
-  await writeFile(path.join(root, PALETTE_PATH), PALETTE, "utf8");
-  await writeFile(path.join(root, CONFIG_PATH), "// Preview UX fixture. Only the temporary output is written.\nexport default {};\n", "utf8");
+  await writeFile(path.join(root, PALETTE_PATH), palette, "utf8");
+  await writeFile(path.join(root, CONFIG_PATH), config, "utf8");
   await generateColorTokens({ root, suggest: false });
   await writeFile(path.join(root, TUNING_PATH), TUNING, "utf8");
   const built = await createDiagnosticSession({ root, suggest: false });
@@ -83,7 +96,36 @@ test("the emitted preview labels the matrix as snapshot data and keeps the no-JS
     assert.match(built.html, /<label for="smart-colors-workbench-matrix-search">Cerca un abbinamento<\/label>/);
     assert.match(built.html, /<label for="smart-colors-workbench-matrix-filter">Filtra per esito<\/label>/);
     assert.match(built.html, /live dove misurato, altrimenti stima build/);
+    assert.match(built.html, /id="smart-colors-workbench-result"[^>]*role="group"/);
+    assert.match(built.html, /<pre role="group" tabindex="0" aria-label="Snippet CSS della coppia/);
+    assert.match(built.html, /<section class="wb-view" aria-labelledby="smart-colors-workbench-proposal-frames-title smart-colors-workbench-proposal-before-title">/);
+    assert.match(built.html, /<section class="wb-view" aria-labelledby="smart-colors-workbench-proposal-frames-title smart-colors-workbench-proposal-after-title">/);
+    assert.match(built.html, /<a id="smart-colors-workbench-download" data-smart-colors-workbench="download" hidden>Scarica colors-tuning\.css \(azione manuale\)<\/a>/);
+    assert.doesNotMatch(built.html, /id="smart-colors-workbench-download"[^>]*\bdownload=/);
+    assert.doesNotMatch(built.html, /id="smart-colors-workbench-download"[^>]*\bhref=/);
+    assert.doesNotMatch(built.html, /<div id="smart-colors-workbench"[^>]*role="region"/);
     assert.doesNotMatch(built.html, /Contrasto sufficiente|Contrasto insufficiente/);
+  } finally {
+    await rm(built.root, { recursive: true, force: true });
+  }
+});
+
+test("a complete generated session keeps the preview inside the approved 768 KiB budget", async () => {
+  const built = await buildPreview(LARGE_PALETTE, SCALES_CONFIG);
+  try {
+    // The fixture must stay a full catalogue, otherwise the byte assertion stops meaning anything.
+    assert.equal(built.session.design.sources.length, 16, "the fixture keeps 16 real sources");
+    assert.ok(Object.keys(built.session.design.tokens).length > 150, "the design metadata keeps the generated scales");
+    assert.ok((built.session.model?.diagnostics?.length ?? 0) > 200, "the fixture measures the whole catalogue");
+    const bytes = Buffer.byteLength(built.html, "utf8");
+    assert.ok(bytes <= PREVIEW_BUDGET_BYTES, `preview is ${bytes} bytes, over the ${PREVIEW_BUDGET_BYTES}-byte budget`);
+    // The budget may never be met by dropping the surfaces it protects.
+    for (const marker of [
+      'id="banco"', 'class="wb-matrix"', 'id="smart-colors-workbench-uses"', 'id="smart-colors-workbench-exploration-run"',
+      'id="palette-titolo"', 'id="smart-colors-payload"', 'id="smart-colors-runtime"', "sha256-", "Sorgente CSS",
+    ]) assert.ok(built.html.includes(marker), `the preview keeps ${marker}`);
+    // The catalogue kind is a refinement of data-kind: an equal value is never serialized twice.
+    assert.doesNotMatch(built.html, /data-catalogue-kind="(?:text|non-text)"/, "no redundant catalogue kind");
   } finally {
     await rm(built.root, { recursive: true, force: true });
   }
@@ -100,6 +142,9 @@ test("browser proof: full view measurements fill the matrix, a dependent pair ch
     browser = await playwright.chromium.launch({ headless: true, timeout: 60_000 });
     const context = await browser.newContext({ colorScheme: "light", reducedMotion: "reduce", viewport: { width: 1100, height: 900 } });
     const page = await context.newPage();
+    const pageErrors = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    page.on("console", (message) => { if (message.type() === "error") pageErrors.push(message.text()); });
     await page.goto(pathToFileURL(built.file).href);
     await page.waitForFunction((name) => Boolean(window[name]), WORKBENCH_RUNTIME_GLOBAL);
     await page.waitForFunction(() => window.__smartColorsWorkbench.state().phase === "complete", null, { timeout: 30_000 });
@@ -133,6 +178,23 @@ test("browser proof: full view measurements fill the matrix, a dependent pair ch
     assert.match(initial.headers.join(" "), /tema (chiaro|scuro)/);
     assert.match(initial.headers.join(" "), /senza tuning|con tuning|bozza/);
     assert.ok(initial.originalSource.length > 0, "the fixture must carry a saved tuning source");
+    assert.equal(await page.getAttribute("#smart-colors-workbench-details pre", "role"), "group", "the hydrated snippet keeps an explicit group role after the initial complete phase");
+
+    // Exploration: the real button must be enabled at startup and produce a real table, not only an API call.
+    await page.locator('details[data-smart-colors-workbench="exploration"] summary').click();
+    const exploreButton = page.locator("#smart-colors-workbench-exploration-run");
+    assert.equal(await exploreButton.isDisabled(), false, "exploration is enabled immediately after the startup measurement");
+    await exploreButton.click();
+    await page.waitForFunction(() => {
+      const state = window.__smartColorsWorkbench.state();
+      return state.exploration && state.exploration.phase === "complete";
+    }, null, { timeout: 30_000 });
+    const exploration = await page.evaluate(() => ({
+      rows: document.querySelectorAll("#smart-colors-workbench-exploration-results tbody tr").length,
+      status: document.getElementById("smart-colors-workbench-exploration-status").textContent,
+    }));
+    assert.ok(exploration.rows > 0, "the exploration table has real measurement rows");
+    assert.match(exploration.status, /combinazioni misurate/);
 
     // Keyboard: arrows move focus without selecting; Enter activates the chosen native button.
     const before = await page.evaluate(() => ({
@@ -226,6 +288,7 @@ test("browser proof: full view measurements fill the matrix, a dependent pair ch
     assert.ok(lValidity.numbers.length > 0, "the pair exposes numeric L inputs");
     assert.ok(lValidity.numbers.every((entry) => entry.valid && entry.step === "any"), "the numeric L is valid for the real fraction");
     assert.ok(lValidity.ranges.every((entry) => entry.valid && entry.step === "0.1"), "the range is valid for the real fraction");
+
     assert.ok(lValidity.numbers.every((entry) => entry.value !== ""), "the measured L is never replaced by an empty or invented value");
     assert.ok(lValidity.measuredL !== null && lValidity.measuredL >= 0 && lValidity.measuredL <= 1, "the runtime exposes the parsed per-side channels");
     assert.equal(lValidity.shownValue, String(Math.round(lValidity.measuredL * 100 * 10) / 10), "the shown L is the runtime channel, one-decimal display only");
@@ -277,6 +340,40 @@ test("browser proof: full view measurements fill the matrix, a dependent pair ch
       return false;
     }, { selected: selectedValue, before: dependents }, { timeout: 30_000 });
 
+    // Invalid numeric L: mark the field, keep the last valid thumb/aria value and never touch the draft.
+    const numberId = lightness.id.replace(/-range$/, "-number");
+    const beforeInvalid = await page.evaluate(({ numberId, control }) => {
+      const range = document.getElementById(numberId.replace(/-number$/, "-range"));
+      return { draft: (window.__smartColorsWorkbench.state().draft || {})[control] ?? null, range: range.value, valuetext: range.getAttribute("aria-valuetext") };
+    }, { numberId, control: lightness.control });
+    await page.focus("#" + numberId);
+    await page.fill("#" + numberId, "150");
+    await page.keyboard.press("Tab");
+    const invalidL = await page.evaluate(({ numberId, control }) => {
+      const number = document.getElementById(numberId);
+      const range = document.getElementById(numberId.replace(/-number$/, "-range"));
+      return { number: number.value, invalid: number.getAttribute("aria-invalid"), range: range.value, valuetext: range.getAttribute("aria-valuetext"), draft: (window.__smartColorsWorkbench.state().draft || {})[control] ?? null };
+    }, { numberId, control: lightness.control });
+    assert.equal(invalidL.number, "150", "the typed invalid value stays visible for correction");
+    assert.equal(invalidL.invalid, "true", "the invalid field is marked for assistive tech");
+    assert.equal(invalidL.range, beforeInvalid.range, "the thumb never jumps to a clamped value");
+    assert.equal(invalidL.valuetext, beforeInvalid.valuetext, "the announced value stays the last valid one");
+    assert.equal(invalidL.draft, beforeInvalid.draft, "an invalid L never changes the draft");
+    await page.fill("#" + numberId, "40");
+    const restoredNote = await page.evaluate((id) => document.getElementById(id.replace(/-number$/, "-note")).textContent, numberId);
+    assert.equal(await page.getAttribute("#" + numberId, "aria-invalid"), "false", "a valid value never keeps aria-invalid");
+    assert.doesNotMatch(restoredNote, /L non valida/, "the described-by text drops the error as soon as the value is valid");
+    await page.keyboard.press("Tab");
+    await page.waitForFunction(({ control }) => /oklch\(/i.test(((window.__smartColorsWorkbench.state().draft || {})[control] || "")), { control: lightness.control }, { timeout: 30_000 });
+    assert.equal(await page.getAttribute("#" + numberId, "aria-invalid"), "false", "a restored valid value clears the error state");
+    await page.fill("#" + numberId, beforeInvalid.range);
+    await page.keyboard.press("Tab");
+    await page.waitForFunction(({ control, value }) => {
+      const draft = (window.__smartColorsWorkbench.state().draft || {})[control] || "";
+      const match = /oklch\(([\d.]+)/i.exec(draft);
+      return Boolean(match) && Math.abs(Number(match[1]) - Number(value) / 100) < 0.01;
+    }, { control: lightness.control, value: beforeInvalid.range }, { timeout: 30_000 });
+
     // The typed full-colour override must submit even while L holds the real measured fraction.
     const overrideField = await page.$('#smart-colors-workbench-controls [data-kind="override"]');
     assert.ok(overrideField, "the full-colour override text input exists for the selected pair");
@@ -294,6 +391,36 @@ test("browser proof: full view measurements fill the matrix, a dependent pair ch
       return state.phase === "complete" && typeof value === "string" && value !== before && /oklch\(/i.test(value);
     }, { control: lightness.control, before: draftBefore }, { timeout: 30_000 });
 
+    // Reset with Enter keeps focus in the same controls context and does not scroll the page.
+    const resetPair = page.locator("#smart-colors-workbench-reset-pair");
+    await resetPair.scrollIntoViewIfNeeded();
+    await resetPair.focus();
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => Object.keys(window.__smartColorsWorkbench.state().draft || {}).length === 0, null, { timeout: 30_000 });
+    await page.waitForTimeout(50);
+    const resetFocus = await page.evaluate(() => document.activeElement && document.activeElement.id);
+    assert.equal(resetFocus, "smart-colors-workbench-reset-pair", "Enter keeps focus on the reset control");
+
+    // The primary comparison submit is never disabled by its own run: a disabled button would blur
+    // to <body> and send a keyboard user back to the top of the document.
+    const technical = page.locator("details.wb-technical");
+    if (!(await technical.evaluate((node) => node.open))) await technical.locator("summary").first().click();
+    const comparisonSubmit = page.locator("#smart-colors-workbench-submit");
+    await comparisonSubmit.scrollIntoViewIfNeeded();
+    await comparisonSubmit.focus();
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => {
+      const host = document.getElementById("smart-colors-workbench");
+      return host.getAttribute("aria-busy") === "false" && window.__smartColorsWorkbench.state().phase === "complete";
+    }, null, { timeout: 30_000 });
+    await page.waitForTimeout(50);
+    const submitState = await page.evaluate(() => ({
+      focused: document.activeElement && document.activeElement.id,
+      disabled: document.getElementById("smart-colors-workbench-submit").disabled,
+    }));
+    assert.equal(submitState.focused, "smart-colors-workbench-submit", "Enter on the comparison submit keeps focus");
+    assert.equal(submitState.disabled, false, "the comparison submit is never disabled by its own run");
+
     // Export and reset: the original saved tuning source is preserved, never an arbitrary empty string.
     await page.click("#smart-colors-workbench-export");
     const exported = await page.evaluate(() => ({
@@ -305,11 +432,22 @@ test("browser proof: full view measurements fill the matrix, a dependent pair ch
     assert.equal(exported.hidden, false);
     assert.match(exported.download, /^colors-tuning(\.patch)?\.css$/);
 
-    await page.click("#smart-colors-workbench-reset-all");
+    const resetAll = page.locator("#smart-colors-workbench-reset-all");
+    await resetAll.focus();
+    await resetAll.click();
     await page.waitForFunction(() => {
       const state = window.__smartColorsWorkbench.state();
       return !state.draft || Object.keys(state.draft).length === 0;
     });
+    await page.waitForTimeout(50);
+    const resetAllFocus = await page.evaluate(() => document.activeElement && document.activeElement.id);
+    assert.equal(resetAllFocus, "smart-colors-workbench-reset-all", "a real click keeps focus on the reset-all control");
+    assert.equal(await exploreButton.isDisabled(), false, "reset leaves the exploration action enabled");
+    await exploreButton.click();
+    await page.waitForFunction(() => {
+      const state = window.__smartColorsWorkbench.state();
+      return state.exploration && state.exploration.phase === "complete" && document.querySelectorAll("#smart-colors-workbench-exploration-results tbody tr").length > 0;
+    }, null, { timeout: 30_000 });
     await page.waitForFunction((original) => document.getElementById("smart-colors-workbench-export-text").value === original, initial.originalSource, { timeout: 30_000 });
     const preserved = await page.evaluate(() => ({
       controller: window.__smartColorsWorkbench.exportTuningFile().css,
@@ -321,6 +459,53 @@ test("browser proof: full view measurements fill the matrix, a dependent pair ch
     assert.equal(preserved.text, initial.originalSource, "the UI shows the preserved source, not an arbitrary empty string");
     assert.equal(preserved.hidden, false, "the preserved complete file remains downloadable");
     assert.match(preserved.download, /^colors-tuning(\.patch)?\.css$/);
+
+    // The runtime renderer must keep the snippet role after real pair, theme, manual and export changes.
+    const pairBefore = await page.evaluate(() => window.__smartColorsWorkbench.state().selection.pairId);
+    const otherPair = await page.evaluate(() => {
+      const current = document.getElementById("smart-colors-workbench-pair").value;
+      const button = Array.from(document.querySelectorAll('[data-smart-colors-workbench="matrix-inspect"]')).find((node) => node.getAttribute("data-pair-value") !== current);
+      return button ? button.getAttribute("data-pair-value") : null;
+    });
+    assert.ok(otherPair, "the matrix exposes a second pair for the rendered role check");
+    await page.locator('[data-smart-colors-workbench="matrix-inspect"][data-pair-value="' + otherPair + '"]').click();
+    await page.waitForFunction((before) => window.__smartColorsWorkbench.state().selection.pairId !== before, pairBefore, { timeout: 30_000 });
+    assert.equal(await page.getAttribute("#smart-colors-workbench-details pre", "role"), "group", "pair change keeps the snippet group role");
+    await page.locator("label", { has: page.locator("#smart-colors-workbench-theme-dark") }).click();
+    await page.waitForFunction(() => document.querySelector('input[name="smart-colors-workbench-theme"]:checked').value === "dark");
+    assert.equal(await page.getAttribute("#smart-colors-workbench-details pre", "role"), "group", "theme change keeps the snippet group role");
+    const manualDetails = page.locator('details[data-smart-colors-workbench="manual"]');
+    if (!(await manualDetails.evaluate((node) => node.open))) await manualDetails.locator("summary").click();
+    const roleNumber = await page.evaluate(() => {
+      const node = document.querySelector('#smart-colors-workbench-controls input[type="number"][data-kind="lightness"]:not([disabled])');
+      return node ? node.id : null;
+    });
+    if (roleNumber) {
+      await page.fill("#" + roleNumber, "40");
+      await page.keyboard.press("Tab");
+      await page.waitForTimeout(250);
+    }
+    assert.equal(await page.getAttribute("#smart-colors-workbench-details pre", "role"), "group", "manual L work keeps the snippet group role");
+    await page.click("#smart-colors-workbench-export");
+    assert.equal(await page.getAttribute("#smart-colors-workbench-details pre", "role"), "group", "export keeps the snippet group role");
+
+    // Draft context: main left is “Attuale”, so the proposal children must qualify it with the parent heading.
+    await page.locator("label", { has: page.locator("#smart-colors-workbench-comparison-draft") }).click();
+    await page.waitForFunction(() => document.querySelector('input[name="smart-colors-workbench-comparison"]:checked').value === "draft");
+    const proposalLabels = await page.evaluate(() => {
+      const text = (node) => node ? node.textContent.trim() : "";
+      const label = (node) => node.getAttribute("aria-labelledby").split(/\s+/).map((id) => text(document.getElementById(id))).join(" ");
+      const frames = Array.from(document.querySelectorAll("#smart-colors-workbench-proposal-frames .wb-view"));
+      return {
+        frames: frames.map(label),
+        mainLeft: text(document.getElementById("smart-colors-workbench-left-title")),
+        mainRight: text(document.getElementById("smart-colors-workbench-right-title")),
+      };
+    });
+    assert.deepEqual(proposalLabels.frames, ["Viste verificate della proposta Attuale", "Viste verificate della proposta Proposta"], "proposal labels include the parent context before the child title");
+    assert.equal(proposalLabels.mainLeft, "Attuale", "the main draft view keeps its short copy");
+    assert.notEqual(proposalLabels.frames[0], proposalLabels.mainLeft, "the proposal child label is unique against the main view");
+    assert.equal(new Set([...proposalLabels.frames, proposalLabels.mainLeft, proposalLabels.mainRight]).size, 4, "draft and proposal accessible names are all distinct");
     await context.close();
 
     // Mobile with JavaScript: the same three columns fit the 390px container without global overflow.
@@ -397,6 +582,7 @@ test("browser proof: full view measurements fill the matrix, a dependent pair ch
     assert.match(noJs.note, /stime di build/);
     assert.match(noJs.summary, /Abbinamenti e filtri/);
     assert.ok(noJs.width <= noJs.viewport + 1, "the static matrix has no global horizontal overflow at 390px");
+    assert.deepEqual(pageErrors, [], "the emitted browser surface raises no pageerror or console error");
     await staticPage.close();
   } finally {
     if (staticContext) await staticContext.close().catch(() => {});

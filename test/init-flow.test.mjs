@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { access, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -11,6 +11,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { generateColorTokens } from "../src/generate-colors.mjs";
 import { createDiagnosticSession } from "../src/diagnostic-session.mjs";
 import { initSmartColors } from "../src/init.mjs";
+import { loadSmartColorsConfig } from "../src/load-config.mjs";
+import { resolveTuningFile } from "../src/report-data.mjs";
 
 /**
  * INIT end-to-end flow: the CLI is driven against an external fixture with no Playwright and no
@@ -31,6 +33,17 @@ async function emptyProject(t) {
   const root = await mkdtemp(path.join(tmpdir(), "smart-colors-init-flow-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   return root;
+}
+
+// Symlink creation may be unavailable (unprivileged Windows); those tests skip instead of failing.
+async function createSymlink(target, link, type) {
+  try {
+    await symlink(target, link, type);
+    return true;
+  } catch (error) {
+    if (["EPERM", "EACCES", "ENOSYS", "ENOTSUP"].includes(error.code)) return false;
+    throw error;
+  }
 }
 
 function runCli(root, ...args) {
@@ -259,6 +272,119 @@ test("interactive init refuses a directory that diverges from an existing config
   stdin.end("other/tokens\ny\n");
   await assert.rejects(pending, /Refusing to write palette other\/tokens\/palette\.css/);
   assert.deepEqual(await snapshot(root), before, "a divergent interactive choice must write nothing");
+});
+
+test("init refuses targets that resolve to the config file it is about to create", async (t) => {
+  for (const [name, options] of [
+    ["palette", { palette: CONFIG_PATH }],
+    ["tuning", { palette: "theme/brand.css", tuning: CONFIG_PATH }],
+  ]) {
+    await t.test(name, async (t) => {
+      const root = await emptyProject(t);
+      const before = await snapshot(root);
+
+      await assert.rejects(initSmartColors({ root, ...options, yes: true }), /Refusing to write (palette|tuning) smart-colors\.config\.mjs: Smart Colors output path collision/);
+      assert.deepEqual(await snapshot(root), before, "a colliding target must not write anything");
+    });
+  }
+
+  // The CLI surface must report the same refusal as a failed run, not as a completed init.
+  const root = await emptyProject(t);
+  await assert.rejects(runCli(root, "init", "--palette", CONFIG_PATH), (error) => error.code === 1);
+  assert.deepEqual(await snapshot(root), {});
+
+  // Palette and tuning still cannot be the same file.
+  const samePair = await emptyProject(t);
+  await assert.rejects(initSmartColors({ root: samePair, palette: "theme/colors-tuning.css", yes: true }), /Refusing to write palette theme\/colors-tuning\.css: Smart Colors output path collision/);
+  assert.deepEqual(await snapshot(samePair), {});
+});
+
+test("init refuses symlink-aliased targets that would overwrite each other", async (t) => {
+  const root = await emptyProject(t);
+  await mkdir(path.join(root, "real"));
+  await writeFile(path.join(root, "real/keep.txt"), "fixture sentinel\n", "utf8");
+  if (!await createSymlink("real", path.join(root, "alias"), "dir")) {
+    t.skip("symlinks are unavailable in this environment");
+    return;
+  }
+
+  // Neither target exists yet, so only canonical resolution can tell they are the same file.
+  await assert.rejects(
+    initSmartColors({ root, palette: "real/palette.css", tuning: "alias/palette.css", yes: true }),
+    (error) => {
+      assert.match(error.message, /Refusing to write palette real\/palette\.css: Smart Colors output path collision/);
+      assert.match(error.message, /alias\/palette\.css/);
+      assert.match(error.message, /both resolve to .*real\/palette\.css/);
+      assert.match(error.message, /Nothing was written\./);
+      return true;
+    },
+  );
+  assert.deepEqual(await readdir(path.join(root, "real")), ["keep.txt"], "no target may be written through the alias");
+  assert.equal(await readFile(path.join(root, "real/keep.txt"), "utf8"), "fixture sentinel\n");
+  assert.deepEqual((await readdir(root)).sort(), ["alias", "real"]);
+});
+
+test("init refuses a target that aliases the generated config through a symlinked parent", async (t) => {
+  const root = await emptyProject(t);
+  if (!await createSymlink(".", path.join(root, "alias"), "dir")) {
+    t.skip("symlinks are unavailable in this environment");
+    return;
+  }
+
+  await assert.rejects(
+    initSmartColors({ root, palette: "alias/smart-colors.config.mjs", yes: true }),
+    (error) => {
+      assert.match(error.message, /Refusing to write palette alias\/smart-colors\.config\.mjs: Smart Colors output path collision/);
+      assert.match(error.message, /configFile \(smart-colors\.config\.mjs\)/);
+      assert.match(error.message, /both resolve to .*smart-colors\.config\.mjs/);
+      return true;
+    },
+  );
+  assert.deepEqual(await readdir(root), ["alias"], "only the fixture symlink may remain");
+});
+
+test("init names a malformed config path instead of failing inside a helper", async (t) => {
+  for (const [configText, expected] of [
+    ["export default { palette: 123 };\n", /must declare palette as a non-empty string \(received number\)/],
+    ["export default { output: null };\n", /must declare output as a non-empty string \(received null\)/],
+  ]) {
+    await t.test(expected.source, async (t) => {
+      const root = await emptyProject(t);
+      await writeFile(path.join(root, CONFIG_PATH), configText, "utf8");
+      const before = await snapshot(root);
+
+      await assert.rejects(initSmartColors({ root, yes: true }), expected);
+      assert.deepEqual(await snapshot(root), before, "a malformed config must not write anything");
+    });
+  }
+});
+
+test("a directory URL root without a trailing slash writes inside that directory", async (t) => {
+  const parent = await emptyProject(t);
+  const root = path.join(parent, "project");
+  await mkdir(root);
+
+  const result = await initSmartColors({ root: pathToFileURL(root), yes: true });
+
+  assert.equal(result.written, true);
+  assert.deepEqual(await readdir(root), ["src"]);
+  assert.deepEqual(await readdir(parent), ["project"], "nothing may be written beside the resolved project root");
+});
+
+test("the init tuning warning names the path build actually resolves", async (t) => {
+  const sibling = await emptyProject(t);
+  const siblingResult = await initSmartColors({ root: sibling, palette: "theme/brand.css", yes: true });
+  assert.equal(siblingResult.generation.buildTuningPath, "theme/colors-tuning.css");
+  assert.deepEqual(siblingResult.warnings, [], "a tuning next to the palette needs no warning");
+
+  const root = await emptyProject(t);
+  const result = await initSmartColors({ root, palette: "theme/brand.css", tuning: "elsewhere/tune.css", yes: true });
+  const resolved = await resolveTuningFile(root, await loadSmartColorsConfig({ root }));
+
+  assert.equal(result.warnings.length, 1);
+  assert.equal(resolved, "src/styles/tokens/colors-tuning.css");
+  assert.ok(result.warnings[0].includes(resolved), `the warning must name the path build resolves (${resolved})`);
+  assert.ok(!result.warnings[0].includes("theme/colors-tuning.css"), "the palette-directory candidate is not read when it does not exist");
 });
 
 test("interactive accept-default follows the config's palette path, and './design' never falsely diverges", async (t) => {

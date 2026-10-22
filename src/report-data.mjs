@@ -6,6 +6,7 @@ import { defaultSmartColorsConfig } from "./defaults.mjs";
 import { analyzeColorTokens } from "./generate-colors.mjs";
 import { clamp, contrast, fitToSrgb, mixOklch, oklch, serializedColor } from "./color-math.mjs";
 import { nearestLightness, resolvedColor, sourceColorValue } from "./contrast-advice.mjs";
+import { resolveProjectUrl } from "./load-config.mjs";
 import { parsePaletteWithDiagnostics, tokenKey } from "./parse-palette.mjs";
 import { agree, compactRatio, list, prepareContrastReport } from "./format-report-html.mjs";
 
@@ -21,8 +22,8 @@ export async function resolveTuningFile(root, config) {
 
   const candidate = path.posix.join(path.posix.dirname(palette.replaceAll("\\", "/")), "colors-tuning.css");
   if (candidate !== REPORT_FILES.tuning
-    && !await pathExists(path.resolve(root, REPORT_FILES.tuning))
-    && await pathExists(path.resolve(root, candidate))) {
+    && !await pathExists(resolveProjectUrl(root, REPORT_FILES.tuning))
+    && await pathExists(resolveProjectUrl(root, candidate))) {
     return candidate;
   }
 
@@ -45,7 +46,7 @@ export async function inspectTuningStatus(root, config) {
 
   try {
     tuningPath = await resolveTuningFile(root, config);
-    const css = await readFile(path.resolve(root, tuningPath), "utf8");
+    const css = await readFile(resolveProjectUrl(root, tuningPath), "utf8");
     const activeCount = (css.replace(/\/\*[\s\S]*?\*\//g, "").match(/--[a-z0-9_-]+\s*:/gi) ?? []).length;
 
     if (activeCount === 0) {
@@ -119,12 +120,24 @@ export async function captureReportInputs(root, config, options = {}) {
     tuning: await resolveTuningFile(root, config),
     motion: config?.motion?.output ?? defaultSmartColorsConfig.motion.output,
   };
-  const inputs = await Promise.all(Object.entries(files).map(async ([name, file]) => [name, file, ...await optionalRead(path.resolve(root, file), name)]));
+  const inputs = await Promise.all(Object.entries(files).map(async ([name, file]) => [name, file, ...await optionalRead(reportInputUrl(root, name, file), name)]));
   return { files, inputs };
 }
 
+// A report input is a project-relative path string: validate its type before the shared resolver
+// turns it into a URL, so a bad config fails with the input name instead of a path TypeError.
+function reportInputUrl(root, name, file) {
+  if (typeof file !== "string" || file.trim() === "") {
+    const received = file === "" ? "an empty string" : file === null ? "null" : typeof file;
+    const error = new Error(`Smart Colors report input ${name} must be a non-empty project-relative path, received ${received}.`);
+    error.code = "SMART_COLORS_INPUT_INVALID";
+    throw error;
+  }
+  return resolveProjectUrl(root, file);
+}
+
 export async function assertReportInputsUnchanged(root, captured) {
-  const current = await Promise.all(captured.inputs.map(async ([name, file]) => [name, file, ...await optionalRead(path.resolve(root, file), name)]));
+  const current = await Promise.all(captured.inputs.map(async ([name, file]) => [name, file, ...await optionalRead(reportInputUrl(root, name, file), name)]));
   if (JSON.stringify(current) !== JSON.stringify(captured.inputs)) {
     const error = new Error("Smart Colors inputs changed during the report session; no report was published. Rerun with stable inputs.");
     error.code = "SMART_COLORS_INPUTS_CHANGED";
@@ -328,9 +341,16 @@ export function publishedProposal(candidate, result) {
 
 // Preserve comments and selector scope. Ambiguous repeated declarations require
 // a human choice rather than a proposal tested under a different cascade.
+// A token outside the custom-property grammar is never matched as a regex: an
+// unescaped metacharacter would corrupt or retarget another declaration.
+function isTuningToken(token) {
+  return typeof token === "string" && /^--[a-z0-9-]+$/.test(token);
+}
+
 export function replaceTuningDeclaration(css, token, value) {
+  if (!isTuningToken(token)) return null;
   const uncommented = css.replace(/\/\*[\s\S]*?\*\//g, (comment) => " ".repeat(comment.length));
-  const pattern = new RegExp(`(^|[;{]\\s*)(${token}\\s*:\\s*)([^;}]+)(?=;)`, "gm");
+  const pattern = new RegExp(`(^|[;{]\\s*)(${escapeRegExp(token)}\\s*:\\s*)([^;}]+)(?=;)`, "gm");
   const matches = [...uncommented.matchAll(pattern)];
   if (matches.length > 1) return null;
   if (!matches.length) return `${css}\n:root { ${token}: ${value}; }\n`;
@@ -342,8 +362,9 @@ export function replaceTuningDeclaration(css, token, value) {
 // Same active-declaration rule as replaceTuningDeclaration: comments are inert
 // and a duplicated declaration is ambiguous, so the reader stays silent too.
 function readTuningDeclaration(css, token) {
+  if (!isTuningToken(token)) return null;
   const uncommented = css.replace(/\/\*[\s\S]*?\*\//g, (comment) => " ".repeat(comment.length));
-  const pattern = new RegExp(`(^|[;{]\\s*)(${token}\\s*:\\s*)([^;}]+)(?=;)`, "gm");
+  const pattern = new RegExp(`(^|[;{]\\s*)(${escapeRegExp(token)}\\s*:\\s*)([^;}]+)(?=;)`, "gm");
   const matches = [...uncommented.matchAll(pattern)];
   return matches.length === 1 ? matches[0][3].trim() : null;
 }
@@ -513,19 +534,26 @@ async function structuralSibling(analysis, tuningCss, options) {
 }
 
 export function replacePaletteSource(css, token, value) {
-  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const blocks = [...css.matchAll(new RegExp(`@property\\s+${escaped}\\s*\\{([^}]*)\\}`, "g"))];
+  const escaped = escapeRegExp(token);
+  // Comments are inert, and the blanked copy keeps byte offsets, so matches and
+  // edits stay aligned with the original source. A commented-out block never
+  // counts as a second candidate and is never rewritten.
+  const uncommented = css.replace(/\/\*[\s\S]*?\*\//g, (comment) => " ".repeat(comment.length));
+  const blocks = [...uncommented.matchAll(new RegExp(`@property\\s+${escaped}\\s*\\{([^}]*)\\}`, "g"))];
+  if (blocks.length > 1) return null;
   if (blocks.length === 1) {
-    const block = blocks[0];
-    const body = block[1].replace(/(initial-value\s*:\s*)oklch\([^;]*\)(\s*;)/, `$1${value}$2`);
-    if (body === block[1]) return null;
-    return css.slice(0, block.index) + block[0].replace(block[1], body) + css.slice(block.index + block[0].length);
+    const [block] = blocks;
+    const bodyStart = block.index + block[0].length - block[1].length - 1;
+    const initial = /(initial-value\s*:\s*)(oklch\([^;]*\))(\s*;)/.exec(block[1]);
+    if (!initial) return null;
+    const start = bodyStart + initial.index + initial[1].length;
+    return css.slice(0, start) + value + css.slice(start + initial[2].length);
   }
-  if (blocks.length) return null;
-  const matches = [...css.matchAll(new RegExp(`(${escaped}\\s*:\\s*)oklch\\([^;]*\\)(\\s*;)`, "g"))];
+  const matches = [...uncommented.matchAll(new RegExp(`(${escaped}\\s*:\\s*)(oklch\\([^;]*\\))(\\s*;)`, "g"))];
   if (matches.length !== 1) return null;
-  const match = matches[0];
-  return css.slice(0, match.index) + match[1] + value + match[2] + css.slice(match.index + match[0].length);
+  const [match] = matches;
+  const start = match.index + match[1].length;
+  return css.slice(0, start) + value + css.slice(start + match[2].length);
 }
 
 // The palette documents dark-blend 0..100 as 0..28% white mixed into the
@@ -725,13 +753,16 @@ export async function reportCandidates(root, analysis, tuningCss, states, reject
   const surfaceKnob = "--color-tune-surface-lightness-shift";
   if (analysis.config.derivation.dark.mode === "relative" && surfaceFailures.length) {
     const light = states.find((state) => state.scheme === "light");
-    const surface = light.computed.tokens.get("--color-surface");
-    const canvas = light.computed.tokens.get("--color-bg");
+    // The search needs the browser-resolved neutrals. A partial or model-only
+    // state stays silent instead of dereferencing a missing measurement.
+    const surface = light?.computed?.tokens?.get("--color-surface");
+    const canvas = light?.computed?.tokens?.get("--color-bg");
     const constraints = allRows.filter((pair) => pair.label.startsWith("light ") && pair.background === "--color-surface");
     const issueLabels = [...new Set(surfaceFailures.map((pair) => pair.label))];
-    const candidate = nearestLightness(surface, (color) => constraints.every((pair) =>
-      contrast(pair.foregroundColor, color) >= Math.min(21, Math.max(pair.minimum, pair.target) + 0.02)));
-    const shift = candidate ? Number((candidate.l - canvas.l).toFixed(4)) : null;
+    if (!surface || !canvas) reject({ id: "browser-neutral-surface", file: REPORT_FILES.tuning, reason: "misure del browser per canvas e superficie non disponibili" });
+    const candidate = surface && canvas ? nearestLightness(surface, (color) => constraints.every((pair) =>
+      contrast(pair.foregroundColor, color) >= Math.min(21, Math.max(pair.minimum, pair.target) + 0.02))) : null;
+    const shift = candidate && canvas ? Number((candidate.l - canvas.l).toFixed(4)) : null;
     if (candidate) {
       const tuning = replaceTuningDeclaration(tuningCss, surfaceKnob, String(shift));
       if (tuning !== null) candidates.push({

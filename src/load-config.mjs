@@ -80,7 +80,9 @@ export function resolveProjectUrl(root, projectPath) {
 const ABSOLUTE_URL_SCHEME = /^[a-z][a-z0-9+.-]+:/i;
 
 function rootToPath(root) {
-  if (root instanceof URL) return fileURLToPath(root.href.endsWith("/") ? root : new URL("./", root));
+  // The root is always a directory, so a URL is taken as-is (query/hash ignored) and a string is
+  // resolved; no trailing-slash handling is needed here.
+  if (root instanceof URL) return fileURLToPath(root);
   return path.resolve(root == null ? process.cwd() : String(root));
 }
 

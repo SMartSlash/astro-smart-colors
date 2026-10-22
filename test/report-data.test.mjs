@@ -3,7 +3,8 @@ import test from "node:test";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { assertReportInputsUnchanged, captureReportInputs, configSnippet, darkFillTuningIdentity, formatReportSummary, mergeSideEffect, readConfigValue, structuralChanges, withConfigValue, proposalImproves, publishedProposal, readPaletteDarkBlend, replacePaletteDarkBlend, replacePaletteSource, replaceTuningDeclaration, reportCandidates, reportOverlapScenario, reportScenario, reportSideEffect, reportSnapshot, worstSideEffect } from "../src/report-data.mjs";
+import { pathToFileURL } from "node:url";
+import { assertReportInputsUnchanged, captureReportInputs, configSnippet, darkFillTuningIdentity, formatReportSummary, inspectTuningStatus, mergeSideEffect, readConfigValue, resolveTuningFile, structuralChanges, withConfigValue, proposalImproves, publishedProposal, readPaletteDarkBlend, replacePaletteDarkBlend, replacePaletteSource, replaceTuningDeclaration, reportCandidates, reportOverlapScenario, reportScenario, reportSideEffect, reportSnapshot, worstSideEffect } from "../src/report-data.mjs";
 
 import { analyzeColorTokens } from "../src/generate-colors.mjs";
 import { nearestLightness, resolvedColor, sourceColorValue } from "../src/contrast-advice.mjs";
@@ -318,6 +319,14 @@ test("tuning trials replace one actual declaration and preserve its selector and
   assert.match(replaceTuningDeclaration("/* --x: 0; */", "--x", "2"), /:root \{ --x: 2; \}/);
 });
 
+test("a malformed tuning token never becomes a regex that edits another declaration", () => {
+  const css = ":root { --x: 1; --y: 2; }";
+  for (const token of ["--x|--z", "--x.*", "--y|--z", "--x(?:)", "x", "--x "]) {
+    assert.equal(replaceTuningDeclaration(css, token, "3"), null, token);
+  }
+  assert.equal(replaceTuningDeclaration(css, "--x", "3"), ":root { --x: 3; --y: 2; }");
+});
+
 test("source trials preserve role descriptors and unrelated sources", () => {
   const css = "@property --palette-primary { initial-value: oklch(.5 .1 32); role: ui; dark-blend: 80; }\n@property --palette-other { initial-value: oklch(.7 .1 88); role: ui; }";
   const updated = replacePaletteSource(css, "--palette-primary", "oklch(0.6 0.1 32)");
@@ -325,6 +334,25 @@ test("source trials preserve role descriptors and unrelated sources", () => {
   assert.equal(replacePaletteSource(css, "--missing", "oklch(0 0 0)"), null);
   assert.equal(replacePaletteSource(css + css, "--palette-primary", "oklch(0 0 0)"), null);
   assert.equal(replacePaletteSource(":root { --primary: oklch(.5 .1 32); }", "--primary", "oklch(0.6 0.1 32)"), ":root { --primary: oklch(0.6 0.1 32); }");
+});
+
+test("source trials ignore commented blocks and never rewrite inside a comment", () => {
+  const value = "oklch(0.6 0.1 32)";
+  const real = "@property --palette-primary { initial-value: oklch(.5 .1 32); role: ui; }";
+  const commented = `/* ${real} */\n${real}`;
+  assert.equal(
+    replacePaletteSource(commented, "--palette-primary", value),
+    `/* ${real} */\n${real.replace("oklch(.5 .1 32)", value)}`,
+    "a commented copy is inert, not a second ambiguous block",
+  );
+  assert.equal(replacePaletteSource(`/* ${real} */`, "--palette-primary", value), null, "a commented-only descriptor is not editable");
+
+  const legacy = ":root { --palette-primary: oklch(.5 .1 32); }";
+  assert.equal(
+    replacePaletteSource(`/* ${legacy} */\n${legacy}`, "--palette-primary", value),
+    `/* ${legacy} */\n${legacy.replace("oklch(.5 .1 32)", value)}`,
+  );
+  assert.equal(replacePaletteSource(`/* ${legacy} */`, "--palette-primary", value), null);
 });
 
 test("snapshot hashes track source bytes and resolved configuration without mutating inputs", async (t) => {
@@ -351,6 +379,46 @@ test("snapshot hashes track source bytes and resolved configuration without muta
   assert.notEqual((await reportSnapshot(root)).inputDigest, first.inputDigest);
   const configured = await reportSnapshot(root, { config: { palette: "src/styles/tokens/palette.css", output: "src/styles/tokens/colors.css" }, errors: [] });
   assert.notEqual(configured.inputDigest, first.inputDigest);
+});
+
+test("capture rejects non-string report input paths before resolving them", async (t) => {
+  const root = await fixture(t);
+  for (const [config, name] of [
+    [{ palette: undefined, output: "src/styles/tokens/colors.css" }, "palette"],
+    [{ palette: "src/styles/tokens/palette.css", output: 42 }, "output"],
+    [{ palette: "src/styles/tokens/palette.css", output: "src/styles/tokens/colors.css", motion: { output: 42 } }, "motion"],
+    [{ palette: "  ", output: "src/styles/tokens/colors.css" }, "palette"],
+  ]) {
+    await assert.rejects(captureReportInputs(root, config), (error) => {
+      assert.equal(error.code, "SMART_COLORS_INPUT_INVALID", JSON.stringify(config));
+      assert.match(error.message, new RegExp(`input ${name}`));
+      return true;
+    });
+  }
+  await assert.rejects(captureReportInputs(root, undefined, { configFile: 42 }), { code: "SMART_COLORS_INPUT_INVALID" });
+});
+
+test("capture, snapshot and tuning status accept a URL project root", async (t) => {
+  const root = await fixture(t);
+  const urlRoot = pathToFileURL(root);
+  const captured = await captureReportInputs(urlRoot);
+  assert.equal(captured.files.palette, "src/styles/tokens/palette.css");
+  assert.equal((await inspectTuningStatus(urlRoot)).exists, false);
+  const snapshot = await reportSnapshot(urlRoot);
+  assert.match(snapshot.inputDigest, /^[a-f\d]{64}$/);
+  await assertReportInputsUnchanged(urlRoot, captured);
+});
+
+test("a URL root resolves a tuning file next to a custom palette", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "smart-colors-url-root-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(path.join(root, "theme"), { recursive: true });
+  await writeFile(path.join(root, "theme/palette.css"), PALETTE);
+  await writeFile(path.join(root, "theme/colors-tuning.css"), ":root {}");
+  assert.equal(
+    await resolveTuningFile(pathToFileURL(root), { palette: "theme/palette.css", output: "theme/colors.css" }),
+    "theme/colors-tuning.css",
+  );
 });
 
 const PALETTE = `@property --palette-bg { initial-value: oklch(.962 .015 88); role: canvas; }
@@ -480,6 +548,16 @@ test("dark bg depth search proposes the nearest percentage that clears the measu
   assert.equal(candidate.css, analysis.css);
   assert.equal(candidate.tuningCss, replaceTuningDeclaration(tuningCss, "--color-tune-dark-bg-mix", percent(expected)));
   assert.equal(candidates.some((item) => ["browser-neutral-surface-dark", "browser-neutral-muted-dark"].includes(item.id)), false);
+});
+
+test("reportCandidates stays silent when a light surface search lacks browser-resolved neutrals", async (t) => {
+  const root = await darkFixture(t);
+  const analysis = await analyzeColorTokens({ root, suggest: false });
+  const tuned = [darkPair("light muted text / surface", "--color-text-muted", "--color-surface", { l: 0.5, c: 0, h: 88 }, { l: 0.9, c: 0.01, h: 88 })];
+  const rejections = [];
+  const candidates = await reportCandidates(root, analysis, ":root {}", [{ scheme: "light", tuned }], rejections);
+  assert.equal(candidates.some((item) => item.id === "browser-neutral-surface"), false);
+  assert.ok(rejections.some((entry) => entry.id === "browser-neutral-surface" && entry.file === "src/styles/tokens/colors-tuning.css"), "a missing measurement is reported, never a crash");
 });
 
 test("dark surface depth is searched on the surface rows and skipped without a relative dark derivation", async (t) => {

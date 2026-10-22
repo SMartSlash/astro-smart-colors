@@ -350,3 +350,28 @@ test("disabled optional features emit neither their headings nor public or priva
     "Disabled hue variants must not emit variant tokens.");
   assertPrivateTail(css);
 });
+
+test("header comments neutralize configured paths containing the comment terminator", async (t) => {
+  const root = await createProject(t);
+  const palettePath = "src/a*/palette.css";
+  const outputPath = "out*/colors.css";
+  await mkdir(path.join(root, "src/a*"), { recursive: true });
+  await writeFile(path.join(root, palettePath), paletteCss(), "utf8");
+
+  const report = await generateColorTokens({
+    root,
+    check: true,
+    suggest: false,
+    inlineConfig: { palette: palettePath, output: outputPath },
+  });
+
+  // Only the display text is escaped; the values used for reads and writes stay exact.
+  assert.equal(report.config.palette, palettePath);
+  assert.equal(report.outputs[0].path, outputPath);
+  assert.ok(report.css.includes("src/a*\\/palette.css"));
+  assert.ok(report.css.includes("out*\\/colors.css"));
+  // CSS comments do not nest: the first `*/` ends the header, so header prose
+  // must not survive a spec-like comment strip.
+  const uncommented = report.css.replace(/\/\*[\s\S]*?\*\//g, "");
+  assert.doesNotMatch(uncommented, /Editable source:|Generated output:|palette\.css/);
+});

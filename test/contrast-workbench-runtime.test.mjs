@@ -335,6 +335,20 @@ test("an empty captured output is never replaced by the generated candidate", ()
   assert.equal(state.views.length, 0);
 });
 
+test("a payload failure survives a public action that does not measure", async () => {
+  const { controller } = makeWorkbench(syntheticPayload({ css: { baseline: "", status: "empty" } }));
+  assert.equal(controller.state().phase, "unavailable");
+
+  // `select` is a legal call before `mount`; it must not turn the declared payload failure into a
+  // neutral "idle" state with no error, or the host loses the only diagnosis it has.
+  const selected = await controller.select({ theme: "dark" });
+  assert.equal(selected.phase, "unavailable");
+  assert.match(selected.error, /never substituted/);
+  const reset = await controller.reset();
+  assert.equal(reset.phase, "unavailable");
+  assert.match(reset.error, /never substituted/);
+});
+
 test("missing and invalid payloads fail closed", () => {
   const missing = makeWorkbench(syntheticPayload());
   missing.doc.getElementById = () => null;
@@ -499,6 +513,29 @@ test("removeOverride uses a live tombstone, keeps reset() as draft discard, and 
   assert.equal(resetState.error, null);
 });
 
+test("removeOverride measures the tombstone in a draft comparison instead of an unverified removal", async () => {
+  const saved = ":root {\n  --color-tune-text-light: oklch(0.66 0 0);\n}\n";
+  const { controller } = makeWorkbench(syntheticPayload({ css: { tuning: saved, tuningSupport: "supported" } }));
+  assert.equal(controller.state().selection.comparison, "tuning");
+
+  const removed = await controller.removeOverride("--color-tune-text-light");
+  assert.equal(removed.draft["--color-tune-text-light"], "initial");
+  assert.equal(removed.selection.comparison, "draft", "the tombstone is displayed in the draft frame that verifies it");
+  assert.match(removed.error, /no measured light draft frame/, "an unmeasured tombstone is still declared, never reported as verified");
+  assert.ok(!controller.exportTuningFile().css.includes("--color-tune-text-light"), "the removed declaration is no longer active in the export");
+});
+
+test("a new suggestion attempt never carries the previous action error", async () => {
+  const { controller } = makeWorkbench(syntheticPayload());
+  await controller.select({ theme: "sepia" });
+  assert.match(controller.state().error, /theme/);
+
+  const state = await controller.suggest("foreground");
+  assert.equal(state.error, null, "the suggestion publishes its own outcome, not a stale action error");
+  assert.equal(state.suggestion.status, "unavailable");
+  assert.match(state.suggestion.reason, /no measured view/);
+});
+
 test("exportTuningFile preserves the saved source and patches only whitelisted declarations", async () => {
   const saved = [
     "/* keep this comment */",
@@ -561,6 +598,19 @@ test("exportTuningFile preserves the saved source and patches only whitelisted d
   assert.ok(!removed.css.includes("--color-tune-dark-warmth"));
   assert.ok(!removed.css.includes("initial"), "a tombstone is never exported as a saved value");
   assert.deepEqual(removed.removed, ["--color-tune-dark-warmth"]);
+});
+
+test("exportTuningFile never claims a new :root when the export carries no declaration", async () => {
+  const { controller } = makeWorkbench(syntheticPayload());
+  await controller.setOverride("--color-tune-text-light", "oklch(0.5 0 0)");
+  await controller.removeOverride("--color-tune-text-light");
+
+  // Only a tombstone is left: no saved file, nothing to write, so no root is created and no success
+  // is claimed for an empty file.
+  const exported = controller.exportTuningFile();
+  assert.equal(exported.css, "");
+  assert.deepEqual(exported.removed, ["--color-tune-text-light"]);
+  assert.ok(!exported.warnings.some((warning) => /creato un nuovo :root/.test(warning)), exported.warnings.join(" | "));
 });
 
 test("exportTuningFile fails closed to a fragment on ambiguous precedence and never deletes user content", async () => {

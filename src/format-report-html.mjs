@@ -122,6 +122,7 @@ const CSS = `
   .overlap-card h5 { margin-block: var(--space-4) var(--space-2); }
   .family-card { padding: var(--space-4); }
   .family-card h4 { margin-block-end: var(--space-3); }
+  .model-atlas-title { margin-block: var(--space-4) var(--space-3); }
   .family-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); gap: var(--space-3); }
   .family-sample { border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); overflow: hidden; }
   .family-visual { display: grid; gap: .35rem; padding: var(--space-3); border-block-end: 1px solid var(--line); background: var(--sample-bg, var(--soft)); color: var(--sample-fg, var(--ink)); box-shadow: inset 0 0 0 3px var(--sample-border, transparent); }
@@ -891,7 +892,8 @@ function variantShiftsHtml(shifts) {
 <ul class="variant-list">${shifts.map((shift) => {
     const source = colorCss(shift.source), variant = colorCss(shift.variantColor);
     if (!source || !variant) return "";
-    const direction = shift.deltaL < 0 ? "più scura" : "più chiara";
+    // A chroma-only shift has ΔL = 0: the sentence must not claim a lightness direction it lacks.
+    const direction = shift.deltaL < 0 ? "più scura" : shift.deltaL > 0 ? "più chiara" : "di pari lightness";
     return `<li><span class="variant-swatch" aria-hidden="true" style="--sample-color:${variant}"></span><code>${escape(shift.token)}</code> (tema ${designer.themeLabel(shift.scheme)}) rispetto a <code>${escape(shift.sourceToken)}</code>: ΔL ${it(shift.deltaL, 3)} · ΔC ${it(shift.deltaC, 3)} — la variante è ${direction} della sorgente.</li>`;
   }).join("")}</ul>
 <h4>Come intervenire su palette.css</h4>
@@ -1065,7 +1067,7 @@ ${list(proposal.changes).map((value) => {
 ${sideEffectsHtml(proposal.sideEffects)}
 <p class="snippet-label">Modifica da applicare manualmente</p>
 <dl class="destination"><div><dt>File</dt><dd><code>${escape(destination.file)}</code></dd></div><div><dt>Percorso nella configurazione</dt><dd><code>${escape(destination.path)}</code></dd></div></dl>
-<pre tabindex="0" aria-label="Snippet della proposta"><code>${escape(destination.snippet)}</code></pre>
+<pre tabindex="0" role="group" aria-label="Snippet della proposta"><code>${escape(destination.snippet)}</code></pre>
 <p>Applicazione manuale: il report non modifica file. Dopo la modifica, rigenera il report per confermare il risultato.</p>
 <details><summary>Verifica e misure complete della correzione</summary>
 <p class="status">${complete ? "Proposta verificata per le coppie coperte nello snapshot" : "Verifica incompleta: nessuna copertura attribuita"}.</p>
@@ -1404,7 +1406,6 @@ function automationScopeSentence(scope) {
   return `Copertura parziale o incompleta: ${scope.partial ? "non tutti i motori richiesti hanno completato la verifica" : "non tutte le coppie attese sono coperte"}; le misure eseguite non coprono gli ambienti o gli scenari mancanti.`;
 }
 
-/** Static summary of the VerificationRun; never merged with the model or the local run. */
 /** Static summary of the VerificationRun; never merged with the model or the local run.
  *
  * `options.compact === true` is the preview mode: it keeps the scope sentence, coverage facts, the
@@ -1438,8 +1439,8 @@ export function automationHtml(value, options = {}) {
   if (text(run.measuredAt)) facts.push(`<div><dt>Istante più recente</dt><dd>${escape(run.measuredAt)}</dd></div>`);
   if (explorationCoverage || explorationItems.length) {
     const measured = explorationCoverage?.measured ?? explorationItems.length;
-    const expected = explorationCoverage?.expected;
-    facts.push(`<div><dt>Esplorazioni</dt><dd>${measured}${finite(expected) ? ` di ${expected}` : ""} misurate · canale separato</dd></div>`);
+    const expectedExplorations = explorationCoverage?.expected;
+    facts.push(`<div><dt>Esplorazioni</dt><dd>${measured}${finite(expectedExplorations) ? ` di ${expectedExplorations}` : ""} misurate · canale separato</dd></div>`);
   }
 
   const enginesHtml = engines.length ? `<h4>Motori richiesti</h4>
@@ -1687,10 +1688,11 @@ export function formatContrastReportHtml(value) {
   const sessionEvidence = session ? sessionEvidenceHtml(session, prepared) : "";
   // One family catalog by default: the measured atlas wins when it exists, and the model
   // estimate follows inside a native disclosure so the data survives without duplication.
+  const modelAtlasHeading = `<h3 class="model-atlas-title">Famiglie di colori nel modello</h3>`;
   const modelAtlasBlock = modelAtlas
     ? entriesAtlas
-      ? `<details><summary>Campioni dal modello — previsioni senza browser</summary>${modelAtlas}</details>`
-      : modelAtlas
+      ? `<details><summary>Campioni dal modello — previsioni senza browser</summary>${modelAtlasHeading}${modelAtlas}</details>`
+      : `${modelAtlasHeading}${modelAtlas}`
     : "";
   // Engines, causes and measurements are technical evidence: they stay in a native disclosure so a
   // missing package or browser never dominates the designer's first reading.

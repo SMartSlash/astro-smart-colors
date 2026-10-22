@@ -14,7 +14,7 @@ export default function smartColors(options = {}) {
       "astro:config:setup": async ({ config: astroConfig, command, addWatchFile, updateConfig, logger }) => {
         const root = astroConfig.root;
         const smartConfig = await loadSmartColorsConfig({ root, configFile, inlineConfig });
-        await runGenerator({ root, configFile, inlineConfig, command, logger });
+        await runGenerator({ root, configFile, inlineConfig, config: smartConfig, command, logger });
 
         addWatchFile(resolveProjectUrl(root, smartConfig.palette));
         addWatchFile(resolveProjectUrl(root, configFile ?? DEFAULT_CONFIG_FILE));
@@ -29,9 +29,10 @@ export default function smartColors(options = {}) {
   };
 }
 
-async function runGenerator({ root, configFile, inlineConfig, command, logger }) {
-  // Keep the exhaustive advisory search out of the dev watcher; the CLI provides it.
-  const report = await generateColorTokens({ root, configFile, inlineConfig, suggest: false });
+async function runGenerator({ root, configFile, inlineConfig, config, command, logger }) {
+  // Keep the exhaustive advisory search out of the dev watcher; the CLI provides it. The caller's
+  // already-loaded config is reused, so setup imports the config file once.
+  const report = await generateColorTokens({ root, configFile, inlineConfig, config, suggest: false });
 
   for (const warning of report.warnings) {
     logger.warn(warning);

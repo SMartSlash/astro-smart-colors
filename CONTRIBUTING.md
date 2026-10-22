@@ -61,3 +61,42 @@ Keep consumer commands runnable with `pnpm exec smart-colors` and the effective
 `--root`/`--config` paths. The `scripts/*` harnesses in the site repository are
 not package files and must not be documented as shipped examples. Do not bump
 the version or create a tag as part of a documentation change.
+
+## Finding the owner of a change
+
+| Concern | Start here | Boundary |
+| --- | --- | --- |
+| Config and palette inputs | `load-config.mjs`, `parse-palette.mjs`, `validate-config.mjs` | Diagnose invalid input before generation or writes. |
+| Color math and thresholds | `verification-core.mjs`, `color-math.mjs` | `color-math` delegates to the shared core; do not add a second contrast algorithm. |
+| Derivation and CSS | `generate-colors.mjs`, `design-recipes.mjs`, `format-css.mjs` | Recipes own design constants; formatting does not change the model. |
+| File safety | `output-paths.mjs`, `init.mjs`, `report-artifact.mjs` | Reuse canonical path checks, including absent files and symlinked parents. |
+| Captured inputs and orchestration | `diagnostic-session.mjs`, `diagnostic-workflow.mjs`, `report-data.mjs` | Preserve captured bytes and keep intentional build writes distinct from external changes. |
+| Browser verification | `browser-audit.mjs`, `verification-dom.mjs`, `diagnostic-runtime.mjs` | Separate orchestration, applied-style collection and browser lifecycle. |
+| Interactive tuning | `contrast-workbench-runtime.mjs` | Own selection, drafts, proposals and conservative export; never write project files. |
+| Preview UI and reports | `contrast-workbench-view.mjs`, `format-report-preview.mjs`, `format-report-html.mjs` | Render controller state; do not recalculate contrast in presentation code. |
+| CLI and Astro | `cli.mjs`, `astro-integration.mjs` | Consume validated config and existing workflow results, rather than duplicating them. |
+
+Package entry points are declared in `package.json#exports`. Do not add an exported
+helper solely for a test; exercise the owning entry point instead.
+See [the October 2026 review](./docs/CODE-REVIEW.md) for fixes and remaining risks.
+
+## Keeping changes human-maintainable
+
+- Add a regression for the smallest real failing case, then test its caller. A helper
+  returning the right options is not proof that the write path uses them.
+- Keep one owner for validation, recipes and status vocabulary. Reuse existing
+  helpers before adding a second parser or another copy of a rule.
+- Prefer names that describe intent. Add short English comments for constraints or
+  trade-offs, not a narration of the implementation.
+- Keep refactors separate from bug fixes. Avoid broad formatting changes and test-only
+  exports; remove private dead code only after checking its callers and emitted use.
+- Serialized browser factories must be self-contained. Module-scope helpers are not
+  available in the generated page; test the emitted HTML, not only imported functions.
+- An offline byte budget is not a reason to remove a correctness guard. Remove dead
+  code and redundant output instead; preserve the exact CSP hash and meaningful errors.
+
+Project configuration is trusted ESM and executes with the caller's Node permissions;
+it is not a sandbox for third-party configuration. Generated HTML still treats paths,
+labels, snippets and captured CSS as data: escaping, CSP and isolated frames remain
+necessary. Path validation prevents accidental collisions, but it does not promise a
+transaction across several files or protection against a hostile concurrent writer.

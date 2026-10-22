@@ -242,6 +242,13 @@ test("build without Playwright still publishes both HTML artifacts and exits 0",
   assert.deepEqual(after[PALETTE_PATH], before[PALETTE_PATH]);
 });
 
+test("the palette subject line counts each declared role once", async (t) => {
+  const root = await createProject(t);
+  const built = await runCli(root, "build", "--automation=off");
+
+  assert.match(built.stdout, /^  Palette\s+src\/styles\/tokens\/palette\.css · 5 colori \(1 sfondo della pagina, 1 testo di base, 1 interfaccia, 1 feedback, 1 decorativo\)$/m);
+});
+
 test("build auto publishes HTML with an actionable link even when the environment is unavailable", async (t) => {
   const root = await createProject(t);
   const built = await runCli(root, "build", "--automation=auto");
@@ -823,8 +830,8 @@ test("init refuses targets that collide with generated outputs", async (t) => {
     const root = await createEmptyProject(t);
     await assert.rejects(runCli(root, "init", "--palette", "src/styles/tokens/colors.css"), (error) => {
       assert.equal(error.code, 1);
-      assert.match(error.stderr, /Refusing to write palette src\/styles\/tokens\/colors\.css/);
-      assert.match(error.stderr, /collides with the generated config\.output/);
+      assert.match(error.stderr, /Refusing to write palette src\/styles\/tokens\/colors\.css: Smart Colors output path collision/);
+      assert.match(error.stderr, /both resolve to .*src\/styles\/tokens\/colors\.css/);
       return true;
     });
     assert.deepEqual(await readdir(root), []);
@@ -836,8 +843,8 @@ test("init refuses targets that collide with generated outputs", async (t) => {
     await writeFile(path.join(root, "smart-colors.config.mjs"), configText, "utf8");
     await assert.rejects(runCli(root, "init"), (error) => {
       assert.equal(error.code, 1);
-      assert.match(error.stderr, /Refusing to write tuning src\/styles\/tokens\/colors-tuning\.css/);
-      assert.match(error.stderr, /collides with the generated config\.output/);
+      assert.match(error.stderr, /Refusing to write tuning src\/styles\/tokens\/colors-tuning\.css: Smart Colors output path collision/);
+      assert.match(error.stderr, /both resolve to .*src\/styles\/tokens\/colors-tuning\.css/);
       return true;
     });
     assert.deepEqual(await readdir(root), ["smart-colors.config.mjs"]);
@@ -849,7 +856,8 @@ test("init refuses targets that collide with generated outputs", async (t) => {
     await writeFile(path.join(root, "smart-colors.config.mjs"), "export default { motion: { enabled: true, output: 'colors/motion.css' } };\n", "utf8");
     await assert.rejects(runCli(root, "init", "--tuning", "colors/motion.css"), (error) => {
       assert.equal(error.code, 1);
-      assert.match(error.stderr, /collides with the generated config\.motion\.output/);
+      assert.match(error.stderr, /Refusing to write tuning colors\/motion\.css: Smart Colors output path collision/);
+      assert.match(error.stderr, /both resolve to .*colors\/motion\.css/);
       return true;
     });
     assert.deepEqual(await readdir(root), ["smart-colors.config.mjs"]);

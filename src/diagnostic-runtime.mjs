@@ -605,14 +605,16 @@ export function createDiagnosticRuntime(deps) {
     });
   }
 
-  function run() {
+  function run(reason) {
     init();
     if (running) {
       pendingRun = true;
       return Promise.resolve(currentReport);
     }
     running = true;
-    invalidate("run");
+    // The trigger is published, not a generic "run": subscribers can tell a retry or a queued run
+    // from the boot run without inspecting the state twice.
+    invalidate(reason == null ? "run" : String(reason));
     const token = generation;
     currentState = "running";
     publish("running");

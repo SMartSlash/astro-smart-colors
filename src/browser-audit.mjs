@@ -131,6 +131,12 @@ export function auditPairs(report, computed, scheme) {
   return computed.pairs.map((pair) => {
     const spec = declared.get(pair.label);
     assert.ok(spec, `Undeclared pair ${pair.label}: no contract thresholds for ${scheme}`);
+    // The same fail-closed threshold contract as `measurePair`: a missing or
+    // incoherent target must never fall through to `pass`.
+    assert.ok(
+      Number.isFinite(spec.target) && Number.isFinite(spec.minimum) && spec.target > 0 && spec.minimum > 0 && spec.minimum <= spec.target,
+      `${pair.label}: pair requires finite positive thresholds with minimum <= target`,
+    );
     const ratio = core.contrast(pair.foregroundColor, pair.backgroundColor);
     assert.ok(Number.isFinite(ratio), `${pair.label}: non-finite contrast`);
     return { ...pair, ratio, target: spec.target, minimum: spec.minimum, status: core.warningStatus(ratio, spec.target, spec.minimum) };
@@ -436,7 +442,7 @@ function cleanupBudget(deadline, grace = CLEANUP_GRACE_MS) {
 async function closeQuietly(target, deadline, grace = CLEANUP_GRACE_MS) {
   if (!target || typeof target.close !== "function") return null;
   try {
-    await withinDeadline(() => target.close(), cleanupBudget(deadline, grace), { phase: "cleanup", cause: "cleanup-timeout", message: "cleanup" });
+    await withinDeadline(() => target.close(), cleanupBudget(deadline, grace), { phase: "cleanup", cause: "cleanup-timeout", message: "close() did not complete within the cleanup budget" });
     return null;
   } catch (error) {
     return error;
@@ -498,8 +504,11 @@ async function measureEngine(browser, engineName, { payload, runtimeSource, time
       ), deadline, { phase: "measure", cause: "timeout", engine: engineName, message: measureMessage(preference, "l'attesa dello stato terminale") });
       reports.push(await withinDeadline(() => page.evaluate((global) => window[global].report(), DIAGNOSTIC_RUNTIME_GLOBAL), deadline, { phase: "measure", cause: "timeout", engine: engineName, message: measureMessage(preference, "la lettura del report") }));
     } catch (error) {
+      // Keep the structured timeout cause; only a real run failure becomes
+      // `runtime-run-failed`. The message already carries the preference.
+      const cause = error && error.timedOut ? "timeout" : "runtime-run-failed";
       errors.push({
-        phase: "measure", cause: "runtime-run-failed", engine: engineName, scenarioId: null, pairId: null,
+        phase: "measure", cause, engine: engineName, scenarioId: null, pairId: null,
         message: `preferenza ${preference}: ${error && error.message ? error.message : error}`,
       });
     } finally {
@@ -731,17 +740,20 @@ export async function projectAudit(names = ["chromium"], { root = process.cwd(),
   let loadedConfig;
   let capturedInputs;
   let snapshot;
+  let tuningPath = null;
   try {
     // Keep configured input paths even if subsequent palette validation fails.
     // An owned report may have become an input since its previous generation.
     if (emitReport) {
       loadedConfig = await loadSmartColorsConfig({ root, configFile });
-      capturedInputs = await captureReportInputs(root, loadedConfig);
+      capturedInputs = await captureReportInputs(root, loadedConfig, { configFile });
+      // Protect the exact captured tuning path even if analysis fails before resolving it.
+      tuningPath = capturedInputs.files.tuning;
     }
     const report = emitReport
       ? (analysis = await analyzeColorTokens({ root, config: loadedConfig }, capturedInputs.inputs.find(([name]) => name === "palette")[2]))
       : await generateColorTokens({ root, configFile, check: true, suggest: false });
-    const tuningPath = await resolveTuningFile(root, report.config);
+    if (!emitReport) tuningPath = await resolveTuningFile(root, report.config);
     if (emitReport) snapshot = await reportSnapshot(root, analysis, capturedInputs);
     let diskCss = null;
     if (emitReport) {
@@ -894,7 +906,9 @@ export async function projectAudit(names = ["chromium"], { root = process.cwd(),
   if (emitReport) {
     await assertReportInputsUnchanged(root, capturedInputs);
     // One snapshot, one write pass: the compact preview is published with the full report.
-    const output = await writeContrastReport({ root, report: snapshot, config: analysis?.config ?? loadedConfig, preview: true });
+    const output = await writeContrastReport({
+      root, report: snapshot, config: analysis?.config ?? loadedConfig, configFile, preview: true, tuningPath,
+    });
     const summary = formatReportSummary(snapshot).split("\n").map((line) => `    ${line}`);
     console.log([
       `${badge()} Report contrasto generato`,

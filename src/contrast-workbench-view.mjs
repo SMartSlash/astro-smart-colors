@@ -145,7 +145,6 @@ export const CONTRAST_WORKBENCH_CSS = `
   .wb-source-copy { margin-block-start: var(--space-3); }
   .wb-source-copy textarea, .wb-suggestions textarea { width: 100%; min-height: 8rem; font: inherit; font-size: var(--text-sm); color: var(--ink); background: var(--paper); border: 1px solid var(--ink-muted); border-radius: var(--radius); padding: var(--space-2); }
 
-  .wb-selection { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--space-3); margin: 0; padding: 0; }
   .wb-compare { display: flex; flex-wrap: wrap; align-items: end; gap: var(--space-2) var(--space-4); flex: 1 1 auto; min-width: 0; max-width: 100%; margin: 0; padding: 0; border: 0; }
   .wb-compare .wb-fieldset { flex: 1 1 12rem; min-width: 0; max-width: 100%; padding: 0; gap: var(--space-1) var(--space-3); border: 0; }
   .wb-compare .wb-theme-fieldset { flex: 0 1 auto; }
@@ -269,7 +268,6 @@ export const CONTRAST_WORKBENCH_CSS = `
   .wb-l-actions button { min-height: 2.25rem; }
 
   /* Exploration is advisory and read-only: no selection affordance, no coverage claim. */
-  .wb-exploration-summary { margin: 0; font-size: var(--text-xs); color: var(--ink-muted); }
   .wb-exploration-table { width: 100%; border-collapse: collapse; font-size: var(--text-xs); }
   .wb-exploration-table caption { padding: var(--space-2); text-align: start; color: var(--ink-muted); }
   .wb-exploration-table th, .wb-exploration-table td { padding: var(--space-1) var(--space-2); border-block-end: 1px solid var(--line); text-align: start; vertical-align: top; }
@@ -343,7 +341,7 @@ export const CONTRAST_WORKBENCH_CSS = `
   }
   @media print {
     .wb-workspace { display: block; }
-    .wb-actions, .wb-controls, .wb-suggestions, .wb-selection { break-inside: avoid; }
+    .wb-actions, .wb-controls, .wb-suggestions { break-inside: avoid; }
     .wb-frame { min-height: 4rem; }
     .wb-picker-dialog { display: none; }
     .wb-matrix-scroll { max-block-size: none; overflow: visible; }
@@ -843,7 +841,7 @@ function pairDetailsHtml(pair, session, design, language, sourceEntries, theme) 
 ${tokenBindingHtml(pair.foreground, "Primo piano", design, language, activeTheme, entries)}
 ${tokenBindingHtml(pair.background, "Sfondo", design, language, activeTheme, entries)}
 </div>
-<pre tabindex="0" aria-label="Snippet CSS della coppia, con le stesse variabili della resa"><code>${escape(pairSnippet(pair.foreground, pair.background, pair.property))}</code></pre>
+<pre role="group" tabindex="0" aria-label="Snippet CSS della coppia, con le stesse variabili della resa"><code>${escape(pairSnippet(pair.foreground, pair.background, pair.property))}</code></pre>
 <dl class="wb-thresholds">
 <div><dt>Tema chiaro</dt><dd>${escape(light ? minimoTarget(light.minimum, light.target) : "coppia non disponibile")}</dd></div>
 <div><dt>Tema scuro</dt><dd>${escape(dark ? minimoTarget(dark.minimum, dark.target) : "coppia non disponibile")}</dd></div>
@@ -886,10 +884,13 @@ function pairOptionsHtml(pairs, selected) {
     // Most labels already exist in data-usage. Only embed a distinct human fallback when needed,
     // keeping the offline artifact bounded even with a full automation session.
     const pickerAttribute = pickerLabel && pickerLabel !== pair.title ? ` data-picker-label="${escape(pickerLabel)}"` : "";
+    // The catalogue kind is only a refinement of `data-kind` (for example `on-color`): the runtime
+    // already falls back to `data-kind` when the attribute is absent, so the equal value stays out.
+    const catalogueAttribute = pair.catalogueKind && pair.catalogueKind !== pair.kind ? ` data-catalogue-kind="${escape(pair.catalogueKind)}"` : "";
     const light = pair.themes.light || {};
     const dark = pair.themes.dark || {};
     const matrixData = [finite(light.ratio) ? String(light.ratio) : "", text(light.status) || "unmeasured", finite(dark.ratio) ? String(dark.ratio) : "", text(dark.status) || "unmeasured"].join(",");
-    return `<option value="${escape(value)}"${chosen ? " selected" : ""} data-fg="${escape(pair.foreground)}" data-bg="${escape(pair.background)}" data-kind="${escape(pair.kind)}" data-catalogue-kind="${escape(pair.catalogueKind || pair.kind)}" data-usage="${escape(pair.title)}"${pickerAttribute} data-sources="${escape(sourcesAttribute(pair))}" data-fg-sources="${escape(foregroundSourcesAttribute(pair))}" data-bg-sources="${escape(backgroundSourcesAttribute(pair))}" data-use-bucket="${escape(pair.useBucket || "other")}" data-use-rank="${escape(String(finite(pair.useRank) ? pair.useRank : 999))}" data-thresholds="${escape(thresholds)}" data-matrix="${escape(matrixData)}">${escape(pair.title)}</option>`;
+    return `<option value="${escape(value)}"${chosen ? " selected" : ""} data-fg="${escape(pair.foreground)}" data-bg="${escape(pair.background)}" data-kind="${escape(pair.kind)}"${catalogueAttribute} data-usage="${escape(pair.title)}"${pickerAttribute} data-sources="${escape(sourcesAttribute(pair))}" data-fg-sources="${escape(foregroundSourcesAttribute(pair))}" data-bg-sources="${escape(backgroundSourcesAttribute(pair))}" data-use-bucket="${escape(pair.useBucket || "other")}" data-use-rank="${escape(String(finite(pair.useRank) ? pair.useRank : 999))}" data-thresholds="${escape(thresholds)}" data-matrix="${escape(matrixData)}">${escape(pair.title)}</option>`;
   }).join("");
 }
 
@@ -1070,21 +1071,9 @@ function pairPickerDisplay(pair) {
   return pairPickerLabel(pair) || "Uso senza nome";
 }
 
-
 function foldSearch(value) {
   const raw = String(value == null ? "" : value).toLowerCase();
   return typeof raw.normalize === "function" ? raw.normalize("NFD").replace(/[\u0300-\u036f]/g, "") : raw;
-}
-
-// Search spans the human label, the exact public tokens and the friendly source names. It never
-// invents a pair: it only filters the real candidates already derived from the diagnostics.
-function pairSearchText(pair, design) {
-  const sourceNames = [];
-  for (const source of pair.sources || []) {
-    const meta = designSource(design, source);
-    sourceNames.push(meta && meta.name ? meta.name : source);
-  }
-  return foldSearch([pair.title, pairPickerLabel(pair), pair.foreground, pair.background, pairKindLabel(pair), ...(pair.sources || []), ...sourceNames].join(" "));
 }
 
 // Preferred foreground uses win; a source that only appears as a background dependency falls back to
@@ -1106,13 +1095,11 @@ function pickerCandidates(pairs, design, sourceToken, activeValue) {
   return { pairs: ordered, backgroundOnly, active };
 }
 
-function pickerFiltered(candidates, query, category, design) {
+function pickerFiltered(candidates, query, category) {
   const words = foldSearch(query).split(/\s+/).filter(Boolean);
   return candidates.filter((pair) => {
     if (category && (pair.useBucket || "other") !== category) return false;
-    if (!words.length) return true;
-    const haystack = pairSearchText(pair, design);
-    return words.every((word) => haystack.includes(word));
+    return words.every((word) => foldSearch([pair.title, pairPickerLabel(pair), pair.foreground, pair.background, pairKindLabel(pair)].join(" ")).includes(word));
   });
 }
 
@@ -1154,7 +1141,7 @@ function usesChips(pairs, activeValue) {
 
 function pickerModel(pairs, design, sources, sourceToken, activeValue) {
   const candidates = pickerCandidates(pairs, design, sourceToken, activeValue);
-  const filtered = pickerFiltered(candidates.pairs, "", "", design);
+  const filtered = pickerFiltered(candidates.pairs, "", "");
   const visible = filtered.slice(0, USE_VISIBLE_LIMIT);
   const empty = pickerCountText(0, "", "");
   const list = visible.length
@@ -1198,23 +1185,24 @@ function matrixSnapshotHtml(theme, source) {
   return `<span class="wb-matrix-ratio">${escape(ratio)}</span><span class="wb-matrix-status" data-status="${escape(status)}">${escape(matrixStatusLabel(status))}</span><span class="wb-matrix-thresholds">${escape(thresholds.join(" · ") || "soglie non dichiarate")}</span><span class="wb-matrix-source">${escape(source || "stima build")}</span>`;
 }
 
-function matrixStaticRowsHtml(pairs, design) {
+function matrixStaticRowsHtml(pairs) {
   if (!pairs.length) {
     return `<tr><td colspan="3">Nessun abbinamento diagnostico disponibile: il banco non inventa coppie.</td></tr>`;
   }
   // The static HTML stays bounded. With JavaScript the view rebuilds the full matrix from the real
-  // pair options already in the document, so the artifact does not duplicate 100+ rows.
-  return pairs.slice(0, 4).map((pair, index) => {
+  // pair options before any filter can run, so the static rows carry only what the no-JS surface
+  // shows: the search index and the row index belong to the rebuilt rows, not to this fallback.
+  return pairs.slice(0, 4).map((pair) => {
     const value = pickerValue(pair);
     const label = pairHasPickerLabel(pair) ? pairPickerDisplay(pair) : pairFallbackLabel(pair);
     const status = worstStatus(pair);
     const lightStatus = text(pair.themes.light && pair.themes.light.status) || "unmeasured";
     const darkStatus = text(pair.themes.dark && pair.themes.dark.status) || "unmeasured";
-    return `<tr data-smart-colors-workbench="matrix-row" data-pair-value="${escape(value)}" data-matrix-index="${index}" data-status="${escape(status)}" data-all-pass="${lightStatus === "pass" && darkStatus === "pass" ? "true" : "false"}" data-unmeasured="${lightStatus === "unmeasured" || darkStatus === "unmeasured" ? "true" : "false"}" data-search="${escape(pairSearchText(pair, design))}" data-live-status="false"><th scope="row" class="wb-matrix-uso"><span class="wb-matrix-label">${escape(label)}</span><code class="wb-matrix-tokens">${escape(pair.foreground)} su ${escape(pair.background)}</code><span class="wb-matrix-type">${escape(matrixCriterionLabel(pair))}</span><button type="button" class="wb-matrix-inspect" data-smart-colors-workbench="matrix-inspect" data-pair-value="${escape(value)}" tabindex="-1" disabled>Ispeziona<span class="wb-visually-hidden"> ${escape(label)}</span></button></th><td class="wb-matrix-view" data-smart-colors-workbench="matrix-cell" data-slot="left">${matrixSnapshotHtml(pair.themes.light, "stima build")}</td><td class="wb-matrix-view" data-smart-colors-workbench="matrix-cell" data-slot="right">${matrixSnapshotHtml(pair.themes.dark, "stima build")}</td></tr>`;
+    return `<tr data-smart-colors-workbench="matrix-row" data-pair-value="${escape(value)}" data-status="${escape(status)}" data-all-pass="${lightStatus === "pass" && darkStatus === "pass" ? "true" : "false"}" data-unmeasured="${lightStatus === "unmeasured" || darkStatus === "unmeasured" ? "true" : "false"}" data-live-status="false"><th scope="row" class="wb-matrix-uso"><span class="wb-matrix-label">${escape(label)}</span><code class="wb-matrix-tokens">${escape(pair.foreground)} su ${escape(pair.background)}</code><span class="wb-matrix-type">${escape(matrixCriterionLabel(pair))}</span><button type="button" class="wb-matrix-inspect" data-smart-colors-workbench="matrix-inspect" data-pair-value="${escape(value)}" tabindex="-1" disabled>Ispeziona<span class="wb-visually-hidden"> ${escape(label)}</span></button></th><td class="wb-matrix-view" data-smart-colors-workbench="matrix-cell" data-slot="left">${matrixSnapshotHtml(pair.themes.light, "stima build")}</td><td class="wb-matrix-view" data-smart-colors-workbench="matrix-cell" data-slot="right">${matrixSnapshotHtml(pair.themes.dark, "stima build")}</td></tr>`;
   }).join("");
 }
 
-function matrixHtml(pairs, design) {
+function matrixHtml(pairs) {
   const total = pairs.length;
   const count = total === 1 ? "1 abbinamento" : `${total} abbinamenti`;
   const visible = Math.min(total, 4);
@@ -1236,7 +1224,7 @@ function matrixHtml(pairs, design) {
 <caption id="smart-colors-workbench-matrix-caption">Abbinamenti tra token: uso e criterio, poi le due viste del confronto con la misura di ciascuna coppia.</caption>
 <colgroup><col class="wb-matrix-col-uso"><col class="wb-matrix-col-view"><col class="wb-matrix-col-view"></colgroup>
 <thead><tr><th scope="col" class="wb-matrix-uso">Uso e criterio</th><th scope="col" id="smart-colors-workbench-matrix-a" class="wb-matrix-view">Vista A · stima build tema chiaro</th><th scope="col" id="smart-colors-workbench-matrix-b" class="wb-matrix-view">Vista B · stima build tema scuro</th></tr></thead>
-<tbody data-smart-colors-workbench="matrix-body">${matrixStaticRowsHtml(pairs, design)}</tbody>
+<tbody data-smart-colors-workbench="matrix-body">${matrixStaticRowsHtml(pairs)}</tbody>
 </table>
 </div>
 </div>
@@ -1281,7 +1269,7 @@ export function renderContrastWorkbench(session) {
   const identityHtml = pairIdentityHtml(selected);
   const purposeText = pairPurposeText(selected);
   return `<section id="banco" aria-labelledby="banco-titolo"><h2 id="banco-titolo" class="wb-visually-hidden">Banco di contrasto guidato</h2>
-<div id="${HOST_ID}" ${HOOK}="host" role="region" aria-label="Banco di contrasto guidato">
+<div id="${HOST_ID}" ${HOOK}="host">
 <noscript><p class="wb-nojs">JavaScript è disattivato: i pulsanti dei colori restano inerti e nessuna misura live viene eseguita. La matrice mostra solo dati dello snapshot di build.</p></noscript>
 <div class="wb-shell"><div class="wb-workspace">
 <section class="wb-toolbar" aria-labelledby="smart-colors-workbench-toolbar-title">
@@ -1303,7 +1291,7 @@ ${sourceSwatchesHtml(sources.entries, defaultSource)}
 </form>
 </div>
 </section>
-${matrixHtml(pairs, design)}
+${matrixHtml(pairs)}
 <div class="wb-main">
 <header class="wb-head">
 <h3 id="smart-colors-workbench-current" ${HOOK}="current" class="wb-current"><strong>${escape(currentTitle)}</strong></h3>
@@ -1311,7 +1299,7 @@ ${matrixHtml(pairs, design)}
 <p id="smart-colors-workbench-purpose" ${HOOK}="purpose" class="wb-purpose">${escape(purposeText)}</p>
 </header>
 <p id="smart-colors-workbench-status" ${HOOK}="status" role="status" aria-live="polite" class="wb-status">Misura non disponibile senza JavaScript.</p>
-<div id="smart-colors-workbench-result" ${HOOK}="result" class="wb-frames" aria-label="Campioni CSS del consumatore">
+<div id="smart-colors-workbench-result" ${HOOK}="result" class="wb-frames" role="group" aria-label="Campioni CSS del consumatore">
 <section class="wb-view" aria-labelledby="smart-colors-workbench-left-title"><h3 id="smart-colors-workbench-left-title" class="wb-view-title">Tema chiaro</h3><div class="wb-view-chrome"><span class="wb-aa is-unmeasured" data-smart-colors-workbench="left-sample" aria-hidden="true">Aa</span><span id="smart-colors-workbench-left-meta" data-smart-colors-workbench="left-meta" class="wb-view-meta">Campione live non disponibile senza JavaScript.</span></div><div id="smart-colors-workbench-left" ${HOOK}="left" class="wb-frame" role="group" aria-label="Vista CSS sinistra"></div><dl id="smart-colors-workbench-left-measure" ${HOOK}="left-measure" class="wb-measure"><div class="wb-measure-row"><dt>Rapporto</dt><dd><span class="wb-verdict" data-status="unmeasured">Non misurato</span> · serve JavaScript</dd></div></dl></section>
 <section class="wb-view" aria-labelledby="smart-colors-workbench-right-title"><h3 id="smart-colors-workbench-right-title" class="wb-view-title">Tema scuro</h3><div class="wb-view-chrome"><span class="wb-aa is-unmeasured" data-smart-colors-workbench="right-sample" aria-hidden="true">Aa</span><span id="smart-colors-workbench-right-meta" data-smart-colors-workbench="right-meta" class="wb-view-meta">Campione live non disponibile senza JavaScript.</span></div><div id="smart-colors-workbench-right" ${HOOK}="right" class="wb-frame" role="group" aria-label="Vista CSS destra"></div><dl id="smart-colors-workbench-right-measure" ${HOOK}="right-measure" class="wb-measure"><div class="wb-measure-row"><dt>Rapporto</dt><dd><span class="wb-verdict" data-status="unmeasured">Non misurato</span> · serve JavaScript</dd></div></dl></section>
 </div>
@@ -1323,8 +1311,8 @@ ${matrixHtml(pairs, design)}
 <div id="smart-colors-workbench-proposal" ${HOOK}="proposal" class="wb-proposal">Nessuna proposta richiesta.</div>
 <section id="smart-colors-workbench-proposal-frames" ${HOOK}="proposal-frames" class="wb-frames wb-proposal-frames" hidden aria-labelledby="smart-colors-workbench-proposal-frames-title">
 <h4 id="smart-colors-workbench-proposal-frames-title">Viste verificate della proposta</h4>
-<section class="wb-view" aria-labelledby="smart-colors-workbench-proposal-before-title"><h4 id="smart-colors-workbench-proposal-before-title">Attuale</h4><div id="smart-colors-workbench-proposal-before" ${HOOK}="proposal-before" class="wb-frame" role="region" tabindex="0" aria-label="Vista CSS attuale della proposta: viewport di verifica fisso 360×480; scorri orizzontalmente per vedere tutta la vista"></div></section>
-<section class="wb-view" aria-labelledby="smart-colors-workbench-proposal-after-title"><h4 id="smart-colors-workbench-proposal-after-title">Proposta</h4><div id="smart-colors-workbench-proposal-after" ${HOOK}="proposal-after" class="wb-frame" role="region" tabindex="0" aria-label="Vista CSS proposta: viewport di verifica fisso 360×480; scorri orizzontalmente per vedere tutta la vista"></div></section>
+<section class="wb-view" aria-labelledby="smart-colors-workbench-proposal-frames-title smart-colors-workbench-proposal-before-title"><h4 id="smart-colors-workbench-proposal-before-title">Attuale</h4><div id="smart-colors-workbench-proposal-before" ${HOOK}="proposal-before" class="wb-frame" role="region" tabindex="0" aria-label="Vista CSS attuale della proposta: viewport di verifica fisso 360×480; scorri orizzontalmente per vedere tutta la vista"></div></section>
+<section class="wb-view" aria-labelledby="smart-colors-workbench-proposal-frames-title smart-colors-workbench-proposal-after-title"><h4 id="smart-colors-workbench-proposal-after-title">Proposta</h4><div id="smart-colors-workbench-proposal-after" ${HOOK}="proposal-after" class="wb-frame" role="region" tabindex="0" aria-label="Vista CSS proposta: viewport di verifica fisso 360×480; scorri orizzontalmente per vedere tutta la vista"></div></section>
 </section>
 <details class="is-detail wb-how"><summary>Come funziona la ricerca della correzione</summary>
 <p class="margin-note">La ricerca varia la luminosità quanto basta per raggiungere il minimo dichiarato, non il target del progetto, e non cerca il colore più vicino in ΔE.</p>
@@ -1359,7 +1347,7 @@ ${tokenCatalogueHtml(design, pairs, sources)}
 </details>
 <details class="is-detail wb-advanced" data-smart-colors-workbench="manual"><summary>Modifica manualmente (avanzato)</summary>
 <form class="wb-controls" data-smart-colors-workbench="controls">
-<p class="margin-note">Ambito: solo i controlli pubblici dichiarati per i due token della coppia selezionata e per il tema attivo; i knob macro del generatore non sono esposti qui. Si inviano solo i campi che modifichi: i default dichiarati sono segnaposto e un mix non toccato non viene esportato. Un override completo ha precedenza sul mix della superficie; il mix resta un valore pubblico separato. Queste modifiche sono temporanee: non rigenerano il generatore e non modificano <code>palette.css</code>.</p>
+<p class="margin-note">Ambito: solo i controlli pubblici dichiarati per i due token della coppia selezionata e per il tema attivo; i knob macro del generatore non sono esposti qui. Si inviano solo i campi che modifichi: i default dichiarati sono segnaposto e un mix non toccato non viene esportato. La L si applica subito alla bozza; «Applica override» invia solo i campi CSS testuali modificati. Un override completo ha precedenza sul mix della superficie; il mix resta un valore pubblico separato. Queste modifiche sono temporanee: non rigenerano il generatore e non modificano <code>palette.css</code>.</p>
 <div id="smart-colors-workbench-controls" ${HOOK}="controls-body">${controlRowsHtml(selected, "light", design)}</div>
 <div class="wb-actions"><button type="submit" id="smart-colors-workbench-controls-submit">Applica override</button><button type="button" id="smart-colors-workbench-reset-pair" ${HOOK}="reset-pair">Scarta la bozza della coppia</button><button type="button" id="smart-colors-workbench-reset-all" ${HOOK}="reset-all">Scarta la bozza di tuning</button></div>
 <p class="margin-note">«Scarta la bozza…» non rimuove gli override già salvati. Per quelli usa «Rimuovi personalizzazione» sul singolo controllo.</p>
@@ -1373,7 +1361,7 @@ ${tokenCatalogueHtml(design, pairs, sources)}
 <p id="smart-colors-workbench-export-mode" class="margin-note">Export non ancora richiesto.</p>
 <label for="smart-colors-workbench-export-text">CSS pubblico esportato, selezionabile senza permessi clipboard</label>
 <textarea id="smart-colors-workbench-export-text" ${HOOK}="export-text" aria-describedby="smart-colors-workbench-export-note" readonly rows="8"></textarea>
-<a id="smart-colors-workbench-download" ${HOOK}="download" download="colors-tuning.css" hidden>Scarica colors-tuning.css (azione manuale)</a>
+<a id="smart-colors-workbench-download" ${HOOK}="download" hidden>Scarica colors-tuning.css (azione manuale)</a>
 </details>
 </div>
 </div>
@@ -1433,6 +1421,7 @@ export function createContrastWorkbenchView(deps) {
   function attribute(node, name) { return node && typeof node.getAttribute === "function" ? node.getAttribute(name) : null; }
   function setAttribute(node, name, value) { if (node && typeof node.setAttribute === "function") node.setAttribute(name, value); }
   function textOf(value) { return value === null || value === undefined ? "" : String(value); }
+  var INVALID_L = "L non valida: 0–100.";
 
   var status = host.querySelector("[" + HOOK + '="status"]');
   var sourceSelect = byId("smart-colors-workbench-source");
@@ -1526,7 +1515,6 @@ export function createContrastWorkbenchView(deps) {
   var lightnessInputs = [];
   var lastExportStamp = null;
   var lastExplorationSignature = null;
-  var matrixFocusValue = null;
   var useButtons = [];
   var lastUsesSource = null;
   var lastUsesKey = null;
@@ -1534,6 +1522,7 @@ export function createContrastWorkbenchView(deps) {
   var pickerCategory = "";
   var pickerPage = 0;
   var busy = false;
+  var overridesPending = false;
   // Local copy: the serialized factory must not depend on any module-scope binding.
   var useVisibleLimit = 6;
   // Blocked-source state: when no verified result can be shown for the requested source (no pair at
@@ -2008,10 +1997,6 @@ export function createContrastWorkbenchView(deps) {
       if (selectedValue && attribute(visible[index].button, "data-pair-value") === selectedValue) selectedEntry = visible[index];
     }
     if (!selectedEntry) selectedEntry = visible.length ? visible[0] : null;
-    if (selectedEntry && matrixFocusValue && attribute(selectedEntry.button, "data-pair-value") !== matrixFocusValue) {
-      // The runtime selection stays authoritative; a hidden roving target never keeps the tab stop.
-      matrixFocusValue = attribute(selectedEntry.button, "data-pair-value");
-    }
     for (var rowIndex = 0; rowIndex < matrixEntries.length; rowIndex += 1) {
       var entry = matrixEntries[rowIndex];
       if (!entry.button) continue;
@@ -2069,7 +2054,6 @@ export function createContrastWorkbenchView(deps) {
     if (next < 0) next = 0;
     if (next >= visible.length) next = visible.length - 1;
     var target = visible[next].button;
-    matrixFocusValue = attribute(target, "data-pair-value");
     for (var reset = 0; reset < visible.length; reset += 1) setAttribute(visible[reset].button, "tabindex", visible[reset].button === target ? "0" : "-1");
     if (typeof target.focus === "function") target.focus();
   }
@@ -2240,6 +2224,7 @@ export function createContrastWorkbenchView(deps) {
         ? "outline: 3px solid var(" + foreground + ");\noutline-offset: 2px;\nbackground-color: var(" + background + ");\nborder-radius: 8px;\npadding: 0;\nwidth: 100%;\nbox-sizing: border-box;\nheight: 48px;\n\n/* Campione vuoto: <div class=\"specimen\" role=\"img\" aria-label=\"Campione statico dell'anello\"> */\n.surface {\n  padding: 12px;\n  background: var(" + background + ");\n  border-radius: 8px;\n}"
         : "color: var(" + foreground + ");\nbackground-color: var(" + background + ");";
     var snippet = make("pre");
+    setAttribute(snippet, "role", "group");
     setAttribute(snippet, "tabindex", "0");
     setAttribute(snippet, "aria-label", "Snippet CSS della coppia, con le stesse variabili della resa");
     snippet.appendChild(make("code", null, snippetText));
@@ -2389,13 +2374,26 @@ export function createContrastWorkbenchView(deps) {
     return l * 100;
   }
   function roundLightness(value) { return Math.round(value * 10) / 10; }
-  // Range and number share the same one-decimal display: the range cannot represent more, and the
-  // number input accepts any fraction, so neither ever reports a step mismatch for a real L.
   function displayLightness(value) { return String(roundLightness(value)); }
+  function validL(value) { var n = Number(value); return value !== "" && finite(n) && n >= 0 && n <= 100 ? n : null; }
+  function markInvalidL(entry) {
+    entry.invalid = true; entry.dirty = false;
+    if (entry.timer) { clearTimeout(entry.timer); entry.timer = null; }
+    if (entry.noteBeforeInvalid === null) entry.noteBeforeInvalid = entry.note.textContent;
+    setAttribute(entry.number, "aria-invalid", "true");
+    entry.note.textContent = INVALID_L;
+  }
+  // The note is this field's `aria-describedby`, so it drops the error once the value is valid again.
+  function clearInvalidL(entry) {
+    if (!entry.invalid) return;
+    entry.invalid = false;
+    if (entry.noteBeforeInvalid !== null) { entry.note.textContent = entry.noteBeforeInvalid; entry.noteBeforeInvalid = null; }
+    setAttribute(entry.number, "aria-invalid", "false");
+  }
   function syncLightnessEntry(entry, state) {
     if (!entry || !entry.range || !entry.number) return;
     if (doc.activeElement === entry.range || doc.activeElement === entry.number) return;
-    if (entry.committing || entry.dirty) return;
+    if (entry.invalid || entry.committing || entry.dirty) return;
     var draft = state && isRecord(state.draft) ? state.draft : {};
     var removed = state && Array.isArray(state.removed) ? state.removed : [];
     var value = Object.hasOwn(draft, entry.control) ? parseOklchLightness(draft[entry.control]) : null;
@@ -2412,6 +2410,7 @@ export function createContrastWorkbenchView(deps) {
       if (entry.range.value !== next) entry.range.value = next;
       if (entry.number.value !== next) entry.number.value = next;
       entry.number.placeholder = "";
+      setAttribute(entry.number, "aria-invalid", "false");
       setAttribute(entry.range, "aria-valuetext", next + "%");
     } else {
       entry.number.value = "";
@@ -2427,9 +2426,6 @@ export function createContrastWorkbenchView(deps) {
   function syncLightness(state) {
     for (var index = 0; index < lightnessInputs.length; index += 1) syncLightnessEntry(lightnessInputs[index], state);
   }
-  // A pending 180 ms commit belongs to the control that scheduled it. When a pair or theme change
-  // (or destroy) replaces the controls, the old entries are detached: clear their timers and ignore
-  // any in-flight completion, so a stale edit can never land on the new pair.
   function disposeLightnessInputs() {
     for (var index = 0; index < lightnessInputs.length; index += 1) {
       var entry = lightnessInputs[index];
@@ -2440,30 +2436,31 @@ export function createContrastWorkbenchView(deps) {
     lightnessInputs = [];
   }
   function commitLightness(entry) {
-    if (!entry || entry.disposed || !entry.supported) return;
-    if (!entry.available) { announce("L non disponibile: il runtime non ha restituito una L leggibile. Nessun valore viene inviato."); return; }
+    if (!entry || entry.disposed || !entry.supported) return Promise.resolve(false);
+    if (!entry.available) { announce("L non disponibile: il runtime non ha restituito una L leggibile. Nessun valore viene inviato."); return Promise.resolve(false); }
     if (entry.timer) { clearTimeout(entry.timer); entry.timer = null; }
-    var raw = Number(entry.number && entry.number.value !== "" ? entry.number.value : entry.range.value);
-    if (!isFinite(raw) || raw < 0 || raw > 100) { announce("L non valida: usa un valore tra 0 e 100."); return; }
-    if (entry.committing) { entry.queued = true; return; }
+    var raw = validL(entry.number && entry.number.value !== "" ? entry.number.value : entry.range.value);
+    if (raw === null) { markInvalidL(entry); announce(INVALID_L); return Promise.resolve(false); }
+    if (entry.committing) { entry.queued = true; return Promise.resolve(false); }
     entry.committing = true;
-    Promise.resolve(controller.setLightness(entry.control, raw / 100)).then(function (result) {
-      if (entry.disposed) return;
+    return Promise.resolve(controller.setLightness(entry.control, raw / 100)).then(function (result) {
+      if (entry.disposed) return false;
       entry.committing = false;
       entry.dirty = false;
       if (result && result.error) {
         announce("Regolazione L non applicata: " + String(result.error) + ". Nessun valore viene inventato.");
         render(stateNow());
-        return;
+        return false;
       }
-      announce("Luminosità L " + roundLightness(raw) + "% inviata al runtime per " + entry.control + ". C e H sono quelli del colore calcolato; gli altri knob (mix/macro) restano attivi.");
-      if (entry.queued) { entry.queued = false; commitLightness(entry); return; }
+      if (entry.queued) { entry.queued = false; return commitLightness(entry); }
       render(stateNow());
+      return true;
     }, function (error) {
-      if (entry.disposed) return;
+      if (entry.disposed) return false;
       entry.committing = false;
       entry.dirty = false;
       announce("Regolazione L non riuscita: " + (error && error.message ? error.message : String(error)) + ". Nessun valore viene inventato.");
+      return false;
     });
   }
   function scheduleLightness(entry) {
@@ -2512,13 +2509,23 @@ export function createContrastWorkbenchView(deps) {
     note.id = id + "-note";
     group.appendChild(note);
     row.appendChild(group);
-    var entry = { token: token, control: control, range: range, number: number, note: note, dirty: false, timer: null, committing: false, queued: false, disposed: false, supported: supported, available: false };
+    var entry = { token: token, control: control, range: range, number: number, note: note, dirty: false, invalid: false, noteBeforeInvalid: null, timer: null, committing: false, queued: false, disposed: false, supported: supported, available: false };
     if (supported) {
-      listen(range, "input", function () { number.value = range.value; entry.dirty = true; scheduleLightness(entry); });
-      listen(range, "change", function () { number.value = range.value; entry.dirty = true; commitLightness(entry); });
-      listen(number, "input", function () { if (isFinite(Number(number.value))) range.value = number.value; entry.dirty = true; });
-      listen(number, "change", function () { entry.dirty = true; commitLightness(entry); });
-      listen(number, "blur", function () { if (entry.dirty && !entry.committing) commitLightness(entry); });
+      listen(range, "input", function () { clearInvalidL(entry); number.value = range.value; setAttribute(range, "aria-valuetext", range.value + "%"); entry.dirty = true; scheduleLightness(entry); });
+      listen(range, "change", function () { clearInvalidL(entry); number.value = range.value; entry.dirty = true; commitLightness(entry); });
+      listen(number, "input", function () {
+        var next = validL(number.value);
+        if (next === null) { markInvalidL(entry); return; }
+        clearInvalidL(entry);
+        range.value = displayLightness(next);
+        setAttribute(range, "aria-valuetext", range.value + "%");
+        entry.dirty = true;
+      });
+      listen(number, "change", function () {
+        if (validL(number.value) === null) { markInvalidL(entry); announce(INVALID_L); return; }
+        clearInvalidL(entry); entry.dirty = true; commitLightness(entry);
+      });
+      listen(number, "blur", function () { if (!entry.invalid && entry.dirty && !entry.committing) commitLightness(entry); });
     }
     lightnessInputs.push(entry);
     syncLightnessEntry(entry, state);
@@ -2790,15 +2797,15 @@ export function createContrastWorkbenchView(deps) {
     if (!explorationBox || !explorationResults || !explorationStatus) return;
     var available = typeof controller.explorationPairs === "function" && typeof controller.measureExploration === "function";
     explorationBox.hidden = !available;
-    if (!available) return;
+    if (!available) { if (explorationRun) explorationRun.disabled = true; return; }
     var theme = checkedTheme();
     var phase = state && state.phase ? String(state.phase) : "unavailable";
     var exploration = state && isRecord(state.exploration) ? state.exploration : null;
     var measurements = exploration && Array.isArray(exploration.measurements) ? exploration.measurements : [];
-    var signature = [theme, textOf(state && state.revision), textOf(exploration && exploration.revision), textOf(exploration && exploration.phase), textOf(exploration && exploration.variant), String(measurements.length), busy ? "busy" : "idle"].join("|");
-    if (available && signature === lastExplorationSignature) return;
-    lastExplorationSignature = signature;
+    var signature = [theme, phase, textOf(state && state.revision), textOf(exploration && exploration.revision), textOf(exploration && exploration.phase), textOf(exploration && exploration.variant), String(measurements.length), busy ? "busy" : "idle"].join("|");
     if (explorationRun) explorationRun.disabled = busy || phase === "running";
+    if (signature === lastExplorationSignature) return;
+    lastExplorationSignature = signature;
     clear(explorationResults);
     explorationResults.hidden = true;
     if (!exploration) {
@@ -2845,7 +2852,7 @@ export function createContrastWorkbenchView(deps) {
       row.appendChild(make("td", null, finite(measurement.ratio) ? ratioText(measurement.ratio, [measurement.minimum, measurement.target]) : "non misurato"));
       row.appendChild(make("td", null, finite(measurement.minimum) ? ratioText(measurement.minimum) : "non dichiarato"));
       row.appendChild(make("td", null, finite(measurement.target) ? ratioText(measurement.target) : "non dichiarato"));
-      row.appendChild(make("td", null, matrixStatusLabel(textOf(measurement.status) || "unmeasured")));
+      row.appendChild(make("td", null, matrixStatusLabelLocal(textOf(measurement.status) || "unmeasured")));
       body.appendChild(row);
     }
     table.appendChild(body);
@@ -3558,7 +3565,7 @@ export function createContrastWorkbenchView(deps) {
   // compares immediately. With no verified use at all, or none available in the current theme, the
   // previous result is cleared with an explicit state instead of a stale pair; changing the theme or
   // the source re-attempts the selection.
-  function applySourceSelection(token) {
+  function applySourceSelection(token, trigger) {
     if (!sourceSelect) return;
     var next = token || "";
     if (sourceSelect.value !== next) sourceSelect.value = next;
@@ -3586,13 +3593,14 @@ export function createContrastWorkbenchView(deps) {
     }
     if (!keep) setPairOption(target);
     syncPalette();
-    applySelection();
+    applySelection(trigger);
   }
   // A theme or comparison change re-attempts the pinned source when the result is blocked, so the
-  // user can always recover from an unavailable-in-theme state.
-  function resumeSelection() {
-    if (sourceBlocked && blockedSource) { applySourceSelection(blockedSource); return; }
-    applySelection();
+  // user can always recover from an unavailable-in-theme state. `trigger` is the control that started
+  // the action: a run never disables it, which would blur it to the body.
+  function resumeSelection(trigger) {
+    if (sourceBlocked && blockedSource) { applySourceSelection(blockedSource, trigger); return; }
+    applySelection(trigger);
   }
   function applyUse(button) {
     if (!pairSelect || !button) return null;
@@ -3733,8 +3741,8 @@ export function createContrastWorkbenchView(deps) {
     if (exportButton) exportButton.disabled = Boolean(state && state.phase === "running") || sourceBlocked || busy;
     if (state && state.phase === "running" && applyButton) applyButton.disabled = true;
   }
-  function run(action, success, failure) {
-    setBusy(true);
+  function run(action, success, failure, keep) {
+    setBusy(true, keep);
     return Promise.resolve()
       .then(action)
       .then(function (result) {
@@ -3759,7 +3767,7 @@ export function createContrastWorkbenchView(deps) {
     if (leftMeasure) { clear(leftMeasure); leftMeasure.appendChild(field("Rapporto", message)); }
     if (rightMeasure) { clear(rightMeasure); rightMeasure.appendChild(field("Rapporto", message)); }
   }
-  function setBusy(value) {
+  function setBusy(value, keep) {
     busy = Boolean(value);
     setAttribute(host, "aria-busy", busy ? "true" : "false");
     // "Prova proposta" is never re-enabled blindly: it stays gated on a verified suggestion. The
@@ -3767,40 +3775,36 @@ export function createContrastWorkbenchView(deps) {
     // user just activated would blur it. Re-entrancy is guarded by the `busy` flag in their handlers.
     var buttons = [submit, controlsSubmit, resetPair, resetAll, suggestForeground, suggestBackground, exportButton, copyPalette, explorationRun];
     for (var index = 0; index < buttons.length; index += 1) {
-      if (buttons[index]) buttons[index].disabled = busy;
+      if (buttons[index]) buttons[index].disabled = busy && buttons[index] !== keep;
     }
     if (discardButton) discardButton.disabled = busy || !suggestionPresent || typeof controller.discardSuggestion !== "function";
     if (applyButton) applyButton.disabled = busy || !suggestionVerified;
     if (explorationRun) explorationRun.disabled = busy || typeof controller.measureExploration !== "function" || typeof controller.explorationPairs !== "function";
   }
-  // Focus continuity for actions whose own control is disabled or hidden by the successful publish
-  // that follows. These helpers are called ONLY from explicit click handlers, never from render or
-  // subscribe, so a programmatic state update never moves focus. A user who has already moved focus
-  // to another control keeps it: only a lost/body/own-button focus is recovered.
   function canTakeFocus(node) {
     if (!node || node.disabled || node.hidden || typeof node.focus !== "function") return false;
     if (typeof node.getClientRects === "function" && node.getClientRects().length === 0) return false;
     if (typeof node.closest === "function" && node.closest("details:not([open])")) return false;
     return true;
   }
+  function focusSafely(node) {
+    if (!canTakeFocus(node)) return false;
+    try { node.focus({ preventScroll: true }); } catch (error) { return false; }
+    return true;
+  }
   function focusAfterAction(kind) {
-    var active = doc.activeElement;
-    var body = doc.body || null;
-    var root = doc.documentElement || null;
-    var focusLost = !active || active === body || active === root || active === host || active === applyButton || active === discardButton;
-    if (!focusLost) return false;
-    // Apply hands focus to the shell-owned export command (the action that makes the change
-    // durable), falling back to the visible contextual correction if the header is unavailable.
-    var order = kind === "discard"
-      ? [suggestForeground, suggestBackground, exportButton, submit]
-      : [exportButton, suggestForeground, suggestBackground, submit];
-    for (var index = 0; index < order.length; index += 1) {
-      if (!canTakeFocus(order[index])) continue;
-      try { order[index].focus(); return true; } catch (error) { /* try the next stable control */ }
-    }
+    var active = doc.activeElement, body = doc.body, root = doc.documentElement;
+    if (active && active !== body && active !== root && active !== host && active !== applyButton && active !== discardButton) return false;
+    var order = kind === "discard" ? [suggestForeground, suggestBackground, submit] : [applyButton, suggestForeground, suggestBackground, controlsSubmit, submit];
+    for (var index = 0; index < order.length; index += 1) if (focusSafely(order[index])) return true;
     return false;
   }
-  function applySelection() {
+  function restoreFocusAfterReset(trigger) {
+    var active = doc.activeElement;
+    if (active && active !== doc.body && active !== doc.documentElement && active !== host && active !== trigger) return false;
+    return focusSafely(trigger);
+  }
+  function applySelection(trigger) {
     var option = selectedOption();
     var source = sourceSelect ? sourceSelect.value : null;
     if (!option) { announce("Nessuna coppia selezionata: nessuna misura viene inventata."); setSourceBlocked("Nessuna coppia selezionata.", source); return Promise.resolve(null); }
@@ -3831,7 +3835,8 @@ export function createContrastWorkbenchView(deps) {
     return run(
       function () { return controller.select({ pairId: pairId, theme: theme, comparison: comparison }); },
       "Confronto richiesto: attendo le misure del runtime.",
-      function () { setSourceBlocked("Selezione non applicata: la misura precedente è stata rimossa. Riprova.", source); }
+      function () { setSourceBlocked("Selezione non applicata: la misura precedente è stata rimossa. Riprova.", source); },
+      trigger
     );
   }
   function filterPairs(state) {
@@ -3858,25 +3863,47 @@ export function createContrastWorkbenchView(deps) {
     var value = input && input.value !== undefined ? String(input.value).trim() : "";
     return value;
   }
+  function flushLightness() {
+    var jobs = [];
+    for (var index = 0; index < lightnessInputs.length; index += 1) {
+      var entry = lightnessInputs[index];
+      if (!entry || entry.disposed || entry.invalid || !(entry.dirty || entry.timer || entry.committing)) continue;
+      if (entry.timer) { clearTimeout(entry.timer); entry.timer = null; }
+      jobs.push(commitLightness(entry));
+    }
+    return jobs;
+  }
   function applyOverrides() {
-    // Only fields the user actually changed are submitted: a pre-filled placeholder default (for
-    // example a 10% surface mix) is never exported as an unsolicited knob, and an untouched saved
-    // draft value is never re-sent.
-    var pending = controlInputs.filter(function (entry) { return entry.dirty && readValue(entry.node) !== ""; });
-    if (!pending.length) { announce("Nessun valore modificato: nessun override applicato. I default mostrati restano segnaposto."); return Promise.resolve(null); }
+    // Only a repeated submit of THIS action is refused: another action's run may still be in flight
+    // and the override is allowed to land on it. The flag is set before the flush resolves.
+    if (overridesPending) { announce("Override già in corso: attendi il risultato."); return Promise.resolve(null); }
+    var pending = [];
+    for (var index = 0; index < controlInputs.length; index += 1) {
+      var entry = controlInputs[index];
+      var raw = readValue(entry.node);
+      if (entry.dirty && raw !== "") pending.push([entry, entry.kind === "mix" ? raw + "%" : raw]);
+    }
+    var jobs = flushLightness();
+    var flushed = Promise.all(jobs);
+    if (!pending.length) {
+      return flushed.then(function () {
+        announce(jobs.length ? "L già nella bozza, nessun altro campo CSS da applicare." : "Nessun campo testuale modificato.");
+        return null;
+      });
+    }
+    overridesPending = true;
+    var settled = function () { overridesPending = false; };
     var index = 0;
     function next() {
       if (index >= pending.length) return Promise.resolve(null);
-      var entry = pending[index];
+      var job = pending[index];
       index += 1;
-      var raw = readValue(entry.node);
-      var value = entry.kind === "mix" ? raw + "%" : raw;
-      return Promise.resolve(controller.setOverride(entry.control, value)).then(function () {
-        entry.dirty = false;
+      return Promise.resolve(controller.setOverride(job[0].control, job[1])).then(function () {
+        job[0].dirty = false;
         return next();
       });
     }
-    return run(next, "Override pubblici applicati al runtime. La palette sorgente non è stata modificata. Solo i campi modificati sono stati inviati.");
+    return flushed.then(function () { return run(next, "Override pubblici applicati al runtime. La palette sorgente non è stata modificata. Solo i campi modificati sono stati inviati."); }).then(settled, settled);
   }
   function setDownload(css, mode) {
     if (!download) return;
@@ -3887,8 +3914,8 @@ export function createContrastWorkbenchView(deps) {
       download.hidden = false;
     } else {
       download.hidden = true;
-      download.download = "colors-tuning.patch.css";
-      download.textContent = "Scarica il frammento (azione manuale)";
+      download.removeAttribute("href");
+      download.removeAttribute("download");
     }
   }
   function exportFileModel() {
@@ -4048,9 +4075,8 @@ export function createContrastWorkbenchView(deps) {
     renderUses(sourceSelect ? sourceSelect.value : "");
   });
   listen(useClear, "click", function () {
-    pickerQuery = "";
-    if (useSearch) useSearch.value = "";
-    pickerPage = 0;
+    // Labelled «Azzera filtri»: the category is a filter too.
+    resetPickerFilters();
     renderUses(sourceSelect ? sourceSelect.value : "");
     if (useSearch && typeof useSearch.focus === "function") useSearch.focus();
   });
@@ -4072,7 +4098,12 @@ export function createContrastWorkbenchView(deps) {
   listen(comparisonThemes, "change", resumeSelection);
   listen(comparisonTuning, "change", resumeSelection);
   listen(comparisonDraft, "change", resumeSelection);
-  listen(selectionForm, "submit", function (event) { prevent(event); resumeSelection(); });
+  listen(selectionForm, "submit", function (event) {
+    prevent(event);
+    // The submit stays enabled during its own run, so re-entrancy is guarded here.
+    if (busy) { announce("Confronto già in corso: attendi le misure."); return; }
+    resumeSelection(submit);
+  });
   listen(controlsForm, "submit", function (event) { prevent(event); applyOverrides(); });
   listen(resetPair, "click", function () {
     var controls = controlInputs.map(function (entry) { return entry.control; });
@@ -4083,9 +4114,11 @@ export function createContrastWorkbenchView(deps) {
       index += 1;
       return Promise.resolve(controller.reset(control)).then(resultOrThrow).then(next);
     }
-    run(next, "Bozza dei controlli della coppia scartata. Gli override salvati non sono stati modificati.");
+    run(next, "Bozza dei controlli della coppia scartata. Gli override salvati non sono stati modificati.", null, resetPair).then(function (result) { restoreFocusAfterReset(resetPair); return result; });
   });
-  listen(resetAll, "click", function () { run(function () { return Promise.resolve(controller.reset()).then(resultOrThrow); }, "Bozza di tuning scartata. Gli override salvati non sono stati rimossi: usa Rimuovi personalizzazione per quelli."); });
+  listen(resetAll, "click", function () {
+    run(function () { return Promise.resolve(controller.reset()).then(resultOrThrow); }, "Bozza di tuning scartata. Gli override salvati non sono stati rimossi: usa Rimuovi personalizzazione per quelli.", null, resetAll).then(function (result) { restoreFocusAfterReset(resetAll); return result; });
+  });
   listen(suggestForeground, "click", function () { run(function () { return controller.suggest("foreground"); }, "Ricerca della proposta per il primo piano richiesta."); });
   listen(suggestBackground, "click", function () { run(function () { return controller.suggest("background"); }, "Ricerca della proposta per lo sfondo richiesta."); });
   listen(applyButton, "click", function () {

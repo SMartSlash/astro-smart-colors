@@ -893,7 +893,9 @@ export function createContrastWorkbench(deps) {
       };
     }
     const warnings = [];
-    if (!saved.present) warnings.push("Nessun file di tuning salvato: creato un nuovo :root con i soli override della bozza.");
+    // A new root is only announced when the exported bytes really carry one: an export made only of
+    // tombstones is empty and must never be described as a created `:root`.
+    if (!saved.present && patch.css !== base) warnings.push("Nessun file di tuning salvato: creato un nuovo :root con i soli override della bozza.");
     if (patch.unmatched.length) warnings.push("Override salvati non più corrispondenti a un controllo corrente (non rimossi): " + patch.unmatched.join(", ") + ".");
     return { css: patch.css, mode: "complete", warnings, removed, unmatched: patch.unmatched };
   }
@@ -904,13 +906,23 @@ export function createContrastWorkbench(deps) {
     selection = { pairId: selection.pairId, theme: selection.theme, comparison: "draft" };
   }
 
+  // Recomputed for every action, never accumulated across actions: a declared payload failure always
+  // survives, a real measurement failure survives, and the message of a previous action does not.
+  function settleError() {
+    if (!payloadRead.ok) return payloadRead.message;
+    return mounted && views.length > 0 ? computeGlobalError(views) : null;
+  }
+
   function rerun(reason) {
     revision += 1;
     suggestion = null;
     exploration = null;
     views = [];
-    phase = mounted ? "running" : "idle";
-    error = null;
+    // Without a mount there is no run to publish a phase: a declared payload failure stays visible
+    // instead of being replaced by a neutral "idle".
+    phase = mounted ? "running" : (payloadRead.ok ? "idle" : "unavailable");
+    // `views` is empty here, so this keeps only the payload-level diagnosis for the running phase.
+    error = settleError();
     destroyVisibleFrames();
     destroyTrialFrames();
     destroyProposalFrames();
@@ -1836,6 +1848,7 @@ export function createContrastWorkbench(deps) {
     const generation = suggestGeneration + 1;
     suggestGeneration = generation;
     suggestion = null;
+    error = settleError();
     destroyTrialFrames();
     destroyProposalFrames();
     publish("suggestion");
@@ -2053,8 +2066,8 @@ export function createContrastWorkbench(deps) {
     if (!frameDocument || !frameDocument.documentElement) return setError("measureExploration cannot read the " + theme + " frame document");
 
     const tokenRevision = revision;
-    const tokenTheme = selection.theme;
     const tokenVariant = variant;
+    error = settleError();
     exploration = { theme, variant, revision: tokenRevision, phase: "running", measurements: [], errors: [], omittedFamilies: explorationOmitted(theme) };
     publish("exploration-running");
 
@@ -2073,8 +2086,8 @@ export function createContrastWorkbench(deps) {
       return state();
     }
 
-    // A late advisory result is discarded; it can never overwrite a newer revision or theme.
-    if (destroyed || revision !== tokenRevision || selection.theme !== tokenTheme || currentVariantFor(theme) !== tokenVariant) return state();
+    // A late advisory result is discarded; it can never overwrite a newer revision or variant.
+    if (destroyed || revision !== tokenRevision || currentVariantFor(theme) !== tokenVariant) return state();
     const errors = isArray(measured.errors) ? clone(measured.errors) : [];
     if (measured.support !== "supported" && !errors.length) {
       errors.push({ phase: "exploration", cause: "exploration-unsupported", message: measured.error || "the exploration pairs could not be measured" });
@@ -2184,14 +2197,14 @@ export function createContrastWorkbench(deps) {
     if (control !== undefined && control !== null) {
       if (typeof control !== "string" || !controlIndex.has(control)) return setError("unknown tuning control " + String(control));
       if (!Object.prototype.hasOwnProperty.call(draft, control)) {
-        error = null;
+        error = settleError();
         publish("reset-noop");
         return state();
       }
       delete draft[control];
     } else {
       if (Object.keys(draft).length === 0) {
-        error = null;
+        error = settleError();
         publish("reset-noop");
         return state();
       }
@@ -2209,13 +2222,13 @@ export function createContrastWorkbench(deps) {
     const descriptor = typeof control === "string" ? controlIndex.get(control) : null;
     if (!descriptor) return setError("removeOverride: unknown tuning control " + String(control));
     if (draft[control] === "initial") {
-      error = null;
+      error = settleError();
       publish("remove-noop");
       return state();
     }
     const wasSaved = hasSavedDeclaration(control);
     if (!wasSaved && !Object.prototype.hasOwnProperty.call(draft, control)) {
-      error = null;
+      error = settleError();
       publish("remove-noop");
       return state();
     }
@@ -2321,6 +2334,7 @@ export function createContrastWorkbench(deps) {
         suggestion = null;
         views = [];
         phase = payloadRead.ok ? "idle" : "unavailable";
+        error = settleError();
         publish("preference-change");
       }
     };

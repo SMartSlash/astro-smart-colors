@@ -4,6 +4,7 @@ import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { loadSmartColorsConfig, resolveProjectUrl, DEFAULT_CONFIG_FILE } from "./load-config.mjs";
+import { validateOutputPaths } from "./output-paths.mjs";
 
 const PALETTE_TEMPLATE_URL = new URL("./templates/palette.css", import.meta.url);
 const TUNING_TEMPLATE_URL = new URL("./templates/colors-tuning.css", import.meta.url);
@@ -22,9 +23,10 @@ const AFFIRMATIVE_ANSWER = /^(?:|y(?:es)?)$/i;
  * colors-tuning.css in the palette directory. A token directory other than src/styles/tokens, or an
  * explicit --palette outside it, also writes a plain smart-colors.config.mjs (no package import) so
  * build/check/audit resolve the layout without a toolchain. An existing or explicitly selected config
- * is never rewritten; a palette override that diverges from it is refused before any write. Nothing is
- * written when a target already exists or would overwrite a generated output. Prompting only happens
- * on an interactive terminal and only when no path option was supplied.
+ * is never rewritten; a palette override that diverges from it is refused before any write, and no
+ * authored target may resolve to the config file this call creates. Nothing is written when a target
+ * already exists or would overwrite a generated output. Prompting only happens on an interactive
+ * terminal and only when no path option was supplied.
  */
 export async function initSmartColors({
   root = process.cwd(),
@@ -42,7 +44,7 @@ export async function initSmartColors({
 
   const config = await loadSmartColorsConfig({ root, configFile });
   const explicitConfig = configFile !== undefined;
-  const configPalettePath = normalizeProjectPath(config.palette);
+  const configPalettePath = configPathValue(config.palette, "palette", configFile);
   const configExists = explicitConfig || await pathExists(fileURLToPath(resolveProjectUrl(root, configFile ?? DEFAULT_CONFIG_FILE)));
 
   const explicitDir = dir === undefined ? undefined : normalizeDirectory(dir);
@@ -72,10 +74,6 @@ export async function initSmartColors({
   const paletteFile = fileURLToPath(resolveProjectUrl(root, palettePath));
   const tuningFile = fileURLToPath(resolveProjectUrl(root, tuningPath));
 
-  if (paletteFile === tuningFile) {
-    throw new Error(`palette and tuning must be different files; both resolve to ${palettePath}.`);
-  }
-
   // R12: an existing or explicitly selected config is never rewritten. Any effective palette that
   // diverges from it — an explicit --palette/--dir or an interactive choice — cannot be reconciled
   // without editing the user's config, so refuse before any write instead of a false success.
@@ -88,30 +86,40 @@ export async function initSmartColors({
   // A new config is written whenever the effective palette differs from the default config.palette
   // (same directory but a different file name included), so build never reads the wrong palette.
   const generatedConfig = !explicitConfig && !configExists && paletteDiverges;
-  const outputPath = generatedConfig ? path.posix.join(paletteDir, OUTPUT_FILENAME) : normalizeProjectPath(config.output);
+  const outputPath = generatedConfig ? path.posix.join(paletteDir, OUTPUT_FILENAME) : configPathValue(config.output, "output", configFile);
   const effectiveConfigFile = explicitConfig ? configFile : (generatedConfig ? CONFIG_FILENAME : DEFAULT_CONFIG_FILE);
 
   const configContent = generatedConfig ? configFileTemplate(palettePath, outputPath) : null;
   const configFileAbsolute = fileURLToPath(resolveProjectUrl(root, CONFIG_FILENAME));
-  const targets = [
+  const authoredTargets = [
     { label: "palette", value: palettePath, file: paletteFile },
     { label: "tuning", value: tuningPath, file: tuningFile },
+  ];
+  const targets = [
+    ...authoredTargets,
     ...(configContent === null ? [] : [{ label: "config", value: CONFIG_FILENAME, file: configFileAbsolute }]),
   ];
 
   // The motion output is protected even while motion is disabled, matching the report writer:
-  // enabling motion later must not collide with a file authored now.
-  const generatedOutputs = [
+  // enabling motion later must not collide with a file authored now. The config is protected as a
+  // path build reads, whether this run creates it or an existing --config already provides it.
+  const protectedPaths = [
+    { label: "config", value: effectiveConfigFile },
     { label: "config.output", value: outputPath },
     { label: "config.motion.output", value: config.motion?.output },
-  ]
-    .filter((output) => typeof output.value === "string" && output.value.length > 0)
-    .map((output) => ({ ...output, file: fileURLToPath(resolveProjectUrl(root, output.value)) }));
+  ].filter((entry) => typeof entry.value === "string" && entry.value.length > 0);
 
-  for (const target of targets) {
-    const collision = generatedOutputs.find((output) => output.file === target.file);
-    if (collision) {
-      throw new Error(`Refusing to write ${target.label} ${target.value}: it collides with the generated ${collision.label} (${collision.value}). Choose a different path.`);
+  // Each authored file is validated as the file written against the other authored files and the
+  // protected paths. validateOutputPaths owns canonical resolution, case folding and Unicode NFC, so
+  // an alias through a symlinked directory collides even before either file exists. Its message names
+  // the generic source/output slots, so the prefix names the file init would have written.
+  for (const [index, target] of authoredTargets.entries()) {
+    for (const other of [...authoredTargets.slice(index + 1), ...protectedPaths]) {
+      try {
+        await validateOutputPaths({ root, configFile, config: { palette: other.value, output: target.value } });
+      } catch (cause) {
+        throw new Error(`Refusing to write ${target.label} ${target.value}: ${cause.message} Nothing was written.`, { cause });
+      }
     }
   }
 
@@ -226,9 +234,15 @@ async function tuningGuidance({ root, paletteDir, tuningPath }) {
   const defaultTuningPath = path.posix.join(DEFAULT_TOKEN_DIR, TUNING_FILENAME);
   const candidateTuning = path.posix.join(paletteDir, TUNING_FILENAME);
   const defaultTuningExists = await pathExists(fileURLToPath(resolveProjectUrl(root, defaultTuningPath)));
-  const buildTuningPath = candidateTuning !== defaultTuningPath && !defaultTuningExists ? candidateTuning : defaultTuningPath;
+  // Mirror resolveTuningFile: the palette-directory candidate counts only when it exists now or after
+  // this write.
+  const candidateExists = sameResolvedPath(root, tuningPath, candidateTuning)
+    || await pathExists(fileURLToPath(resolveProjectUrl(root, candidateTuning)));
+  const buildTuningPath = candidateTuning !== defaultTuningPath && !defaultTuningExists && candidateExists
+    ? candidateTuning
+    : defaultTuningPath;
   const warnings = sameResolvedPath(root, tuningPath, buildTuningPath) ? [] : [
-    `Il tuning ${tuningPath} non verrà letto da build: smart-colors risolve il tuning in ${buildTuningPath} (segue la cartella della palette). Tieni il file di tuning accanto alla palette, oppure puntalo a ${buildTuningPath}.`,
+    `Il tuning ${tuningPath} non verrà letto da build: legge ${buildTuningPath} (accanto alla palette).`,
   ];
   return { buildTuningPath, warnings };
 }
@@ -255,6 +269,13 @@ function normalizeDirectory(value) {
 
 function normalizeProjectPath(value) {
   return value.replaceAll("\\", "/");
+}
+
+// Name the offending config key instead of failing inside a string helper before validation runs.
+function configPathValue(value, key, configFile) {
+  if (typeof value === "string" && value.length > 0) return normalizeProjectPath(value);
+  const received = value === null ? "null" : typeof value;
+  throw new Error(`Smart Colors config ${configFile ?? DEFAULT_CONFIG_FILE} must declare ${key} as a non-empty string (received ${received}); nothing was written.`);
 }
 
 // Compare project paths after filesystem resolution so `./design` and `design` are the same path and

@@ -346,7 +346,7 @@ ${list(proposal.changes).map((value) => {
 ${sideEffectsHtml(proposal.sideEffects)}
 <dl class="destination"><div><dt>File</dt><dd><code>${escape(destination.file)}</code></dd></div><div><dt>Percorso nella configurazione</dt><dd><code>${escape(destination.path)}</code></dd></div></dl>
 ${structuralLines(proposal)}
-<pre tabindex="0" aria-label="Snippet della proposta"><code>${escape(destination.snippet)}</code></pre>
+<pre tabindex="0" role="group" aria-label="Snippet della proposta"><code>${escape(destination.snippet)}</code></pre>
 <p class="margin-note">Applicazione manuale: questa anteprima non modifica file. Dopo la modifica, rigenera il report.</p>
 </article>`;
 }
@@ -552,10 +552,6 @@ export function createLocalPresenter(deps) {
     var parts = typeof pairId === "string" ? pairId.split("|") : [];
     if (parts.length !== 4) return null;
     return { theme: parts[0], property: parts[1], foreground: parts[2], background: parts[3] };
-  }
-  function parseScenario(scenarioId) {
-    var parts = typeof scenarioId === "string" ? scenarioId.split("-") : [];
-    return { variant: parts[0] || null, theme: parts[1] || null };
   }
   var panel = null;
   function ensurePanel() {
@@ -783,12 +779,6 @@ export function createLocalPresenter(deps) {
       var parsed = JSON.parse(node.textContent || "");
       return isRecord(parsed) && isRecord(parsed.design) ? parsed.design : null;
     } catch (error) { return null; }
-  }
-  function darkMixText(source) {
-    var mix = isRecord(source.darkMix) ? source.darkMix : null;
-    if (!mix && tools && typeof tools.darkBlendMix === "function" && finite(source.darkBlend)) mix = tools.darkBlendMix(source.darkBlend);
-    if (!mix || !finite(mix.sourcePercent) || !finite(mix.whitePercent)) return null;
-    return "dark-blend " + (source.darkBlend == null ? "adattivo" : String(source.darkBlend)) + " → source " + mix.sourcePercent + "% / white " + mix.whitePercent + "%";
   }
   function sourceName(token) {
     if (!design || !Array.isArray(design.sources)) return null;
@@ -1320,33 +1310,6 @@ function designFamilyHtml(design, tools, tokens) {
   }
   if (!rows.length) return "";
   return `<details class="is-detail"><summary>Ricetta e controlli</summary><ul class="design-list">${rows.map((row) => `<li>${row}</li>`).join("")}</ul></details>`;
-}
-function designDrawnHtml(design, foreground, background, theme, tools) {
-  if (!record(design) || !record(design.tokens)) return "";
-  const rows = [];
-  for (const token of [foreground, background]) {
-    const line = designRecipeLine(design, tools, token, theme);
-    if (line) rows.push(line);
-    if (record(design.tokens[token])) {
-      for (const controlLine of designControlLines(design, token)) rows.push(escape(controlLine));
-    }
-  }
-  if (!rows.length) return "";
-  return `<ul class="design-list">${rows.map((row) => `<li>${row}</li>`).join("")}</ul>`;
-}
-function darkBlendHtml(design, tools) {
-  if (!record(design) || !Array.isArray(design.sources)) return "";
-  const items = design.sources.map((source) => {
-    if (!record(source)) return "";
-    const mix = record(source.darkMix) ? source.darkMix : (tools && Number.isFinite(source.darkBlend) ? tools.darkBlendMix(source.darkBlend) : null);
-    if (!record(mix) || !Number.isFinite(mix.sourcePercent) || !Number.isFinite(mix.whitePercent)) return "";
-    const blend = source.darkBlend == null ? "adattivo" : String(source.darkBlend);
-    return `<li><code>${escape(source.token)}</code> · ${escape(source.role ?? "ruolo non indicato")} · dark-blend ${escape(blend)} → source ${escape(String(mix.sourcePercent))}% / white ${escape(String(mix.whitePercent))}%</li>`;
-  }).filter(Boolean);
-  if (!items.length) return "";
-  return `<h3>dark-blend per ruolo</h3>
-<p class="margin-note">Regola di progetto 10/90 (source↔white), non una soglia WCAG.</p>
-<ul class="dark-blend-list">${items.join("")}</ul>`;
 }
 function cssSourceHtml(value) {
   const css = record(value) && record(value.css) ? value.css : {};

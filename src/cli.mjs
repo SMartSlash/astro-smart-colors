@@ -307,7 +307,8 @@ function countRoles(roles = {}) {
   if (roles.canvas) bump("canvas");
   if (roles.ink) bump("ink");
   for (const def of Object.values(roles.identities ?? {})) bump(def?.role === "feedback" ? "feedback" : "ui");
-  for (const _def of Object.values(roles.decoratives ?? {})) bump("decorative");
+  const decoratives = Object.keys(roles.decoratives ?? {}).length;
+  if (decoratives > 0) counts.set("decorative", decoratives);
   return counts;
 }
 

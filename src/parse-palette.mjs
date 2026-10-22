@@ -9,7 +9,9 @@ const TOKEN_DECLARATION_PER_LINE = /--([a-z0-9-]+)\s*:\s*(oklch\([^;]*\))\s*;/gi
 const PROPERTY_BLOCK_PATTERN = /@property\s+(--[a-z0-9-]+)\s*\{([^}]*)\}/gi;
 const PROPERTY_INITIAL_VALUE = /initial-value:\s*(oklch\([^;]*\))\s*;/i;
 const PROPERTY_ROLE = /role:\s*([a-z][a-z0-9-]*)\s*;/i;
-const PROPERTY_DARK_BLEND = /dark-blend:\s*([^;]+)\s*;/gi;
+// A trailing descriptor may omit its final semicolon (valid CSS); an omitted
+// semicolon between descriptors is not a valid value and fails loudly.
+const PROPERTY_DARK_BLEND = /dark-blend:\s*([^;}]+?)\s*(?:;|$)/gi;
 
 const VALID_ROLES = new Set(["canvas", "ink", "ui", "feedback", "decorative"]);
 

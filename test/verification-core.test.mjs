@@ -337,6 +337,25 @@ test("coverage never confirms an empty matrix, an empty scenario or unmeasured p
   assert.equal(only("below-minimum").complete, true, "a classified but failing pair is still covered; the verdict belongs to the caller");
 });
 
+test("coverage treats a measurement without a classified status as unmeasured", () => {
+  for (const status of [undefined, null, "", "measured", "passing", "unknown", "unmeasured"]) {
+    const result = core.coverage([{ id: "light", pairIds: ["a"] }], [{ scenarioId: "light", pairId: "a", status }]);
+    assert.equal(result.complete, false, JSON.stringify(status));
+    assert.equal(result.measuredCount, 0, JSON.stringify(status));
+    assert.deepEqual(result.unmeasured, [{ scenarioId: "light", pairId: "a" }], JSON.stringify(status));
+    assert.deepEqual(result.scenarios[0].unmeasured, ["a"], JSON.stringify(status));
+    assert.deepEqual(result.scenarios[0].missing, [], JSON.stringify(status));
+  }
+
+  // A classified failing outcome is still a measurement; the verdict belongs to the caller.
+  for (const status of ["pass", "below-target", "below-minimum"]) {
+    const result = core.coverage([{ id: "light", pairIds: ["a"] }], [{ scenarioId: "light", pairId: "a", status }]);
+    assert.equal(result.complete, true, status);
+    assert.equal(result.measuredCount, 1, status);
+    assert.deepEqual(result.unmeasured, [], status);
+  }
+});
+
 test("coverage flags duplicate scenario ids and duplicate pair declarations instead of deduplicating", () => {
   const duplicateScenario = core.coverage(
     [{ id: "light", pairIds: ["a"] }, { id: "light", pairIds: ["b"] }],

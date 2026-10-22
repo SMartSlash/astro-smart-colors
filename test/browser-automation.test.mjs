@@ -449,7 +449,7 @@ test("a hanging context creation is an incomplete verification, not unavailable"
   assert.notEqual(run.status, "unavailable");
   assert.equal(run.engines[0].launched, true);
   assert.equal(run.engines[0].status, "incomplete");
-  assert.ok(run.errors.every((error) => error.phase === "measure"));
+  assert.ok(run.errors.every((error) => error.phase === "measure" && error.cause === "timeout"), "a measure timeout keeps its structured cause");
   assert.equal(run.measurements.length, 0);
   assert.equal(run.coverage.complete, false);
 });
@@ -594,6 +594,15 @@ test("sessionPayload passes css source/status/production/digest through and neve
   assert.deepEqual(payload.css.digest, { generated: "g".repeat(64), baseline: "b".repeat(64) });
   assert.equal(Object.hasOwn(payload.css, "generated"), false, "the payload never duplicates the generated string");
   assert.equal(html.includes("SHOULD-NOT-APPEAR-IN-THE-PAYLOAD"), false);
+});
+
+test("a hostile session string cannot close the payload script", async () => {
+  const provider = createFakeProvider({ reportFor: () => failingReport() });
+  const session = { ...syntheticSession(), notes: ["</script><script>globalThis.smartColorsPwned = true</script>"] };
+  await runAutomation(session, { mode: "required", provider });
+  const html = provider.record.contents[0];
+  assert.equal(html.includes("</script><script>globalThis.smartColorsPwned"), false);
+  assert.ok(html.includes("\\u003c/script>"), "the payload escapes '<' so the JSON stays inert");
 });
 
 const NATIVE_PROOF = process.env.SMART_COLORS_NATIVE_PROOF === "1";

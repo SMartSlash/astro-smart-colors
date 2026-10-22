@@ -107,6 +107,29 @@ test("static previews carry no script, no external resource and no inline handle
   assert.match(html, /user-select:\s*text/);
 });
 
+test("static preview keeps IDREFs closed, names the snippet explicitly and escapes hostile proposal text", () => {
+  const attack = '\"><img src=x onerror=alert(1)><script>bad()</script>';
+  const input = report({
+    scenarios: [scenario({ diagnostics: [diagnostic({ ratio: 4.2 })] })],
+    proposals: [proposal({ title: attack, destination: { file: "tokens/palette.css", path: attack, snippet: `</code></pre>${attack}` } })],
+  });
+  const html = preview(input);
+  const ids = new Set([...html.matchAll(/\sid="([^"]+)"/g)].map((match) => match[1]));
+  for (const attr of ["for", "form", "aria-labelledby", "aria-describedby", "aria-controls"]) {
+    for (const match of html.matchAll(new RegExp(`\\s${attr}="([^"]+)"`, "g"))) {
+      for (const id of match[1].split(/\s+/).filter(Boolean)) assert.ok(ids.has(id), `${attr} must resolve to an existing id: ${id}`);
+    }
+  }
+  for (const tag of html.matchAll(/<(div|span|pre)\b([^>]*)>/g)) {
+    if (/\baria-label=/.test(tag[2])) assert.match(tag[2], /\brole="[^"]+"/, `${tag[1]} must expose a role when it is named`);
+  }
+  const snippet = html.match(/<pre\b[^>]*aria-label="Snippet della proposta"[^>]*>/)[0];
+  assert.match(snippet, /\brole="group"/);
+  assert.doesNotMatch(html, /<img\b|<script\b|<\/code><\/pre>"/);
+  assert.ok(html.includes("&lt;img src=x onerror=alert(1)&gt;"));
+  assert.equal(unescapeHtml(snippetIn(html, "azione")), input.proposals[0].destination.snippet);
+});
+
 test("verified proposals appear in #azione with the exact snippet, samples and the covering link", () => {
   const input = report({ scenarios: [scenario({ diagnostics: [diagnostic({ ratio: 4.2 })] })], proposals: [proposal({
     sideEffects: [{
@@ -871,6 +894,13 @@ test("the session family catalog keeps technical tokens inside collapsed native 
   const sample = html.match(/<li class="family-sample">([\s\S]*?)<\/li>/)[1];
   assert.match(sample, /<details class="is-detail">/);
   assert.doesNotMatch(sample.split("<details")[0], /--color-primary-text/, "the token line stays inside the collapsed detail");
+  // The compact specimen is decorative: CSS pseudo-elements only add the two repeated caption
+  // lines, while the real body text and the accessible title/estimate stay in the DOM outside it.
+  assert.match(sample, /<div class="pair-visual pair-visual--sample" aria-hidden="true"[^>]*>Corpo del testo di esempio<\/div>/);
+  assert.match(sample, /<p class="sample-title">/);
+  assert.match(sample, /<p class="sample-note">Stima:/);
+  assert.match(html, /\.pair-visual--sample::before \{ content: "Titolo grande";/);
+  assert.match(html, /\.pair-visual--sample::after \{ content: "Etichetta piccola";/);
 });
 
 test("the local presenter never writes markup and drops an unvalidated color", () => {

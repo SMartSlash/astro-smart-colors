@@ -178,7 +178,7 @@ test("the selected pair explains usage, exact var() snippet and keeps minimum an
   const html = renderContrastWorkbench(workbenchSession());
   assert.match(html, /Testo della famiglia primaria/);
   assert.match(html, /Superficie tinta primaria/);
-  assert.match(html, /<pre tabindex="0" aria-label="Snippet CSS della coppia, con le stesse variabili della resa"><code>color: var\(--color-primary-text\);/);
+  assert.match(html, /<pre role="group" tabindex="0" aria-label="Snippet CSS della coppia, con le stesse variabili della resa"><code>color: var\(--color-primary-text\);/);
   assert.match(html, /background-color: var\(--color-primary-surface\);/);
   assert.match(html, /Minimo 4,5:1 · target 4,6:1/);
   assert.match(html, /la preferenza di sistema \(<code>prefers-color-scheme<\/code>\) resta separata e non viene emulata/);
@@ -219,6 +219,9 @@ test("the suggestion copy states a bounded min-lightness search for the minimum,
   assert.match(html, /<button type="button" id="smart-colors-workbench-apply" data-smart-colors-workbench="apply" hidden disabled>Prova proposta<\/button>/);
   assert.doesNotMatch(html, /id="smart-colors-workbench-export"/, "the shell owns the single export command");
   assert.match(html, /Seleziona il CSS esportato/);
+  assert.match(html, /<a id="smart-colors-workbench-download" data-smart-colors-workbench="download" hidden>Scarica colors-tuning\.css \(azione manuale\)<\/a>/);
+  assert.doesNotMatch(html, /id="smart-colors-workbench-download"[^>]*\bdownload=/, "the static placeholder never carries download without a real href");
+  assert.doesNotMatch(html, /id="smart-colors-workbench-download"[^>]*\bhref=/, "the static placeholder never carries a fake or empty href");
   assert.match(html, /id="smart-colors-workbench-discard-suggestion" data-smart-colors-workbench="discard-suggestion" hidden disabled>Scarta proposta<\/button>/);
   // The redundant restore/reset-all duplicate is gone: reset-all lives once, in the controls scope.
   assert.doesNotMatch(html, /Ripristina<\/button>/);
@@ -259,6 +262,8 @@ test("hostile source and design labels are escaped and cannot close a tag or inj
 
 test("the workbench frames stay empty for the runtime and the specimen precedes its scoped result", () => {
   const html = renderContrastWorkbench(workbenchSession());
+  assert.match(html, /<div id="smart-colors-workbench-result" data-smart-colors-workbench="result" class="wb-frames" role="group" aria-label="Campioni CSS del consumatore">/);
+  assert.doesNotMatch(html, /<div id="smart-colors-workbench" data-smart-colors-workbench="host"[^>]*role="region"/, "the outer workbench section owns the landmark, not the inner host");
   assert.match(html, /<div id="smart-colors-workbench-left" data-smart-colors-workbench="left" class="wb-frame" role="group" aria-label="Vista CSS sinistra"><\/div>/);
   assert.match(html, /<div id="smart-colors-workbench-right" data-smart-colors-workbench="right" class="wb-frame" role="group" aria-label="Vista CSS destra"><\/div>/);
   // Proposal frames are real consumer slots too: empty in the markup, populated only by the runtime.
@@ -269,8 +274,8 @@ test("the workbench frames stay empty for the runtime and the specimen precedes 
   assert.match(html, /<div id="smart-colors-workbench-proposal-after"[^>]*role="region"[^>]*tabindex="0"[^>]*><\/div>/);
   assert.match(html, /Vista CSS attuale della proposta: viewport di verifica fisso 360×480; scorri orizzontalmente/);
   assert.match(html, /Vista CSS proposta: viewport di verifica fisso 360×480; scorri orizzontalmente/);
-  assert.match(html, /<h4 id="smart-colors-workbench-proposal-before-title">Attuale<\/h4>/);
-  assert.match(html, /<h4 id="smart-colors-workbench-proposal-after-title">Proposta<\/h4>/);
+  assert.match(html, /<section class="wb-view" aria-labelledby="smart-colors-workbench-proposal-frames-title smart-colors-workbench-proposal-before-title"><h4 id="smart-colors-workbench-proposal-before-title">Attuale<\/h4>/);
+  assert.match(html, /<section class="wb-view" aria-labelledby="smart-colors-workbench-proposal-frames-title smart-colors-workbench-proposal-after-title"><h4 id="smart-colors-workbench-proposal-after-title">Proposta<\/h4>/);
   // The archive uses resolved `--sample-*` swatches; the guided workbench must not.
   assert.doesNotMatch(html, /--sample-fg|--sample-bg/);
   assert.match(html, /color: var\(--color-primary-text\)/);
@@ -535,6 +540,7 @@ function makeNode(tag) {
     removeChild(child) { const index = this.children.indexOf(child); if (index >= 0) this.children.splice(index, 1); child.parentNode = null; return child; },
     setAttribute(name, value) { this.attributes[name] = String(value); },
     getAttribute(name) { return Object.hasOwn(this.attributes, name) ? this.attributes[name] : null; },
+    removeAttribute(name) { delete this.attributes[name]; },
     addEventListener(type, handler) { (this.listeners[type] = this.listeners[type] || []).push(handler); },
     dispatch(type, event) { (this.listeners[type] || []).forEach((handler) => handler(event ?? { type, preventDefault() {} })); },
     focus() { this.focused = true; },
@@ -1428,6 +1434,20 @@ test("the picker searches, filters and paginates every real use, then resets onl
   assert.ok(controller.calls.select.length >= 1);
 });
 
+test("the clear-filters action resets the category filter as well as the query", () => {
+  const { dom } = install(workbenchSession());
+  addUseOptions(dom, 10);
+  dom.openPicker.dispatch("click");
+  dom.useCategory.value = "border";
+  dom.useCategory.dispatch("change");
+  assert.match(dom.useCount.textContent, /5 usi/);
+  dom.useClear.dispatch("click");
+  assert.equal(dom.useCategory.value, "", "the category select says Tutti gli usi after the reset");
+  assert.equal(dom.useSearch.value, "");
+  assert.match(dom.useCount.textContent, /11 usi/, "every use is listed again, not only the category subset");
+  assert.equal(dom.useSearch.focused, true, "the reset returns focus to the search field");
+});
+
 test("the picker matches natural multiword queries in any order, ignoring extra spaces and accents", () => {
   const { dom } = install(workbenchSession());
   addSearchOption(dom, "--color-card-text", "--color-card", "Testo sulla card");
@@ -1543,7 +1563,7 @@ test("apply stays disabled until a verified suggestion exists", async () => {
   assert.equal(apply.disabled, false, "only a verified suggestion enables apply");
 });
 
-test("apply success hands focus to the header export and never steals it on programmatic updates", async () => {
+test("apply keeps focus near the proposal and never sends it to the header export", async () => {
   const { dom, controller } = install(workbenchSession());
   const apply = dom.document.getElementById("smart-colors-workbench-apply");
   const exportButton = dom.document.getElementById("smart-colors-workbench-export");
@@ -1563,12 +1583,12 @@ test("apply success hands focus to the header export and never steals it on prog
   assert.equal(suggest.focused, undefined);
   assert.equal(dom.document.activeElement, dom.themeDark);
 
-  // An explicit apply hands focus to the shell-owned export command.
+  // An explicit apply keeps focus in the correction context, never on the header export.
   dom.document.activeElement = apply;
   apply.dispatch("click");
   await tick();
-  assert.equal(exportButton.focused, true, "focus moves to the header export after apply");
-  assert.equal(suggest.focused, undefined, "the fallback is not used while export is available");
+  assert.equal(exportButton.focused, undefined, "apply never jumps to the header export");
+  assert.equal(suggest.focused, true, "the visible correction action keeps the user in context");
 
   // A user who moved focus during the action keeps it.
   exportButton.focused = false;
@@ -1579,12 +1599,29 @@ test("apply success hands focus to the header export and never steals it on prog
   assert.equal(exportButton.focused, false, "focus is never stolen when it moved elsewhere");
 });
 
-test("apply focus falls back to a visible correction action when the header export is unavailable", async () => {
+test("apply keeps focus on the proposal action while it is still available", async () => {
   const { dom, controller } = install(workbenchSession());
   const apply = dom.document.getElementById("smart-colors-workbench-apply");
   const exportButton = dom.document.getElementById("smart-colors-workbench-export");
+  const suggestion = { status: "verified", side: "foreground", control: "--color-tune-primary-text-light", value: "oklch(0.4 0.1 250)", before: 3.1, after: 4.6, checked: 1, unmeasured: 0, regressions: [] };
+  controller.applySuggestion = () => { controller.publish({ ...controller.state(), revision: 2, draft: { "--color-tune-primary-text-light": "oklch(0.4 0.1 250)" }, suggestion }); return Promise.resolve(); };
+  controller.publish({ phase: "complete", revision: 1, draft: {}, removed: [], suggestion, error: null, views: [] });
+  dom.document.activeElement = apply;
+  apply.dispatch("click");
+  await tick();
+  assert.equal(apply.focused, true, "the still-available proposal action keeps focus");
+  assert.equal(exportButton.focused, undefined, "the header export is not focused without a request");
+});
+
+test("apply focus falls back to a visible correction action when the proposal action disappears", async () => {
+  const { dom, controller } = install(workbenchSession());
+  const apply = dom.document.getElementById("smart-colors-workbench-apply");
   const suggest = dom.document.getElementById("smart-colors-workbench-suggest-foreground");
-  exportButton.hidden = true;
+  controller.applySuggestion = () => {
+    controller.publish({ ...controller.state(), revision: 2, draft: { "--color-tune-primary-text-light": "oklch(0.4 0.1 250)" }, suggestion: null });
+    return Promise.resolve();
+  };
+  apply.hidden = true;
   controller.publish({
     phase: "complete", revision: 1, draft: {}, error: null, views: [],
     suggestion: { status: "verified", side: "foreground", control: "--color-tune-primary-text-light", value: "oklch(0.4 0.1 250)", before: 3.1, after: 4.6, checked: 1, unmeasured: 0, regressions: [] },
@@ -1822,6 +1859,28 @@ test("details keep source, declared role and initial recipe after a runtime refr
   assert.match(second, /Sorgenti: --palette-brand \(nome brand · ruolo dichiarato: interfaccia\)/, "the source binding survives the refresh");
   assert.match(second, /Ricetta iniziale del generatore: text \(contrast\)/, "the recipe survives the refresh");
   assert.match(second, /Bozza attiva: --color-tune-primary-text-dark-mix/);
+});
+
+test("export removes href and download again when the runtime has no CSS", async () => {
+  let file = { css: ":root { --a: 1; }", mode: "complete", warnings: [], removed: [], unmatched: [] };
+  const { dom } = install(workbenchSession(), controllerStub({ exportTuningFile: () => file }));
+  const download = dom.document.getElementById("smart-colors-workbench-download");
+  dom.document.getElementById("smart-colors-workbench-export").dispatch("click");
+  assert.equal(download.download, "colors-tuning.css");
+  assert.ok(download.href.startsWith("data:text/css;charset=utf-8,"));
+
+  file = { css: ":root { --a: 2; }", mode: "fragment", warnings: [], removed: [], unmatched: [] };
+  dom.document.getElementById("smart-colors-workbench-export").dispatch("click");
+  assert.equal(download.download, "colors-tuning.patch.css");
+  assert.ok(download.href.startsWith("data:text/css;charset=utf-8,"));
+
+  download.setAttribute("href", "data:text/css;charset=utf-8,stale");
+  download.setAttribute("download", "colors-tuning.css");
+  file = { css: "", mode: "unavailable", warnings: [], removed: [], unmatched: [] };
+  dom.document.getElementById("smart-colors-workbench-export").dispatch("click");
+  assert.equal(download.hidden, true);
+  assert.equal(download.getAttribute("href"), null, "an empty export never leaves a placeholder href");
+  assert.equal(download.getAttribute("download"), null, "an empty export never leaves download without href");
 });
 
 test("export writes the runtime tuning into a selectable textarea with a manual data-URI download", async () => {
@@ -2362,6 +2421,170 @@ test("exploration is an optional advisory disclosure and a stale revision is nev
   dom.explorationRun.dispatch("click");
   await tick();
   assert.equal(explored, 1);
+});
+
+test("exploration controls recover before the cache and render 240 real rows", async () => {
+  let explored = 0;
+  const controller = controllerStub({
+    state: { phase: "running", revision: 1, selection: { pairId: null, theme: "light", comparison: "themes" }, draft: {}, removed: [], views: [], suggestion: null, error: null },
+    explorationPairs: () => [{ id: "explore|color|--a|--b", label: "A su B", foreground: "--a", background: "--b" }],
+    measureExploration: () => { explored += 1; return Promise.resolve(); },
+  });
+  const { dom } = install(workbenchSession(), controller);
+  assert.equal(dom.explorationRun.disabled, true, "a running primary phase gates the exploration action");
+  controller.publish({ phase: "complete", revision: 1, draft: {}, removed: [], suggestion: null, error: null, views: [], exploration: null });
+  assert.equal(dom.explorationRun.disabled, false, "the same revision must still refresh the action when the phase changes");
+  const measurements = Array.from({ length: 240 }, (_, index) => ({
+    pairId: "explore|color|--a|--b", ratio: 4.6, minimum: 4.5, target: 7, status: "pass", foreground: "rgb(1,1,1)", background: "rgb(255,255,255)", index,
+  }));
+  controller.publish({ phase: "complete", revision: 2, draft: {}, removed: [], suggestion: null, error: null, views: [], exploration: { theme: "light", variant: "baseline", revision: 2, phase: "complete", measurements, errors: [], omittedFamilies: [] } });
+  const body = findAllIn(dom.explorationResults, "tbody")[0];
+  assert.ok(body, "the real exploration table exposes a tbody");
+  assert.equal(body.children.length, 240, "every measurement is rendered as a real row");
+  assert.match(flat(dom.explorationStatus), /240 combinazioni misurate/);
+  dom.explorationRun.dispatch("click");
+  await tick();
+  assert.equal(explored, 1, "the enabled button reaches the runtime at startup");
+
+  controller.publish({
+    phase: "complete", revision: 3, draft: {}, removed: [], suggestion: null, error: null, exploration: null,
+    views: [{ slot: "left", theme: "light", variant: "baseline", pair: null, measurements: [{}], errors: [], measurement: { ratio: 3.1, minimum: 4.5, target: 4.6, status: "below-minimum", foreground: "rgb(120, 130, 140)", background: "rgb(250, 250, 250)", foregroundOklch: { l: 0.4963, c: 0.012, h: 245.4 }, backgroundOklch: { l: 0.9431, c: 0.004, h: 250 } } }],
+  });
+  const range = findAllIn(dom.controlsBody, '[data-kind="lightness"]').find((node) => node.type === "range");
+  range.value = "42";
+  range.dispatch("input");
+  await pause(240);
+  assert.equal(dom.explorationRun.disabled, false, "L work never leaves the exploration action disabled");
+  dom.document.getElementById("smart-colors-workbench-reset-pair").dispatch("click");
+  await tick();
+  assert.equal(dom.explorationRun.disabled, false, "reset work never leaves the exploration action disabled");
+});
+
+test("submitting before the L debounce flushes once and explains the automatic draft", async () => {
+  const { dom, controller } = install(workbenchSession());
+  controller.publish({
+    phase: "complete", revision: 1, draft: {}, removed: [], suggestion: null, error: null,
+    views: [{ slot: "left", theme: "light", variant: "baseline", pair: null, measurements: [{}], errors: [], measurement: { ratio: 3.1, minimum: 4.5, target: 4.6, status: "below-minimum", foreground: "rgb(120, 130, 140)", background: "rgb(250, 250, 250)", foregroundOklch: { l: 0.4963, c: 0.012, h: 245.4 }, backgroundOklch: { l: 0.9431, c: 0.004, h: 250 } } }],
+  });
+  const range = findAllIn(dom.controlsBody, '[data-kind="lightness"]').find((node) => node.type === "range");
+  const control = range.getAttribute("data-control");
+  dom.document.activeElement = range;
+  range.value = "42";
+  range.dispatch("input");
+  dom.controlsForm.dispatch("submit", { type: "submit", preventDefault() {} });
+  await tick();
+  await tick();
+  assert.deepEqual(controller.calls.setLightness, [[control, 0.42]], "the pending L is flushed exactly once");
+  assert.equal(controller.calls.setOverride.length, 0, "no text override is invented");
+  assert.match(dom.status.textContent, /L già nella bozza, nessun altro campo CSS da applicare/);
+});
+
+test("submitting a pending L together with a text field flushes L once and sends one text override", async () => {
+  const { dom, controller } = install(workbenchSession());
+  controller.publish({
+    phase: "complete", revision: 1, draft: {}, removed: [], suggestion: null, error: null,
+    views: [{ slot: "left", theme: "light", variant: "baseline", pair: null, measurements: [{}], errors: [], measurement: { ratio: 3.1, minimum: 4.5, target: 4.6, status: "below-minimum", foreground: "rgb(120, 130, 140)", background: "rgb(250, 250, 250)", foregroundOklch: { l: 0.4963, c: 0.012, h: 245.4 }, backgroundOklch: { l: 0.9431, c: 0.004, h: 250 } } }],
+  });
+  const range = findAllIn(dom.controlsBody, '[data-kind="lightness"]').find((node) => node.type === "range");
+  const control = range.getAttribute("data-control");
+  range.value = "42";
+  range.dispatch("input");
+  const text = findAllIn(dom.controlsBody, '[data-kind="override"]')[0];
+  text.value = "oklch(0.58 0.11 255)";
+  text.dispatch("input");
+  dom.controlsForm.dispatch("submit", { type: "submit", preventDefault() {} });
+  await tick();
+  await tick();
+  assert.deepEqual(controller.calls.setLightness, [[control, 0.42]], "L is flushed once, never three times");
+  assert.deepEqual(controller.calls.setOverride, [[control, "oklch(0.58 0.11 255)"]], "the text override is sent once after the flush");
+});
+
+test("a repeated override submit while busy never sends the same control twice", async () => {
+  const { dom, controller } = install(workbenchSession());
+  const text = findAllIn(dom.controlsBody, '[data-kind="override"]')[0];
+  const control = text.getAttribute("data-control");
+  text.value = "oklch(0.58 0.11 255)";
+  text.dispatch("input");
+  dom.controlsForm.dispatch("submit", { type: "submit", preventDefault() {} });
+  dom.controlsForm.dispatch("submit", { type: "submit", preventDefault() {} });
+  await tick();
+  await tick();
+  assert.deepEqual(controller.calls.setOverride, [[control, "oklch(0.58 0.11 255)"]], "one submit, one override");
+});
+
+test("reset restores focus without stealing it from a control the user chose", async () => {
+  const { dom } = install(workbenchSession());
+  const reset = dom.document.getElementById("smart-colors-workbench-reset-pair");
+  dom.document.activeElement = reset;
+  reset.dispatch("click");
+  await tick();
+  assert.equal(reset.focused, true, "a lost focus returns to the reset control");
+  reset.focused = false;
+  dom.document.activeElement = dom.themeDark;
+  reset.dispatch("click");
+  await tick();
+  assert.equal(reset.focused, false, "focus is never stolen from a control the user moved to");
+});
+
+test("invalid numeric L keeps the last valid range and marks the field", async () => {
+  const { dom, controller } = install(workbenchSession());
+  controller.publish({
+    phase: "complete", revision: 1, draft: {}, removed: [], suggestion: null, error: null,
+    views: [{ slot: "left", theme: "light", variant: "baseline", pair: null, measurements: [{}], errors: [], measurement: { ratio: 3.1, minimum: 4.5, target: 4.6, status: "below-minimum", foreground: "rgb(120, 130, 140)", background: "rgb(250, 250, 250)", foregroundOklch: { l: 0.4963, c: 0.012, h: 245.4 }, backgroundOklch: { l: 0.9431, c: 0.004, h: 250 } } }],
+  });
+  const number = findAllIn(dom.controlsBody, '[data-kind="lightness"]').find((node) => node.type === "number");
+  const range = findAllIn(dom.controlsBody, '[data-kind="lightness"]').find((node) => node.type === "range");
+  const control = number.getAttribute("data-control");
+  number.value = "150";
+  number.dispatch("input");
+  assert.equal(number.getAttribute("aria-invalid"), "true");
+  assert.match(flat(dom.controlsBody), /L non valida/);
+  assert.equal(range.value, "49.6", "the thumb never jumps to an invented or clamped value");
+  assert.equal(range.getAttribute("aria-valuetext"), "49.6%", "the announced value stays the last valid one");
+  number.dispatch("blur");
+  await tick();
+  assert.equal(controller.calls.setLightness.length, 0, "an invalid L is never applied to the draft");
+  number.value = "40";
+  number.dispatch("input");
+  assert.equal(number.getAttribute("aria-invalid"), "false");
+  assert.equal(range.value, "40");
+  assert.equal(range.getAttribute("aria-valuetext"), "40%");
+  number.dispatch("change");
+  await tick();
+  assert.deepEqual(controller.calls.setLightness, [[control, 0.4]], "a restored valid value applies normally");
+});
+
+test("the L error text leaves the description as soon as the typed value is valid again", () => {
+  const { dom } = install(workbenchSession());
+  const number = findAllIn(dom.controlsBody, '[data-kind="lightness"]').find((node) => node.type === "number");
+  const note = findAllIn(dom.controlsBody, "span").find((node) => String(node.id || "").endsWith("-note"));
+  const before = note.textContent;
+  assert.ok(before, "the field starts with its own description");
+  number.value = "150";
+  number.dispatch("input");
+  assert.equal(number.getAttribute("aria-invalid"), "true");
+  assert.equal(note.textContent, "L non valida: 0–100.");
+  number.value = "40";
+  number.dispatch("input");
+  assert.equal(number.getAttribute("aria-invalid"), "false");
+  assert.equal(note.textContent, before, "the aria-describedby text returns to the L provenance sentence");
+  assert.doesNotMatch(flat(dom.controlsBody), /L non valida/, "a valid value never keeps the error in its description");
+});
+
+test("the comparison submit is never disabled by its own run, so keyboard focus is not lost", async () => {
+  const { dom, controller } = install(workbenchSession());
+  const submit = dom.document.getElementById("smart-colors-workbench-submit");
+  dom.document.activeElement = submit;
+  dom.selection.dispatch("submit", { type: "submit", preventDefault() {} });
+  assert.equal(submit.disabled, false, "disabling the activated submit would move focus to the body");
+  assert.equal(dom.document.activeElement, submit, "the submit keeps focus while its own run is in flight");
+  // Re-entrancy stays guarded: a second submit during the same run sends no second selection.
+  dom.selection.dispatch("submit", { type: "submit", preventDefault() {} });
+  assert.match(dom.status.textContent, /già in corso/, "the busy state explains why the repeat is ignored");
+  await tick();
+  assert.equal(controller.calls.select.length, 1, "only one selection is requested");
+  assert.equal(submit.disabled, false);
+  assert.equal(dom.document.activeElement, submit, "focus stays on the submit after the run");
 });
 
 test("narrow viewport keeps the proposal locally scrollable and the document narrow, and desktop becomes overview + inspector", { skip: NATIVE_PROOF ? false : OPT_IN }, async () => {

@@ -29,7 +29,9 @@ export const DOM_THEME_PROBE_CLASS = "smart-colors-theme-probe";
 // Optional visible-node contract: a caller that already renders a real specimen can mark the
 // element that consumes a pair's tokens. `measureDocument(..., { elements: Map })` measures that
 // element instead of the synthetic probe, and fails closed when the element is missing, hidden,
-// not painted, or does not resolve the same tokens as the reference probe.
+// not painted, or does not resolve the same tokens as the reference probe. An outline paints outside
+// the element box: the caller must paint the pair background on the surrounding surface. The
+// workbench wrapper already does; the synthetic probe offsets the ring inward instead.
 export const DOM_VISIBLE_FOREGROUND_ATTRIBUTE = "data-smart-colors-foreground";
 export const DOM_VISIBLE_BACKGROUND_ATTRIBUTE = "data-smart-colors-background";
 export const DOM_VISIBLE_PROPERTY_ATTRIBUTE = "data-smart-colors-property";
@@ -184,6 +186,8 @@ export function createDomVerifier(core) {
       if (pair.property === "outlineColor") {
         probe.style.outlineStyle = "solid";
         probe.style.outlineWidth = "1px";
+        // Inward: the ring must sit over the background it is measured against.
+        probe.style.outlineOffset = "-1px";
       }
       host.appendChild(probe);
       byId.set(pair.id, probe);
@@ -409,6 +413,48 @@ export function createDomVerifier(core) {
     return { ok: true };
   }
 
+  function maxBorderWidth(value) {
+    const widths = trim(value).split(/\s+/).map(parseFloat).filter((width) => Number.isFinite(width));
+    return widths.length ? Math.max(...widths) : Number.NaN;
+  }
+
+  function outlineDrawnInside(style) {
+    const offset = parseFloat(trim(style.outlineOffset));
+    const width = parseFloat(trim(style.outlineWidth));
+    const border = maxBorderWidth(style.borderWidth);
+    return Number.isFinite(offset) && offset < 0 && Number.isFinite(width) && Number.isFinite(border)
+      && -offset >= width + border;
+  }
+
+  // An outside ring sits on the surrounding surface. A partial inward ring also
+  // overlaps the border, whose colour is not part of the measured pair.
+  function outlineBackdrop(document, view, node, style) {
+    if (parseFloat(trim(style.outlineOffset)) < 0 && maxBorderWidth(style.borderWidth) > 0) {
+      return { ok: false, cause: "outline-border-inset", message: "an inward outline overlaps the border" };
+    }
+    let current = node.parentElement;
+    while (current) {
+      const parentStyle = view.getComputedStyle(current);
+      const image = trim(parentStyle.backgroundImage);
+      if (image !== "" && image !== "none") {
+        return { ok: false, cause: "outline-backdrop-composited", message: "background-image is behind the outline" };
+      }
+      const background = trim(parentStyle.backgroundColor);
+      if (background === "") {
+        return { ok: false, cause: "outline-backdrop-unverified", message: "the outline backdrop is not exposed" };
+      }
+      if (background !== "transparent" && background !== "rgba(0, 0, 0, 0)") {
+        if (parseOrNull(background) === null) {
+          return { ok: false, cause: "outline-backdrop-unverified", message: "the outline backdrop is not an opaque color" };
+        }
+        return { ok: true, color: background };
+      }
+      if (current === document.documentElement) break;
+      current = current.parentElement;
+    }
+    return { ok: false, cause: "outline-backdrop-missing", message: "no opaque ancestor background behind the outline" };
+  }
+
   function pushUnmeasured(result, pair, phase, cause, message) {
     result.measurements.push(core.measurePair(pair, { id: result.scenarioId }, { error: message }));
     result.errors.push({ phase, cause, scenarioId: result.scenarioId, pairId: pair.id, message });
@@ -543,6 +589,17 @@ export function createDomVerifier(core) {
       if (!ancestors.ok) {
         pushUnmeasured(result, pair, "measure", ancestors.cause, ancestors.message);
         continue;
+      }
+      if (pair.property === "outlineColor" && !outlineDrawnInside(computed.style)) {
+        const backdrop = outlineBackdrop(document, view, node, computed.style);
+        if (!backdrop.ok) {
+          pushUnmeasured(result, pair, "measure", backdrop.cause, backdrop.message);
+          continue;
+        }
+        if (sameColor(backdrop.color, computed.background) !== true) {
+          pushUnmeasured(result, pair, "measure", "outline-backdrop-mismatch", "the outline backdrop differs from the pair background");
+          continue;
+        }
       }
       if (visible) {
         if (!probe) {

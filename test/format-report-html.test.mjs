@@ -43,6 +43,17 @@ function proposal(overrides = {}) {
 const styles = (html) => [...html.matchAll(/\sstyle="([^"]*)"/g)].map((match) => match[1]);
 const header = (html) => html.slice(html.indexOf("<header>"), html.indexOf("</header>"));
 const section = (html, id) => html.match(new RegExp(`<section aria-labelledby="${id}">[\\s\\S]*?<\\/section>`))?.[0] ?? "";
+const headingLevels = (html) => [...html.matchAll(/<h([1-6])[^>]*>/g)].map((match) => Number(match[1]));
+const idReferences = (html) => {
+  const ids = new Set([...html.matchAll(/\sid="([^"]+)"/g)].map((match) => match[1]));
+  const refs = [];
+  for (const attr of ["for", "form", "aria-labelledby", "aria-describedby", "aria-controls"]) {
+    for (const match of html.matchAll(new RegExp(`\\s${attr}="([^"]+)"`, "g"))) {
+      for (const id of match[1].split(/\s+/).filter(Boolean)) refs.push({ attr, id, exists: ids.has(id) });
+    }
+  }
+  return refs;
+};
 const proposalsSection = (html) => section(html, "proposte");
 const scenarioSection = (html) => section(html, "scenari");
 function publicContent(html) {
@@ -385,6 +396,18 @@ test("variant shifts are reported only above threshold, from measured variants a
   }
 });
 
+test("a variant that only moves in chroma is never described as lighter or darker", () => {
+  const roles = { identities: [{ name: "tertiary", role: "ui", token: "--palette-tertiary", paletteName: "--palette-tertiary" }] };
+  const palette = [{ name: "--palette-tertiary", role: "ui", authored: color(0.6, 0.1, 89), resolved: color(0.6, 0.1, 89) }];
+  const scenarios = [scenario({ scheme: "light", diagnostics: [
+    diagnostic({ label: "tertiary-text / canvas", scheme: "light", foregroundToken: "--color-tertiary-text", backgroundToken: "--color-bg", foreground: color(0.6, 0.16, 89) }),
+  ] })];
+  const guide = section(render(report({ scenarios, palette, roles })), "usi");
+  // ΔL is exactly zero: only the chroma moved, so a lightness direction would be a false claim.
+  assert.match(guide, /ΔL 0 · ΔC 0,06 — la variante è di pari lightness della sorgente\./);
+  assert.doesNotMatch(guide, /più chiara della sorgente|più scura della sorgente/);
+});
+
 test("the proposal summary sentence follows the actual tuning knob and never mislabels it", () => {
   const cases = [
     ["--color-tune-surface-lightness-shift", /Regola la superficie del tema chiaro/],
@@ -543,8 +566,44 @@ test("CSP denies scripts and network resources; there are no fake actions or ext
   assert.doesNotMatch(html, /<(?:script|link|img|iframe|button|input|form)\b|\bon\w+=|\ssrc=/i);
   assert.doesNotMatch(html, /@import|url\(|https?:\/\//i);
   assert.ok([...html.matchAll(/href="([^"]+)"/g)].every((match) => match[1].startsWith("#")));
-  assert.match(html, /<pre tabindex="0" aria-label="Snippet della proposta"><code>--primary:/);
+  assert.match(html, /<pre tabindex="0" role="group" aria-label="Snippet della proposta"><code>--primary:/);
   assert.match(html, /user-select:\s*text/);
+});
+
+test("static report keeps every IDREF closed and names only elements with an explicit role", () => {
+  const html = render(issueReport({ proposals: [proposal()] }));
+  const refs = idReferences(html);
+  assert.ok(refs.length > 0, "the report must expose at least the skip link and ARIA references");
+  for (const ref of refs) assert.ok(ref.exists, `${ref.attr} must resolve to an existing id: ${ref.id}`);
+  for (const tag of html.matchAll(/<(div|span|pre)\b([^>]*)>/g)) {
+    if (/\baria-label=/.test(tag[2])) assert.match(tag[2], /\brole="[^"]+"/, `${tag[1]} must expose a role when it is named`);
+  }
+  const snippet = html.match(/<pre\b[^>]*aria-label="Snippet della proposta"[^>]*>/)[0];
+  assert.match(snippet, /\brole="group"/);
+});
+
+test("report heading hierarchy never skips a level for snapshot, model and measured sessions", () => {
+  for (const [label, html] of [
+    ["snapshot", render(issueReport({ proposals: [proposal()] }))],
+    ["model session", render(diagnosticSession())],
+    ["measured session", render(measuredSession())],
+  ]) {
+    const levels = headingLevels(html);
+    assert.equal(levels[0], 1, `${label}: the report must start with one h1`);
+    for (let index = 1; index < levels.length; index += 1) {
+      assert.ok(levels[index] <= levels[index - 1] + 1, `${label}: heading jump ${levels[index - 1]} → ${levels[index]}`);
+    }
+  }
+});
+
+test("family cards keep their h4 identity under an h3 in both measured and model catalogs", () => {
+  const measured = render(measuredSession());
+  assert.match(section(measured, "usi"), /<h3>Famiglie di colori: come appaiono nei componenti<\/h3>[\s\S]*<article class="card family-card"><h4>Famiglia/);
+  assert.match(section(measured, "sessione"), /<h3 class="model-atlas-title">Famiglie di colori nel modello<\/h3>[\s\S]*<article class="card family-card"><h4>Famiglia/);
+  const model = render(diagnosticSession());
+  assert.match(section(model, "sessione"), /<h3 class="model-atlas-title">Famiglie di colori nel modello<\/h3>[\s\S]*<article class="card family-card"><h4>Famiglia/);
+  assert.match(measured, /\.family-card h4 \{ margin-block-end: var\(--space-3\); \}/);
+  assert.match(measured, /\.model-atlas-title \{ margin-block: var\(--space-4\) var\(--space-3\); \}/);
 });
 
 test("layout and accessibility contracts use intrinsic grids, native disclosures, focus and semantic tables", () => {

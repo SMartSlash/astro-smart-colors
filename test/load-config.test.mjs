@@ -4,8 +4,9 @@ import fsPromises, { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { defaultSmartColorsConfig } from "../src/defaults.mjs";
-import { DEFAULT_CONFIG_FILE, loadSmartColorsConfig } from "../src/load-config.mjs";
+import { DEFAULT_CONFIG_FILE, loadSmartColorsConfig, resolveProjectUrl } from "../src/load-config.mjs";
 
 async function createProject(t) {
   const root = await mkdtemp(path.join(tmpdir(), "smart-colors-config-"));
@@ -87,6 +88,20 @@ test("a config file name with # and % resolves as a literal path, not a URL frag
   await writeFile(path.join(root, name), "export default { output: 'out #1%/colors.css' };\n", "utf8");
   const config = await loadSmartColorsConfig({ root, configFile: name });
   assert.equal(config.output, "out #1%/colors.css");
+});
+
+test("a directory URL root without a trailing slash stays that directory", async (t) => {
+  const root = await createProject(t);
+  const withoutSlash = pathToFileURL(root);
+  const withSlash = pathToFileURL(`${root}${path.sep}`);
+
+  assert.equal(fileURLToPath(resolveProjectUrl(withoutSlash, "palette.css")), path.join(root, "palette.css"));
+  assert.equal(resolveProjectUrl(withoutSlash, "palette.css").href, resolveProjectUrl(withSlash, "palette.css").href);
+
+  // The loader must read the project's own config, never a sibling of the given directory.
+  await writeFile(path.join(root, DEFAULT_CONFIG_FILE), 'export default { output: "from-root/colors.css" };\n', "utf8");
+  const config = await loadSmartColorsConfig({ root: withoutSlash });
+  assert.equal(config.output, "from-root/colors.css");
 });
 
 test("permission and other I/O access errors propagate unchanged for implicit and explicit configs", async (t) => {

@@ -214,6 +214,66 @@ export const CONTRAST_WORKBENCH_CSS = `
   .wb-nojs { font-size: var(--text-sm); color: var(--ink-soft); }
   .wb-frame { min-height: 7rem; border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); overflow: hidden; }
   .wb-frame iframe { display: block; width: 100%; min-height: 7rem; border: 0; }
+
+  /* Overview: a bounded, scannable matrix of real pairs. On narrow containers the native disclosure
+     stays collapsed by default; on desktop the body is always visible. */
+  .wb-overview { min-width: 0; }
+  .wb-overview-summary { display: block; min-height: 2.75rem; padding: var(--space-2); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--paper-soft); font-size: var(--text-sm); font-weight: 650; color: var(--ink); cursor: pointer; }
+  .wb-overview-summary:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  .wb-overview-summary::marker { color: var(--ink-soft); }
+  .wb-overview[open] > .wb-overview-body { display: grid; gap: var(--space-2); align-content: start; }
+  .wb-overview-body { min-width: 0; }
+  .wb-snapshot-note { margin: 0; font-size: var(--text-xs); color: var(--ink-muted); }
+  .wb-overview-filters { display: flex; flex-wrap: wrap; align-items: end; gap: var(--space-2); }
+  .wb-overview-filters .wb-field { flex: 1 1 11rem; }
+  .wb-overview-filters .wb-ghost { flex: 0 0 auto; min-height: 2.75rem; }
+  /* The sticky header inside the bounded scroll region makes Chromium report the clipped table as
+     document scroll overflow. Paint containment keeps the region scrollable without leaking height
+     to the page, so the preview has no trailing blank canvas. */
+  .wb-matrix-scroll { max-block-size: 22rem; min-width: 0; overflow: auto; contain: paint; overscroll-behavior: contain; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--paper); }
+  .wb-matrix-scroll:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  .wb-matrix { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: var(--text-sm); }
+  .wb-matrix caption { padding: var(--space-2); text-align: start; font-size: var(--text-xs); color: var(--ink-muted); }
+  .wb-matrix col.wb-matrix-col-uso { inline-size: 46%; }
+  .wb-matrix col.wb-matrix-col-view { inline-size: 27%; }
+  .wb-matrix th, .wb-matrix td { padding: var(--space-1) var(--space-2); border-block-end: 1px solid var(--line); text-align: start; vertical-align: top; overflow-wrap: anywhere; }
+  .wb-matrix thead th { position: sticky; inset-block-start: 0; z-index: 1; background: var(--paper); font-size: var(--text-xs); font-weight: 750; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-soft); }
+  .wb-matrix tbody th { font-weight: 650; }
+  .wb-matrix tbody tr[aria-current="true"] { background: var(--soft); }
+  .wb-matrix-label { display: block; overflow-wrap: anywhere; }
+  .wb-matrix-tokens { display: block; margin-block-start: .1rem; font-size: var(--text-xs); color: var(--ink-muted); overflow-wrap: anywhere; }
+  .wb-matrix-ratio { display: block; font-variant-numeric: tabular-nums; font-weight: 650; }
+  .wb-matrix-status { display: block; font-size: var(--text-xs); }
+  .wb-matrix-thresholds { display: block; font-size: var(--text-xs); color: var(--ink-muted); }
+  .wb-matrix-source { display: block; margin-block-start: .15rem; font-size: var(--text-xs); font-weight: 650; color: var(--ink-muted); }
+  .wb-matrix-type { display: block; margin-block-start: .15rem; font-size: var(--text-xs); color: var(--ink-soft); }
+  .wb-matrix-view { min-inline-size: 0; }
+  .wb-matrix-inspect { min-height: 2.5rem; margin-block-start: .35rem; font: inherit; font-size: var(--text-sm); color: var(--ink); background: var(--paper-soft); border: 1px solid var(--ink); border-radius: var(--radius-sm); padding: var(--space-1) var(--space-2); cursor: pointer; }
+  .wb-matrix-inspect:hover { background: var(--soft); }
+  .wb-matrix-inspect:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  .wb-matrix-inspect:disabled { cursor: default; opacity: .65; }
+
+  /* The live "Aa" sample is chrome, not a token label: the label text stays outside the sample. */
+  .wb-view-chrome { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; }
+  .wb-aa { display: inline-grid; place-items: center; min-inline-size: 3rem; min-block-size: 3rem; padding: var(--space-1) var(--space-2); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--paper); color: var(--ink); font-size: 1.6rem; font-weight: 750; line-height: 1; letter-spacing: .02em; }
+  .wb-aa.is-unmeasured { color: var(--ink-muted); background: var(--paper-soft); }
+  .wb-view-meta { min-width: 0; font-size: var(--text-xs); color: var(--ink-muted); overflow-wrap: anywhere; }
+
+  /* Manual lightness: one range plus one exact number, always for a single public control. */
+  .wb-l-control { display: grid; gap: .3rem; margin-block-start: var(--space-2); padding-block-start: var(--space-2); border-block-start: 1px dashed var(--line); }
+  .wb-l-control legend { padding: 0; font-size: var(--text-sm); font-weight: 650; }
+  .wb-l-inputs { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+  .wb-l-inputs input[type="range"] { flex: 1 1 9rem; min-width: 6rem; min-height: 2.5rem; }
+  .wb-l-inputs input[type="number"] { inline-size: 5.5rem; min-height: 2.5rem; }
+  .wb-l-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+  .wb-l-actions button { min-height: 2.25rem; }
+
+  /* Exploration is advisory and read-only: no selection affordance, no coverage claim. */
+  .wb-exploration-summary { margin: 0; font-size: var(--text-xs); color: var(--ink-muted); }
+  .wb-exploration-table { width: 100%; border-collapse: collapse; font-size: var(--text-xs); }
+  .wb-exploration-table caption { padding: var(--space-2); text-align: start; color: var(--ink-muted); }
+  .wb-exploration-table th, .wb-exploration-table td { padding: var(--space-1) var(--space-2); border-block-end: 1px solid var(--line); text-align: start; vertical-align: top; }
+  .wb-exploration-table thead th { font-weight: 750; color: var(--ink-soft); }
 }
 @layer layout {
   /* A single full-width workspace: toolbar above, specimens and action strip below. */
@@ -251,19 +311,42 @@ export const CONTRAST_WORKBENCH_CSS = `
        from layout and the tab order entirely; it is not an invisible focus stop. */
     .wb-source-select { display: none; }
   }
+  /* Desktop overview + inspector when the workbench container has room; mobile keeps one column. */
+  .wb-shell { min-width: 0; container-name: wb-shell; container-type: inline-size; }
+  @container wb-shell (min-width: 64rem) {
+    .wb-workspace { grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); }
+    .wb-toolbar { grid-column: 1 / -1; }
+    .wb-overview { grid-column: 1; }
+    .wb-main { grid-column: 2; }
+  }
+  /* No 38rem table on a 390px screen: the same three columns wrap inside the available width. */
+  @container wb-shell (max-width: 48rem) {
+    .wb-matrix { font-size: var(--text-xs); }
+    .wb-matrix col.wb-matrix-col-uso { inline-size: 48%; }
+    .wb-matrix col.wb-matrix-col-view { inline-size: 26%; }
+    /* A narrow column cannot afford uppercase tracking: the dynamic view label wraps per word.
+       Keep the same text, drop the decorative casing so the header stays two or three lines. */
+    .wb-matrix thead th { text-transform: none; letter-spacing: 0; font-weight: 650; }
+    .wb-matrix th, .wb-matrix td { padding: .35rem .4rem; }
+    .wb-matrix-inspect { inline-size: 100%; padding: .3rem .35rem; font-size: var(--text-xs); }
+  }
 }
 @layer preferences {
   @media (forced-colors: active) {
     .wb-toolbar, .wb-swatch, .wb-use, .wb-details, .wb-controls, .wb-suggestions, .wb-action-strip, .wb-frame, .wb-field input, .wb-field select, .wb-fieldset, .wb-source-copy textarea, .wb-suggestions textarea, .wb-picker-dialog { border: 1px solid CanvasText; }
-    .wb-actions button, .wb-ghost, .wb-open-picker, .wb-picker-footer button { border: 1px solid ButtonText; color: ButtonText; background: ButtonFace; }
+    .wb-actions button, .wb-ghost, .wb-open-picker, .wb-picker-footer button, .wb-matrix-inspect { border: 1px solid ButtonText; color: ButtonText; background: ButtonFace; }
     .wb-swatch[aria-pressed="true"], .wb-use[aria-pressed="true"] { border-color: Highlight; background: HighlightText; color: Highlight; }
     .wb-swatch-mark, .wb-use-mark { color: Highlight; }
+    .wb-matrix tbody tr[aria-current="true"] { background: Highlight; color: HighlightText; }
+    .wb-aa { border: 1px solid CanvasText; }
+    .wb-matrix-scroll, .wb-aa, .wb-exploration-table, .wb-l-control { border-color: CanvasText; }
   }
   @media print {
     .wb-workspace { display: block; }
     .wb-actions, .wb-controls, .wb-suggestions, .wb-selection { break-inside: avoid; }
     .wb-frame { min-height: 4rem; }
     .wb-picker-dialog { display: none; }
+    .wb-matrix-scroll { max-block-size: none; overflow: visible; }
   }
 }
 `;
@@ -803,7 +886,10 @@ function pairOptionsHtml(pairs, selected) {
     // Most labels already exist in data-usage. Only embed a distinct human fallback when needed,
     // keeping the offline artifact bounded even with a full automation session.
     const pickerAttribute = pickerLabel && pickerLabel !== pair.title ? ` data-picker-label="${escape(pickerLabel)}"` : "";
-    return `<option value="${escape(value)}"${chosen ? " selected" : ""} data-fg="${escape(pair.foreground)}" data-bg="${escape(pair.background)}" data-kind="${escape(pair.kind)}" data-catalogue-kind="${escape(pair.catalogueKind || pair.kind)}" data-usage="${escape(pair.title)}"${pickerAttribute} data-sources="${escape(sourcesAttribute(pair))}" data-fg-sources="${escape(foregroundSourcesAttribute(pair))}" data-bg-sources="${escape(backgroundSourcesAttribute(pair))}" data-use-bucket="${escape(pair.useBucket || "other")}" data-use-rank="${escape(String(finite(pair.useRank) ? pair.useRank : 999))}" data-thresholds="${escape(thresholds)}">${escape(pair.title)}</option>`;
+    const light = pair.themes.light || {};
+    const dark = pair.themes.dark || {};
+    const matrixData = [finite(light.ratio) ? String(light.ratio) : "", text(light.status) || "unmeasured", finite(dark.ratio) ? String(dark.ratio) : "", text(dark.status) || "unmeasured"].join(",");
+    return `<option value="${escape(value)}"${chosen ? " selected" : ""} data-fg="${escape(pair.foreground)}" data-bg="${escape(pair.background)}" data-kind="${escape(pair.kind)}" data-catalogue-kind="${escape(pair.catalogueKind || pair.kind)}" data-usage="${escape(pair.title)}"${pickerAttribute} data-sources="${escape(sourcesAttribute(pair))}" data-fg-sources="${escape(foregroundSourcesAttribute(pair))}" data-bg-sources="${escape(backgroundSourcesAttribute(pair))}" data-use-bucket="${escape(pair.useBucket || "other")}" data-use-rank="${escape(String(finite(pair.useRank) ? pair.useRank : 999))}" data-thresholds="${escape(thresholds)}" data-matrix="${escape(matrixData)}">${escape(pair.title)}</option>`;
   }).join("");
 }
 
@@ -836,7 +922,7 @@ function controlRowsHtml(pair, theme, design) {
     for (const control of controlsFor(design, token, theme)) {
       const id = `smart-colors-workbench-control-${control.control.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
       if (control.kind === "override") {
-        rows.push(`<div class="wb-field"><label for="${escape(id)}"><code>${escape(token)}</code> · override completo</label><input id="${escape(id)}" type="text" data-control="${escape(control.control)}" data-kind="override" placeholder="es. oklch(0.5 0.1 250)" autocomplete="off" spellcheck="false"></div>`);
+        rows.push(`<div class="wb-field"><label for="${escape(id)}"><code>${escape(token)}</code> · override completo</label><input id="${escape(id)}" type="text" data-control="${escape(control.control)}" data-kind="override" placeholder="es. oklch(0.5 0.1 250)" autocomplete="off" spellcheck="false">${lightRowsHtml(token, control.control)}<span class="margin-note">La rimozione di una personalizzazione salvata è distinta dallo scarto della bozza e richiede il runtime aggiornato.</span></div>`);
       } else {
         const percent = control.defaultMix == null ? "" : String(Math.round(control.defaultMix * 100 * 100) / 100).replace(".", ",");
         // The default is a PLACEHOLDER, never an active value: an untouched mix is not submitted and
@@ -1086,6 +1172,86 @@ function pickerModel(pairs, design, sources, sourceToken, activeValue) {
   };
 }
 
+// Snapshot wording stays deliberately separate from the live runtime column. A snapshot ratio is
+// never labelled as a browser measurement; the live cell stays empty until the runtime publishes it.
+function matrixStatusLabel(status) {
+  if (status === "below-minimum") return "sotto il minimo";
+  if (status === "below-target") return "sotto il target";
+  if (status === "pass") return "minimo raggiunto";
+  return "non misurato";
+}
+
+function matrixCriterionLabel(pair) {
+  if (!pair) return "tipo non indicato";
+  if (pair.kind === "non-text") return "Non testo · 3:1 (SC 1.4.11)";
+  if (pair.catalogueKind === "on-color") return "Testo su riempimento · AA 4,5:1";
+  return "Testo · AA 4,5:1";
+}
+
+function matrixSnapshotHtml(theme, source) {
+  if (!theme) return `<span class="wb-matrix-status" data-status="unmeasured">tema non disponibile</span>`;
+  const status = text(theme.status) || "unmeasured";
+  const ratio = finite(theme.ratio) ? `${formatNumber(theme.ratio)}:1` : "non misurato";
+  const thresholds = [];
+  if (finite(theme.minimum)) thresholds.push(`min ${formatNumber(theme.minimum)}:1`);
+  if (finite(theme.target)) thresholds.push(`target ${formatNumber(theme.target)}:1`);
+  return `<span class="wb-matrix-ratio">${escape(ratio)}</span><span class="wb-matrix-status" data-status="${escape(status)}">${escape(matrixStatusLabel(status))}</span><span class="wb-matrix-thresholds">${escape(thresholds.join(" · ") || "soglie non dichiarate")}</span><span class="wb-matrix-source">${escape(source || "stima build")}</span>`;
+}
+
+function matrixStaticRowsHtml(pairs, design) {
+  if (!pairs.length) {
+    return `<tr><td colspan="3">Nessun abbinamento diagnostico disponibile: il banco non inventa coppie.</td></tr>`;
+  }
+  // The static HTML stays bounded. With JavaScript the view rebuilds the full matrix from the real
+  // pair options already in the document, so the artifact does not duplicate 100+ rows.
+  return pairs.slice(0, 4).map((pair, index) => {
+    const value = pickerValue(pair);
+    const label = pairHasPickerLabel(pair) ? pairPickerDisplay(pair) : pairFallbackLabel(pair);
+    const status = worstStatus(pair);
+    const lightStatus = text(pair.themes.light && pair.themes.light.status) || "unmeasured";
+    const darkStatus = text(pair.themes.dark && pair.themes.dark.status) || "unmeasured";
+    return `<tr data-smart-colors-workbench="matrix-row" data-pair-value="${escape(value)}" data-matrix-index="${index}" data-status="${escape(status)}" data-all-pass="${lightStatus === "pass" && darkStatus === "pass" ? "true" : "false"}" data-unmeasured="${lightStatus === "unmeasured" || darkStatus === "unmeasured" ? "true" : "false"}" data-search="${escape(pairSearchText(pair, design))}" data-live-status="false"><th scope="row" class="wb-matrix-uso"><span class="wb-matrix-label">${escape(label)}</span><code class="wb-matrix-tokens">${escape(pair.foreground)} su ${escape(pair.background)}</code><span class="wb-matrix-type">${escape(matrixCriterionLabel(pair))}</span><button type="button" class="wb-matrix-inspect" data-smart-colors-workbench="matrix-inspect" data-pair-value="${escape(value)}" tabindex="-1" disabled>Ispeziona<span class="wb-visually-hidden"> ${escape(label)}</span></button></th><td class="wb-matrix-view" data-smart-colors-workbench="matrix-cell" data-slot="left">${matrixSnapshotHtml(pair.themes.light, "stima build")}</td><td class="wb-matrix-view" data-smart-colors-workbench="matrix-cell" data-slot="right">${matrixSnapshotHtml(pair.themes.dark, "stima build")}</td></tr>`;
+  }).join("");
+}
+
+function matrixHtml(pairs, design) {
+  const total = pairs.length;
+  const count = total === 1 ? "1 abbinamento" : `${total} abbinamenti`;
+  const visible = Math.min(total, 4);
+  const staticNote = total
+    ? `Senza JavaScript la panoramica mostra i primi ${visible} abbinamenti con stime di build; con JavaScript si popola dall'intero catalogo e mostra le misure live disponibili per ogni vista.`
+    : "Nessun abbinamento diagnostico disponibile: la matrice resta vuota e non inventa coppie.";
+  return `<details class="wb-overview" data-smart-colors-workbench="overview" aria-labelledby="smart-colors-workbench-overview-title">
+<summary id="smart-colors-workbench-overview-title" class="wb-overview-summary">Abbinamenti e filtri</summary>
+<div class="wb-overview-body">
+<p id="smart-colors-workbench-matrix-note" class="wb-snapshot-note">Ogni cella mostra la misura live quando il runtime ne ha una per quella coppia e quella vista; altrimenti una stima dello snapshot di build, sempre etichettata. Le due viste seguono tema e variante del confronto attivo. ${staticNote}</p>
+<div class="wb-overview-filters" role="search" aria-label="Cerca e filtra gli abbinamenti">
+<div class="wb-field"><label for="smart-colors-workbench-matrix-search">Cerca un abbinamento</label><input id="smart-colors-workbench-matrix-search" data-smart-colors-workbench="matrix-search" type="search" placeholder="es. testo card" autocomplete="off" spellcheck="false" disabled></div>
+<div class="wb-field"><label for="smart-colors-workbench-matrix-filter">Filtra per esito</label><select id="smart-colors-workbench-matrix-filter" data-smart-colors-workbench="matrix-filter" disabled><option value="">Tutti gli abbinamenti</option><option value="issues">Solo problemi (sotto soglia)</option><option value="below-minimum">Sotto il minimo</option><option value="below-target">Sotto il target</option><option value="pass">Minimo raggiunto</option><option value="unmeasured">Non misurati</option><option value="live">Con misura live</option></select></div>
+<button type="button" id="smart-colors-workbench-matrix-clear" data-smart-colors-workbench="matrix-clear" class="wb-ghost" disabled>Mostra tutti</button>
+</div>
+<p id="smart-colors-workbench-matrix-count" data-smart-colors-workbench="matrix-count" role="status" aria-live="polite" class="wb-picker-count">${escape(count)} · live dove misurato, altrimenti stima build</p>
+<div class="wb-matrix-scroll" role="region" aria-labelledby="smart-colors-workbench-matrix-caption" aria-describedby="smart-colors-workbench-matrix-note" tabindex="0">
+<table class="wb-matrix">
+<caption id="smart-colors-workbench-matrix-caption">Abbinamenti tra token: uso e criterio, poi le due viste del confronto con la misura di ciascuna coppia.</caption>
+<colgroup><col class="wb-matrix-col-uso"><col class="wb-matrix-col-view"><col class="wb-matrix-col-view"></colgroup>
+<thead><tr><th scope="col" class="wb-matrix-uso">Uso e criterio</th><th scope="col" id="smart-colors-workbench-matrix-a" class="wb-matrix-view">Vista A · stima build tema chiaro</th><th scope="col" id="smart-colors-workbench-matrix-b" class="wb-matrix-view">Vista B · stima build tema scuro</th></tr></thead>
+<tbody data-smart-colors-workbench="matrix-body">${matrixStaticRowsHtml(pairs, design)}</tbody>
+</table>
+</div>
+</div>
+</details>`;
+}
+
+function lightRowsHtml(token, control) {
+  const id = `smart-colors-workbench-lightness-${control.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+  return `<fieldset class="wb-l-control" data-smart-colors-workbench="lightness" data-control="${escape(control)}">
+<legend>Luminosità L% · <code>${escape(token)}</code></legend>
+<div class="wb-l-inputs"><input id="${escape(id)}-range" data-control="${escape(control)}" data-kind="lightness" type="range" min="0" max="100" step="0.1" aria-label="Luminosità L percento per ${escape(token)} (${escape(control)})" aria-describedby="${escape(id)}-note" disabled hidden><input id="${escape(id)}-number" data-control="${escape(control)}" data-kind="lightness" type="number" min="0" max="100" step="any" inputmode="decimal" placeholder="—" aria-label="Valore L percento per ${escape(token)} (${escape(control)})" aria-describedby="${escape(id)}-note" disabled></div>
+<span id="${escape(id)}-note" class="margin-note">La L corrente sarà disponibile dal runtime dopo la misura; nessun valore viene inventato. La regolazione invia solo L: C e H sono quelli del colore calcolato; gli altri knob (mix/macro) restano attivi.</span>
+</fieldset>`;
+}
+
 /**
  * Static guided workbench. The interactive workspace is the main content: a compact horizontal toolbar
  * with the bounded source strip, a human current-use summary and a "Cambia uso" opener, the
@@ -1116,8 +1282,8 @@ export function renderContrastWorkbench(session) {
   const purposeText = pairPurposeText(selected);
   return `<section id="banco" aria-labelledby="banco-titolo"><h2 id="banco-titolo" class="wb-visually-hidden">Banco di contrasto guidato</h2>
 <div id="${HOST_ID}" ${HOOK}="host" role="region" aria-label="Banco di contrasto guidato">
-<noscript><p class="wb-nojs">JavaScript è disattivato: i pulsanti dei colori restano inerti e nessuna misura live viene eseguita.</p></noscript>
-<div class="wb-workspace">
+<noscript><p class="wb-nojs">JavaScript è disattivato: i pulsanti dei colori restano inerti e nessuna misura live viene eseguita. La matrice mostra solo dati dello snapshot di build.</p></noscript>
+<div class="wb-shell"><div class="wb-workspace">
 <section class="wb-toolbar" aria-labelledby="smart-colors-workbench-toolbar-title">
 <h3 id="smart-colors-workbench-toolbar-title" class="wb-visually-hidden">Selezione e confronto</h3>
 <div class="wb-toolbar-line wb-palette-line">
@@ -1137,6 +1303,7 @@ ${sourceSwatchesHtml(sources.entries, defaultSource)}
 </form>
 </div>
 </section>
+${matrixHtml(pairs, design)}
 <div class="wb-main">
 <header class="wb-head">
 <h3 id="smart-colors-workbench-current" ${HOOK}="current" class="wb-current"><strong>${escape(currentTitle)}</strong></h3>
@@ -1145,8 +1312,8 @@ ${sourceSwatchesHtml(sources.entries, defaultSource)}
 </header>
 <p id="smart-colors-workbench-status" ${HOOK}="status" role="status" aria-live="polite" class="wb-status">Misura non disponibile senza JavaScript.</p>
 <div id="smart-colors-workbench-result" ${HOOK}="result" class="wb-frames" aria-label="Campioni CSS del consumatore">
-<section class="wb-view" aria-labelledby="smart-colors-workbench-left-title"><h3 id="smart-colors-workbench-left-title" class="wb-view-title">Tema chiaro</h3><div id="smart-colors-workbench-left" ${HOOK}="left" class="wb-frame" role="group" aria-label="Vista CSS sinistra"></div><dl id="smart-colors-workbench-left-measure" ${HOOK}="left-measure" class="wb-measure"><div class="wb-measure-row"><dt>Rapporto</dt><dd><span class="wb-verdict" data-status="unmeasured">Non misurato</span> · serve JavaScript</dd></div></dl></section>
-<section class="wb-view" aria-labelledby="smart-colors-workbench-right-title"><h3 id="smart-colors-workbench-right-title" class="wb-view-title">Tema scuro</h3><div id="smart-colors-workbench-right" ${HOOK}="right" class="wb-frame" role="group" aria-label="Vista CSS destra"></div><dl id="smart-colors-workbench-right-measure" ${HOOK}="right-measure" class="wb-measure"><div class="wb-measure-row"><dt>Rapporto</dt><dd><span class="wb-verdict" data-status="unmeasured">Non misurato</span> · serve JavaScript</dd></div></dl></section>
+<section class="wb-view" aria-labelledby="smart-colors-workbench-left-title"><h3 id="smart-colors-workbench-left-title" class="wb-view-title">Tema chiaro</h3><div class="wb-view-chrome"><span class="wb-aa is-unmeasured" data-smart-colors-workbench="left-sample" aria-hidden="true">Aa</span><span id="smart-colors-workbench-left-meta" data-smart-colors-workbench="left-meta" class="wb-view-meta">Campione live non disponibile senza JavaScript.</span></div><div id="smart-colors-workbench-left" ${HOOK}="left" class="wb-frame" role="group" aria-label="Vista CSS sinistra"></div><dl id="smart-colors-workbench-left-measure" ${HOOK}="left-measure" class="wb-measure"><div class="wb-measure-row"><dt>Rapporto</dt><dd><span class="wb-verdict" data-status="unmeasured">Non misurato</span> · serve JavaScript</dd></div></dl></section>
+<section class="wb-view" aria-labelledby="smart-colors-workbench-right-title"><h3 id="smart-colors-workbench-right-title" class="wb-view-title">Tema scuro</h3><div class="wb-view-chrome"><span class="wb-aa is-unmeasured" data-smart-colors-workbench="right-sample" aria-hidden="true">Aa</span><span id="smart-colors-workbench-right-meta" data-smart-colors-workbench="right-meta" class="wb-view-meta">Campione live non disponibile senza JavaScript.</span></div><div id="smart-colors-workbench-right" ${HOOK}="right" class="wb-frame" role="group" aria-label="Vista CSS destra"></div><dl id="smart-colors-workbench-right-measure" ${HOOK}="right-measure" class="wb-measure"><div class="wb-measure-row"><dt>Rapporto</dt><dd><span class="wb-verdict" data-status="unmeasured">Non misurato</span> · serve JavaScript</dd></div></dl></section>
 </div>
 <p id="smart-colors-workbench-empty" ${HOOK}="empty" class="wb-uses-empty" hidden>Nessuna coppia diagnostica per questa sorgente. Scegli un altro colore.</p>
 <p class="wb-scope-note">Le misure valgono per la coppia e il tema mostrati: non sono un verdetto di conformità globale.</p>
@@ -1183,11 +1350,19 @@ ${tokenCatalogueHtml(design, pairs, sources)}
 </details>
 <p class="margin-note">${escape(thresholdsNote)}</p>
 </details>
+<details class="is-detail wb-exploration" data-smart-colors-workbench="exploration" hidden>
+<summary>Tutte le combinazioni dei colori base (esplorazione)</summary>
+<p class="margin-note">Massimo 24 famiglie, coppie non self, sola lettura. È un'anteprima advisory: non entra nella copertura primaria, non abilita l'uscita e non è un verdetto di conformità.</p>
+<div class="wb-actions"><button type="button" id="smart-colors-workbench-exploration-run" data-smart-colors-workbench="exploration-run" disabled>Misura le combinazioni dei colori base</button></div>
+<p id="smart-colors-workbench-exploration-status" data-smart-colors-workbench="exploration-status" role="status" aria-live="polite" class="margin-note">Non misurato. Nessun dato vecchio viene mostrato.</p>
+<div id="smart-colors-workbench-exploration-results" data-smart-colors-workbench="exploration-results" class="wb-matrix-scroll"></div>
+</details>
 <details class="is-detail wb-advanced" data-smart-colors-workbench="manual"><summary>Modifica manualmente (avanzato)</summary>
 <form class="wb-controls" data-smart-colors-workbench="controls">
 <p class="margin-note">Ambito: solo i controlli pubblici dichiarati per i due token della coppia selezionata e per il tema attivo; i knob macro del generatore non sono esposti qui. Si inviano solo i campi che modifichi: i default dichiarati sono segnaposto e un mix non toccato non viene esportato. Un override completo ha precedenza sul mix della superficie; il mix resta un valore pubblico separato. Queste modifiche sono temporanee: non rigenerano il generatore e non modificano <code>palette.css</code>.</p>
 <div id="smart-colors-workbench-controls" ${HOOK}="controls-body">${controlRowsHtml(selected, "light", design)}</div>
-<div class="wb-actions"><button type="submit" id="smart-colors-workbench-controls-submit">Applica override</button><button type="button" id="smart-colors-workbench-reset-pair" ${HOOK}="reset-pair">Azzera i controlli della coppia</button><button type="button" id="smart-colors-workbench-reset-all" ${HOOK}="reset-all">Azzera tutto il tuning</button></div>
+<div class="wb-actions"><button type="submit" id="smart-colors-workbench-controls-submit">Applica override</button><button type="button" id="smart-colors-workbench-reset-pair" ${HOOK}="reset-pair">Scarta la bozza della coppia</button><button type="button" id="smart-colors-workbench-reset-all" ${HOOK}="reset-all">Scarta la bozza di tuning</button></div>
+<p class="margin-note">«Scarta la bozza…» non rimuove gli override già salvati. Per quelli usa «Rimuovi personalizzazione» sul singolo controllo.</p>
 <p class="margin-note">Gli override sono applicati all'API del runtime; la palette sorgente resta di sola lettura.</p>
 </form>
 </details>
@@ -1195,10 +1370,12 @@ ${tokenCatalogueHtml(design, pairs, sources)}
 <p class="margin-note">Il comando di esportazione è nell'intestazione della pagina. Qui restano il CSS generato e il download manuale.</p>
 <div class="wb-actions"><button type="button" id="smart-colors-workbench-copy-export" ${HOOK}="copy-export">Seleziona il CSS esportato</button></div>
 <p id="smart-colors-workbench-export-note" class="margin-note">Nessun tuning pubblico da esportare: nessun override attivo.</p>
+<p id="smart-colors-workbench-export-mode" class="margin-note">Export non ancora richiesto.</p>
 <label for="smart-colors-workbench-export-text">CSS pubblico esportato, selezionabile senza permessi clipboard</label>
 <textarea id="smart-colors-workbench-export-text" ${HOOK}="export-text" aria-describedby="smart-colors-workbench-export-note" readonly rows="8"></textarea>
 <a id="smart-colors-workbench-download" ${HOOK}="download" download="colors-tuning.css" hidden>Scarica colors-tuning.css (azione manuale)</a>
 </details>
+</div>
 </div>
 </div>
 <dialog id="smart-colors-workbench-picker" class="wb-picker-dialog" aria-labelledby="smart-colors-workbench-picker-title" aria-describedby="smart-colors-workbench-picker-source">
@@ -1316,9 +1493,27 @@ export function createContrastWorkbenchView(deps) {
   var correctionBox = host.querySelector("[" + HOOK + '="correction"]');
   var manualBox = host.querySelector("[" + HOOK + '="manual"]');
   var exportBox = host.querySelector("[" + HOOK + '="export"]');
+  var overviewBox = host.querySelector("[" + HOOK + '="overview"]');
+  var matrixSearch = byId("smart-colors-workbench-matrix-search");
+  var matrixFilter = byId("smart-colors-workbench-matrix-filter");
+  var matrixClear = byId("smart-colors-workbench-matrix-clear");
+  var matrixCount = byId("smart-colors-workbench-matrix-count");
+  var matrixViewA = byId("smart-colors-workbench-matrix-a");
+  var matrixViewB = byId("smart-colors-workbench-matrix-b");
+  var leftSample = host.querySelector("[" + HOOK + '="left-sample"]');
+  var leftMeta = host.querySelector("[" + HOOK + '="left-meta"]');
+  var rightSample = host.querySelector("[" + HOOK + '="right-sample"]');
+  var rightMeta = host.querySelector("[" + HOOK + '="right-meta"]');
+  var explorationBox = host.querySelector("[" + HOOK + '="exploration"]');
+  var explorationRun = byId("smart-colors-workbench-exploration-run");
+  var explorationStatus = host.querySelector("[" + HOOK + '="exploration-status"]');
+  var explorationResults = host.querySelector("[" + HOOK + '="exploration-results"]');
+  var exportMode = byId("smart-colors-workbench-export-mode");
   var swatchNodes = host.querySelectorAll("[" + HOOK + '="swatch"]');
   var swatchButtons = [];
   for (var swatchIndex = 0; swatchIndex < swatchNodes.length; swatchIndex += 1) swatchButtons.push(swatchNodes[swatchIndex]);
+  var matrixBody = host.querySelector("[" + HOOK + '="matrix-body"]');
+  var matrixEntries = [];
   var lastState = null;
   var lastAnnouncement = "";
   var lastControlsKey = "";
@@ -1328,6 +1523,10 @@ export function createContrastWorkbenchView(deps) {
   var lastDraftSignature = null;
   var lastRevision = null;
   var controlInputs = [];
+  var lightnessInputs = [];
+  var lastExportStamp = null;
+  var lastExplorationSignature = null;
+  var matrixFocusValue = null;
   var useButtons = [];
   var lastUsesSource = null;
   var lastUsesKey = null;
@@ -1532,6 +1731,348 @@ export function createContrastWorkbenchView(deps) {
     }
     return list.length ? list[0] : null;
   }
+  function optionByValue(value) {
+    var list = options();
+    for (var index = 0; index < list.length; index += 1) {
+      if (list[index].value === value) return list[index];
+    }
+    return null;
+  }
+  // A runtime view belongs to one pair/property. A stale view is never used to paint a sample or fill
+  // the live matrix cell for a different selected pair.
+  function viewMatchesOption(view, option) {
+    if (!view || !option) return true;
+    var pair = isRecord(view.pair) ? view.pair : null;
+    if (!pair) return true;
+    var foreground = pair.foreground || pair.foregroundToken;
+    var background = pair.background || pair.backgroundToken;
+    if (foreground !== attribute(option, "data-fg") || background !== attribute(option, "data-bg")) return false;
+    return !pair.property || pair.property === propertyFor(option);
+  }
+  function foldLocal(value) {
+    var raw = textOf(value).toLowerCase();
+    if (typeof raw.normalize === "function") {
+      try { return raw.normalize("NFD").replace(/[\u0300-\u036f]/g, ""); } catch (error) { return raw; }
+    }
+    return raw;
+  }
+  // The sample is painted ONLY from a computed serialization returned by the runtime. This is not a
+  // colour calculation: the string is validated as a colour literal and applied verbatim through the
+  // CSSOM. When it is missing, the sample stays neutral instead of inventing a colour.
+  function safeComputedColor(value) {
+    var candidate = textOf(value).trim();
+    if (!candidate || candidate.length > 140) return null;
+    if (!/^(#|oklch|oklab|rgb|rgba|hsl|hsla|hwb|lab|lch|color)\(?/i.test(candidate) && !/^#[0-9a-f]{3,8}$/i.test(candidate)) return null;
+    if (/[;"'<>{}\\]|url\(|expression\(|@import/i.test(candidate)) return null;
+    return candidate;
+  }
+  // Public controls for one token/theme, read from the build metadata already embedded in the payload.
+  function controlsForToken(theme, token) {
+    var designValue = design();
+    var binding = designValue && isRecord(designValue.tokens) && isRecord(designValue.tokens[token]) ? designValue.tokens[token] : null;
+    var controls = binding && isRecord(binding.controls) && isRecord(binding.controls[theme]) ? binding.controls[theme] : null;
+    if (!controls) return [];
+    var list = [];
+    if (typeof controls.override === "string" && controls.override) list.push({ control: controls.override, kind: "override" });
+    if (typeof controls.mix === "string" && controls.mix) list.push({ control: controls.mix, kind: "mix" });
+    return list;
+  }
+  // Active/removed personalizations are stated per token and theme. `removed` is the runtime list of
+  // controls whose saved value is no longer used; it is NOT a draft value.
+  function overrideSummary(state, theme, option) {
+    if (!option) return null;
+    var draft = state && isRecord(state.draft) ? state.draft : {};
+    var removed = state && Array.isArray(state.removed) ? state.removed : [];
+    var tokens = [attribute(option, "data-fg") || "", attribute(option, "data-bg") || ""];
+    var active = [];
+    var removedControls = [];
+    for (var t = 0; t < tokens.length; t += 1) {
+      if (!tokens[t]) continue;
+      var controls = controlsForToken(theme, tokens[t]);
+      for (var c = 0; c < controls.length; c += 1) {
+        if (Object.hasOwn(draft, controls[c].control) && active.indexOf(controls[c].control) === -1) active.push(controls[c].control);
+        if (removed.indexOf(controls[c].control) !== -1 && removedControls.indexOf(controls[c].control) === -1) removedControls.push(controls[c].control);
+      }
+    }
+    var parts = [];
+    if (active.length) parts.push("override attivo: " + active.join(", "));
+    if (removedControls.length) parts.push("personalizzazione rimossa: " + removedControls.join(", "));
+    return parts.length ? parts.join(" · ") : null;
+  }
+  function matrixStatusLabelLocal(status) {
+    if (status === "below-minimum") return "sotto il minimo";
+    if (status === "below-target") return "sotto il target";
+    if (status === "pass") return "minimo raggiunto";
+    return "non misurato";
+  }
+  function matrixCriterionLocal(option) {
+    if (attribute(option, "data-kind") === "non-text") return "Non testo · 3:1 (SC 1.4.11)";
+    if (attribute(option, "data-catalogue-kind") === "on-color") return "Testo su riempimento · AA 4,5:1";
+    return "Testo · AA 4,5:1";
+  }
+  function matrixOptionData(option) {
+    var parts = (attribute(option, "data-matrix") || "").split(",");
+    return {
+      light: { ratio: parts[0] || "", status: parts[1] || "unmeasured" },
+      dark: { ratio: parts[2] || "", status: parts[3] || "unmeasured" },
+    };
+  }
+  function matrixLabelLocal(option) {
+    return pickerHasHuman(option) ? pickerHuman(option) : pickerFallback(option);
+  }
+  function matrixWorstStatus(option) {
+    var data = matrixOptionData(option);
+    var light = data.light.status;
+    var dark = data.dark.status;
+    if (light === "below-minimum" || dark === "below-minimum") return "below-minimum";
+    if (light === "below-target" || dark === "below-target") return "below-target";
+    if (light === "pass" || dark === "pass") return "pass";
+    return "unmeasured";
+  }
+  function matrixPairIdForTheme(option, theme) {
+    return theme + "|" + propertyFor(option) + "|" + (attribute(option, "data-fg") || "") + "|" + (attribute(option, "data-bg") || "");
+  }
+  function measurementIndex(view) {
+    var map = {};
+    var list = view && Array.isArray(view.measurements) ? view.measurements : [];
+    for (var index = 0; index < list.length; index += 1) {
+      var entry = list[index];
+      if (entry && typeof entry.pairId === "string") map[entry.pairId] = entry;
+    }
+    return map;
+  }
+  function matrixViewLabel(view, slot, comparison) {
+    var letter = slot === "left" ? "A" : "B";
+    if (!view) return "Vista " + letter + " · stima build tema " + (slot === "left" ? "chiaro" : "scuro");
+    var position = comparison === "themes" ? "" : slot === "left" ? "Attuale · " : "Modifica · ";
+    return "Vista " + letter + " · " + position + "tema " + themeName(view.theme) + " · " + variantName(view.variant);
+  }
+  // One cell is filled ONLY from the measurement whose pairId matches this row and this view's
+  // theme. The selected pair's measurement is never copied to another row. When a live measurement
+  // is absent, the build estimate is shown with an explicit `stima build` source label.
+  function renderMatrixCell(cell, option, theme, measurement) {
+    clear(cell);
+    var hasMeasurement = Boolean(measurement);
+    var status;
+    var ratio;
+    var minimum;
+    var target;
+    if (hasMeasurement) {
+      status = textOf(measurement.status) || "unmeasured";
+      ratio = measurement.ratio;
+      minimum = measurement.minimum;
+      target = measurement.target;
+    } else {
+      var data = matrixOptionData(option)[theme] || { ratio: "", status: "unmeasured" };
+      status = data.status;
+      ratio = data.ratio === "" ? NaN : Number(data.ratio);
+      var slot = thresholdsFor(option)[theme] || { minimum: "", target: "" };
+      minimum = slot.minimum !== "" ? Number(slot.minimum) : null;
+      target = slot.target !== "" ? Number(slot.target) : null;
+    }
+    cell.appendChild(make("span", "wb-matrix-ratio", finite(ratio) ? ratioText(ratio) : "non misurato"));
+    var statusNode = make("span", "wb-matrix-status", matrixStatusLabelLocal(status));
+    setAttribute(statusNode, "data-status", status);
+    cell.appendChild(statusNode);
+    var thresholds = [];
+    if (finite(minimum)) thresholds.push("min " + ratioText(minimum));
+    if (finite(target)) thresholds.push("target " + ratioText(target));
+    if (thresholds.length) cell.appendChild(make("span", "wb-matrix-thresholds", thresholds.join(" · ")));
+    cell.appendChild(make("span", "wb-matrix-source", hasMeasurement ? "live" : "stima build"));
+    setAttribute(cell, "data-source", hasMeasurement ? "live" : "build");
+    setAttribute(cell, "data-status", status);
+    return { status: status, live: hasMeasurement };
+  }
+  function worstStatusOf(statuses) {
+    var worst = "unmeasured";
+    for (var index = 0; index < statuses.length; index += 1) {
+      if (statuses[index] === "below-minimum") return "below-minimum";
+      if (statuses[index] === "below-target") worst = "below-target";
+    }
+    if (worst === "below-target") return worst;
+    for (var unmeasuredIndex = 0; unmeasuredIndex < statuses.length; unmeasuredIndex += 1) {
+      if (statuses[unmeasuredIndex] === "unmeasured") return "unmeasured";
+    }
+    for (var passIndex = 0; passIndex < statuses.length; passIndex += 1) {
+      if (statuses[passIndex] === "pass") return "pass";
+    }
+    return "unmeasured";
+  }
+  function bindMatrixButton(entry) {
+    if (!entry || !entry.button) return;
+    entry.button.disabled = false;
+    listen(entry.button, "click", function () {
+      if (busy) return;
+      var value = attribute(entry.button, "data-pair-value");
+      var option = optionByValue(value);
+      if (!option) { announce("Questo abbinamento non è più nel catalogo statico: nessuna misura inventata."); return; }
+      clearSourceBlocked();
+      setPairOption(option);
+      renderDetails(stateNow());
+      renderControls(stateNow());
+      applySelection();
+    });
+    listen(entry.button, "keydown", function (event) {
+      var key = event && event.key;
+      if (key === "ArrowDown" || key === "ArrowRight") { prevent(event); moveMatrixFocus(entry.button, "next"); }
+      else if (key === "ArrowUp" || key === "ArrowLeft") { prevent(event); moveMatrixFocus(entry.button, "previous"); }
+      else if (key === "Home") { prevent(event); moveMatrixFocus(entry.button, "first"); }
+      else if (key === "End") { prevent(event); moveMatrixFocus(entry.button, "last"); }
+    });
+  }
+  // The static matrix is intentionally bounded. With JavaScript it is rebuilt from the real pair
+  // options already present in the document, so the 100+ row catalogue is never duplicated as HTML.
+  function buildMatrix() {
+    if (!matrixBody) return;
+    clear(matrixBody);
+    matrixEntries = [];
+    var list = options();
+    if (!list.length) {
+      var emptyRow = make("tr");
+      var emptyCell = make("td", null, "Nessun abbinamento diagnostico disponibile.");
+      setAttribute(emptyCell, "colspan", "3");
+      emptyRow.appendChild(emptyCell);
+      matrixBody.appendChild(emptyRow);
+      return;
+    }
+    for (var index = 0; index < list.length; index += 1) {
+      var option = list[index];
+      var value = option.value;
+      var foreground = attribute(option, "data-fg") || "";
+      var background = attribute(option, "data-bg") || "";
+      var row = make("tr");
+      var matrixData = matrixOptionData(option);
+      var buildStatus = matrixWorstStatus(option);
+      var buildAllPass = matrixData.light.status === "pass" && matrixData.dark.status === "pass" ? "true" : "false";
+      var buildUnmeasured = matrixData.light.status === "unmeasured" || matrixData.dark.status === "unmeasured" ? "true" : "false";
+      setAttribute(row, "data-smart-colors-workbench", "matrix-row");
+      setAttribute(row, "data-pair-value", value);
+      setAttribute(row, "data-matrix-index", String(index));
+      setAttribute(row, "data-fg", foreground);
+      setAttribute(row, "data-bg", background);
+      setAttribute(row, "data-status", buildStatus);
+      setAttribute(row, "data-build-status", buildStatus);
+      setAttribute(row, "data-status-effective", buildStatus);
+      setAttribute(row, "data-status-live", "");
+      setAttribute(row, "data-all-pass", buildAllPass);
+      setAttribute(row, "data-build-all-pass", buildAllPass);
+      setAttribute(row, "data-unmeasured", buildUnmeasured);
+      setAttribute(row, "data-build-unmeasured", buildUnmeasured);
+      setAttribute(row, "data-search", pickerSearchText(option));
+      setAttribute(row, "data-live-status", "false");
+      setAttribute(row, "data-live-revision", "");
+      var th = make("th", "wb-matrix-uso");
+      setAttribute(th, "scope", "row");
+      th.appendChild(make("span", "wb-matrix-label", matrixLabelLocal(option)));
+      th.appendChild(make("code", "wb-matrix-tokens", foreground + " su " + background));
+      th.appendChild(make("span", "wb-matrix-type", matrixCriterionLocal(option)));
+      var button = make("button", "wb-matrix-inspect", "Ispeziona");
+      button.type = "button";
+      setAttribute(button, "data-smart-colors-workbench", "matrix-inspect");
+      setAttribute(button, "data-pair-value", value);
+      setAttribute(button, "tabindex", "-1");
+      button.appendChild(make("span", "wb-visually-hidden", " " + matrixLabelLocal(option)));
+      th.appendChild(button);
+      row.appendChild(th);
+      var leftCell = make("td", "wb-matrix-view");
+      setAttribute(leftCell, "data-smart-colors-workbench", "matrix-cell");
+      setAttribute(leftCell, "data-slot", "left");
+      renderMatrixCell(leftCell, option, "light", null);
+      row.appendChild(leftCell);
+      var rightCell = make("td", "wb-matrix-view");
+      setAttribute(rightCell, "data-smart-colors-workbench", "matrix-cell");
+      setAttribute(rightCell, "data-slot", "right");
+      renderMatrixCell(rightCell, option, "dark", null);
+      row.appendChild(rightCell);
+      matrixBody.appendChild(row);
+      var entry = { row: row, button: button, cells: { left: leftCell, right: rightCell }, option: option };
+      matrixEntries.push(entry);
+      bindMatrixButton(entry);
+    }
+    syncMatrixFocus();
+    applyMatrixFilter();
+  }
+  function matrixVisibleEntries() {
+    var visible = [];
+    for (var index = 0; index < matrixEntries.length; index += 1) {
+      var entry = matrixEntries[index];
+      if (entry.row && !entry.row.hidden && entry.button && !entry.button.disabled) visible.push(entry);
+    }
+    return visible;
+  }
+  function syncMatrixFocus() {
+    var selectedValue = pairSelect ? pairSelect.value : "";
+    var visible = matrixVisibleEntries();
+    var selectedEntry = null;
+    for (var index = 0; index < visible.length; index += 1) {
+      if (selectedValue && attribute(visible[index].button, "data-pair-value") === selectedValue) selectedEntry = visible[index];
+    }
+    if (!selectedEntry) selectedEntry = visible.length ? visible[0] : null;
+    if (selectedEntry && matrixFocusValue && attribute(selectedEntry.button, "data-pair-value") !== matrixFocusValue) {
+      // The runtime selection stays authoritative; a hidden roving target never keeps the tab stop.
+      matrixFocusValue = attribute(selectedEntry.button, "data-pair-value");
+    }
+    for (var rowIndex = 0; rowIndex < matrixEntries.length; rowIndex += 1) {
+      var entry = matrixEntries[rowIndex];
+      if (!entry.button) continue;
+      var isSelected = Boolean(selectedValue) && attribute(entry.button, "data-pair-value") === selectedValue;
+      setAttribute(entry.row, "aria-current", isSelected ? "true" : "false");
+      setAttribute(entry.button, "aria-current", isSelected ? "true" : "false");
+      setAttribute(entry.button, "tabindex", selectedEntry && entry === selectedEntry ? "0" : "-1");
+    }
+  }
+  function applyMatrixFilter() {
+    if (!matrixEntries.length) return;
+    var query = matrixSearch ? foldLocal(matrixSearch.value) : "";
+    var filter = matrixFilter ? matrixFilter.value : "";
+    var visible = 0;
+    for (var index = 0; index < matrixEntries.length; index += 1) {
+      var entry = matrixEntries[index];
+      var row = entry.row;
+      var status = attribute(row, "data-status-effective") || attribute(row, "data-status") || "unmeasured";
+      var live = attribute(row, "data-live-status") === "true";
+      var haystack = attribute(row, "data-search") || "";
+      var matchQuery = !query || haystack.indexOf(query) !== -1;
+      var matchFilter = true;
+      if (filter === "issues") matchFilter = status === "below-minimum" || status === "below-target";
+      else if (filter === "pass") matchFilter = attribute(row, "data-all-pass") === "true";
+      else if (filter === "unmeasured") matchFilter = attribute(row, "data-unmeasured") === "true";
+      else if (filter === "live") matchFilter = live;
+      else if (filter) matchFilter = status === filter;
+      var show = matchQuery && matchFilter;
+      row.hidden = !show;
+      if (show) visible += 1;
+    }
+    syncMatrixFocus();
+    var active = doc.activeElement;
+    for (var focusIndex = 0; focusIndex < matrixEntries.length; focusIndex += 1) {
+      var focused = matrixEntries[focusIndex];
+      if (!focused.button || focused.button !== active || !focused.row.hidden) continue;
+      var visibleEntries = matrixVisibleEntries();
+      if (visibleEntries.length && typeof visibleEntries[0].button.focus === "function") visibleEntries[0].button.focus();
+      break;
+    }
+    if (matrixCount) {
+      var total = matrixEntries.length;
+      var message = String(visible) + (visible === 1 ? " abbinamento visibile" : " abbinamenti visibili") + " su " + String(total) + " · live dove misurato, altrimenti stima build";
+      var suffix = query || filter ? " · filtro attivo" : "";
+      if (matrixCount.textContent !== message + suffix) matrixCount.textContent = message + suffix;
+    }
+  }
+  function moveMatrixFocus(button, direction) {
+    var visible = matrixVisibleEntries();
+    if (!visible.length) return;
+    var current = -1;
+    for (var index = 0; index < visible.length; index += 1) if (visible[index].button === button) current = index;
+    if (current === -1) current = 0;
+    var next = direction === "first" ? 0 : direction === "last" ? visible.length - 1 : current + (direction === "next" ? 1 : -1);
+    if (next < 0) next = 0;
+    if (next >= visible.length) next = visible.length - 1;
+    var target = visible[next].button;
+    matrixFocusValue = attribute(target, "data-pair-value");
+    for (var reset = 0; reset < visible.length; reset += 1) setAttribute(visible[reset].button, "tabindex", visible[reset].button === target ? "0" : "-1");
+    if (typeof target.focus === "function") target.focus();
+  }
   function thresholdsFor(option) {
     var packed = (attribute(option, "data-thresholds") || "").split(";");
     function read(index) {
@@ -1643,9 +2184,13 @@ export function createContrastWorkbenchView(deps) {
       controlLines.push(controls.mix + " · mix superficie" + (finite(controls.defaultMix) ? " (default " + percentLabel(controls.defaultMix) + "%)" : ""));
     }
     var draft = state && isRecord(state.draft) ? state.draft : {};
+    var removed = state && Array.isArray(state.removed) ? state.removed : [];
     var draftKeys = [];
+    var removedKeys = [];
     if (controls && typeof controls.override === "string" && Object.hasOwn(draft, controls.override)) draftKeys.push(controls.override);
     if (controls && typeof controls.mix === "string" && Object.hasOwn(draft, controls.mix)) draftKeys.push(controls.mix);
+    if (controls && typeof controls.override === "string" && removed.indexOf(controls.override) !== -1) removedKeys.push(controls.override);
+    if (controls && typeof controls.mix === "string" && removed.indexOf(controls.mix) !== -1) removedKeys.push(controls.mix);
     var container = make("div");
     container.appendChild(make("p", "eyebrow", label));
     var tokenLine = make("p");
@@ -1656,6 +2201,7 @@ export function createContrastWorkbenchView(deps) {
     container.appendChild(make("p", "margin-note", "Ricetta iniziale del generatore: " + (recipeKey ? recipeKey + (shared && typeof shared.kind === "string" && shared.kind ? " (" + shared.kind + ")" : "") : "non dichiarata") + "."));
     container.appendChild(make("p", "margin-note", "Controlli pubblici (tema " + themeName(theme) + "): " + (controlLines.length ? controlLines.join("; ") : "nessuno dichiarato") + "."));
     container.appendChild(make("p", "margin-note", draftKeys.length ? "Bozza attiva: " + draftKeys.join(", ") + "." : "Nessun override in bozza: vale la formula dei byte catturati."));
+    container.appendChild(make("p", "margin-note", removedKeys.length ? "Personalizzazione rimossa: verrà usato il fallback del token (" + removedKeys.join(", ") + ")." : "Nessuna personalizzazione rimossa per questo token."));
     return container;
   }
   function renderDetails(state) {
@@ -1730,12 +2276,13 @@ export function createContrastWorkbenchView(deps) {
       if (lastControlsKey === "__unavailable__") return;
       lastControlsKey = "__unavailable__";
       controlInputs = [];
+      disposeLightnessInputs();
       clear(controlsBody);
       controlsBody.appendChild(make("p", "margin-note", "Nessun controllo pubblico: la coppia attiva non è disponibile nel catalogo statico."));
       return;
     }
     var option = selectedOption();
-    if (!option) { clear(controlsBody); controlInputs = []; controlsBody.appendChild(make("p", "margin-note", "Nessuna coppia selezionata: nessun controllo pubblico.")); return; }
+    if (!option) { clear(controlsBody); controlInputs = []; disposeLightnessInputs(); controlsBody.appendChild(make("p", "margin-note", "Nessuna coppia selezionata: nessun controllo pubblico.")); return; }
     var theme = checkedTheme();
     var foreground = attribute(option, "data-fg") || "";
     var background = attribute(option, "data-bg") || "";
@@ -1744,6 +2291,7 @@ export function createContrastWorkbenchView(deps) {
     lastControlsKey = key;
     clear(controlsBody);
     controlInputs = [];
+    disposeLightnessInputs();
     var designValue = design();
     var tokens = foreground === background ? [foreground] : [foreground, background];
     var rendered = 0;
@@ -1766,6 +2314,8 @@ export function createContrastWorkbenchView(deps) {
         overrideInput.placeholder = "es. oklch(0.5 0.1 250)";
         overrideRow.appendChild(overrideLabel);
         overrideRow.appendChild(overrideInput);
+        appendLightnessControls(overrideRow, tokens[t], controls.override, state);
+        appendPersonalizationActions(overrideRow, tokens[t], controls.override);
         controlsBody.appendChild(overrideRow);
         controlInputs.push(bindControl(overrideInput, controls.override, "override"));
         rendered += 1;
@@ -1788,6 +2338,7 @@ export function createContrastWorkbenchView(deps) {
         mixRow.appendChild(mixLabel);
         mixRow.appendChild(mixInput);
         mixRow.appendChild(make("span", "margin-note", "Default: " + (defaultPercent ? defaultPercent + "%" : "non disponibile") + " (segnaposto: nessun override finché non modifichi il campo)"));
+        appendPersonalizationActions(mixRow, tokens[t], controls.mix);
         controlsBody.appendChild(mixRow);
         controlInputs.push(bindControl(mixInput, controls.mix, "mix"));
         rendered += 1;
@@ -1795,6 +2346,213 @@ export function createContrastWorkbenchView(deps) {
     }
     if (!rendered) controlsBody.appendChild(make("p", "margin-note", "Nessun controllo pubblico dichiarato per questa coppia e questo tema. Il banco non inventa knob."));
     syncDraft(state);
+  }
+  // Manual lightness reads only the runtime computed serialization. It never converts a colour or
+  // derives C/H here: it sends one L value in 0..1 and leaves the rest to the runtime contract.
+  function parseOklchLightness(value) {
+    var match = /^\s*oklch\(\s*([0-9]*\.?[0-9]+)(%?)/i.exec(textOf(value));
+    if (!match) return null;
+    var number = Number(match[1]);
+    if (!isFinite(number)) return null;
+    if (match[2] === "%") number = number / 100;
+    if (number < 0 || number > 1) return null;
+    return number * 100;
+  }
+  function computedLightnessFor(state, theme, token) {
+    var option = selectedOption();
+    if (!option) return null;
+    var side = attribute(option, "data-fg") === token ? "foreground" : attribute(option, "data-bg") === token ? "background" : null;
+    if (!side) return null;
+    var views = state && Array.isArray(state.views) ? state.views : [];
+    var comparison = state && isRecord(state.selection) ? state.selection.comparison : null;
+    for (var index = 0; index < views.length; index += 1) {
+      var view = views[index];
+      if (!isRecord(view) || !isRecord(view.measurement) || !viewMatchesOption(view, option)) continue;
+      var match = comparison === "tuning" || comparison === "draft" ? view.slot === "right" : view.theme === theme;
+      if (!match) continue;
+      var measurement = view.measurement;
+      // The runtime cohort saves the parsed channels per side (`foregroundOklch` / `backgroundOklch`).
+      // Read only `l` from them: this view never converts the computed colour to OKLCH itself.
+      var sideLightness = lightnessFromChannels(measurement[side + "Oklch"]);
+      if (sideLightness !== null) return sideLightness;
+      var sharedLightness = lightnessFromChannels(measurement.oklch);
+      if (sharedLightness !== null) return sharedLightness;
+      if (finite(measurement.lightness) && measurement.lightness >= 0 && measurement.lightness <= 1) return measurement.lightness * 100;
+      return parseOklchLightness(measurement[side]);
+    }
+    return null;
+  }
+  function lightnessFromChannels(value) {
+    if (!isRecord(value)) return null;
+    var l = value.l;
+    if (!finite(l) || l < 0 || l > 1) return null;
+    return l * 100;
+  }
+  function roundLightness(value) { return Math.round(value * 10) / 10; }
+  // Range and number share the same one-decimal display: the range cannot represent more, and the
+  // number input accepts any fraction, so neither ever reports a step mismatch for a real L.
+  function displayLightness(value) { return String(roundLightness(value)); }
+  function syncLightnessEntry(entry, state) {
+    if (!entry || !entry.range || !entry.number) return;
+    if (doc.activeElement === entry.range || doc.activeElement === entry.number) return;
+    if (entry.committing || entry.dirty) return;
+    var draft = state && isRecord(state.draft) ? state.draft : {};
+    var removed = state && Array.isArray(state.removed) ? state.removed : [];
+    var value = Object.hasOwn(draft, entry.control) ? parseOklchLightness(draft[entry.control]) : null;
+    var fromDraft = value !== null;
+    if (value === null) value = computedLightnessFor(state, checkedTheme(), entry.token);
+    var available = value !== null;
+    entry.available = available;
+    entry.range.hidden = !available;
+    entry.range.disabled = !entry.supported || !available;
+    entry.number.disabled = !entry.supported || !available;
+    entry.number.hidden = false;
+    if (available) {
+      var next = displayLightness(value);
+      if (entry.range.value !== next) entry.range.value = next;
+      if (entry.number.value !== next) entry.number.value = next;
+      entry.number.placeholder = "";
+      setAttribute(entry.range, "aria-valuetext", next + "%");
+    } else {
+      entry.number.value = "";
+      entry.number.placeholder = "—";
+      setAttribute(entry.range, "aria-valuetext", "non disponibile");
+    }
+    if (!entry.supported) entry.note.textContent = "Il runtime non espone setLightness: il controllo L resta disabilitato e nessun valore viene inviato.";
+    else if (removed.indexOf(entry.control) !== -1) entry.note.textContent = "Personalizzazione rimossa: verrà usato il fallback del token. Imposta L per aggiungere un nuovo override oppure usa il controllo testuale.";
+    else if (!available) entry.note.textContent = "L non disponibile: il runtime non ha restituito una L leggibile (colore calcolato non serializzato in OKLCH). Nessun valore viene inventato; usa il controllo testuale o attendi la misura.";
+    else if (fromDraft) entry.note.textContent = "L dalla bozza corrente, mostrata arrotondata a 0,1; C e H sono quelli del colore calcolato. Gli altri knob (mix/macro) restano attivi e possono contribuire al risultato.";
+    else entry.note.textContent = "L letta dal colore CSS calcolato dal runtime, mostrata arrotondata a 0,1; C e H sono quelli del colore. Gli altri knob (mix/macro) restano attivi e possono contribuire al risultato.";
+  }
+  function syncLightness(state) {
+    for (var index = 0; index < lightnessInputs.length; index += 1) syncLightnessEntry(lightnessInputs[index], state);
+  }
+  // A pending 180 ms commit belongs to the control that scheduled it. When a pair or theme change
+  // (or destroy) replaces the controls, the old entries are detached: clear their timers and ignore
+  // any in-flight completion, so a stale edit can never land on the new pair.
+  function disposeLightnessInputs() {
+    for (var index = 0; index < lightnessInputs.length; index += 1) {
+      var entry = lightnessInputs[index];
+      entry.disposed = true;
+      entry.queued = false;
+      if (entry.timer) { clearTimeout(entry.timer); entry.timer = null; }
+    }
+    lightnessInputs = [];
+  }
+  function commitLightness(entry) {
+    if (!entry || entry.disposed || !entry.supported) return;
+    if (!entry.available) { announce("L non disponibile: il runtime non ha restituito una L leggibile. Nessun valore viene inviato."); return; }
+    if (entry.timer) { clearTimeout(entry.timer); entry.timer = null; }
+    var raw = Number(entry.number && entry.number.value !== "" ? entry.number.value : entry.range.value);
+    if (!isFinite(raw) || raw < 0 || raw > 100) { announce("L non valida: usa un valore tra 0 e 100."); return; }
+    if (entry.committing) { entry.queued = true; return; }
+    entry.committing = true;
+    Promise.resolve(controller.setLightness(entry.control, raw / 100)).then(function (result) {
+      if (entry.disposed) return;
+      entry.committing = false;
+      entry.dirty = false;
+      if (result && result.error) {
+        announce("Regolazione L non applicata: " + String(result.error) + ". Nessun valore viene inventato.");
+        render(stateNow());
+        return;
+      }
+      announce("Luminosità L " + roundLightness(raw) + "% inviata al runtime per " + entry.control + ". C e H sono quelli del colore calcolato; gli altri knob (mix/macro) restano attivi.");
+      if (entry.queued) { entry.queued = false; commitLightness(entry); return; }
+      render(stateNow());
+    }, function (error) {
+      if (entry.disposed) return;
+      entry.committing = false;
+      entry.dirty = false;
+      announce("Regolazione L non riuscita: " + (error && error.message ? error.message : String(error)) + ". Nessun valore viene inventato.");
+    });
+  }
+  function scheduleLightness(entry) {
+    if (!entry || entry.disposed || !entry.supported || !entry.available) return;
+    if (entry.timer) clearTimeout(entry.timer);
+    entry.timer = setTimeout(function () { entry.timer = null; commitLightness(entry); }, 180);
+  }
+  function appendLightnessControls(row, token, control, state) {
+    var supported = typeof controller.setLightness === "function";
+    var id = "smart-colors-workbench-lightness-" + control.replace(/[^a-zA-Z0-9_-]/g, "-");
+    var group = make("fieldset", "wb-l-control");
+    setAttribute(group, "data-smart-colors-workbench", "lightness");
+    setAttribute(group, "data-control", control);
+    setAttribute(group, "data-token", token);
+    group.appendChild(make("legend", null, "Luminosità L% · " + token));
+    var inputs = make("div", "wb-l-inputs");
+    var range = make("input");
+    range.type = "range";
+    range.id = id + "-range";
+    setAttribute(range, "data-control", control);
+    setAttribute(range, "data-kind", "lightness");
+    setAttribute(range, "min", "0");
+    setAttribute(range, "max", "100");
+    setAttribute(range, "step", "0.1");
+    setAttribute(range, "aria-label", "Luminosità L percento per " + token + " (" + control + ")");
+    setAttribute(range, "aria-describedby", id + "-note");
+    range.disabled = true;
+    range.hidden = true;
+    var number = make("input");
+    number.type = "number";
+    number.id = id + "-number";
+    setAttribute(number, "data-control", control);
+    setAttribute(number, "data-kind", "lightness");
+    setAttribute(number, "min", "0");
+    setAttribute(number, "max", "100");
+    setAttribute(number, "step", "any");
+    setAttribute(number, "inputmode", "decimal");
+    setAttribute(number, "aria-label", "Valore L percento per " + token + " (" + control + ")");
+    setAttribute(number, "aria-describedby", id + "-note");
+    number.disabled = true;
+    number.placeholder = "—";
+    inputs.appendChild(range);
+    inputs.appendChild(number);
+    group.appendChild(inputs);
+    var note = make("span", "margin-note");
+    note.id = id + "-note";
+    group.appendChild(note);
+    row.appendChild(group);
+    var entry = { token: token, control: control, range: range, number: number, note: note, dirty: false, timer: null, committing: false, queued: false, disposed: false, supported: supported, available: false };
+    if (supported) {
+      listen(range, "input", function () { number.value = range.value; entry.dirty = true; scheduleLightness(entry); });
+      listen(range, "change", function () { number.value = range.value; entry.dirty = true; commitLightness(entry); });
+      listen(number, "input", function () { if (isFinite(Number(number.value))) range.value = number.value; entry.dirty = true; });
+      listen(number, "change", function () { entry.dirty = true; commitLightness(entry); });
+      listen(number, "blur", function () { if (entry.dirty && !entry.committing) commitLightness(entry); });
+    }
+    lightnessInputs.push(entry);
+    syncLightnessEntry(entry, state);
+  }
+  function appendPersonalizationActions(row, token, control) {
+    var actions = make("div", "wb-l-actions");
+    if (typeof controller.removeOverride === "function") {
+      var remove = make("button", "wb-ghost", "Rimuovi personalizzazione");
+      remove.type = "button";
+      setAttribute(remove, "data-smart-colors-workbench", "remove-override");
+      setAttribute(remove, "data-control", control);
+      setAttribute(remove, "aria-label", "Rimuovi la personalizzazione salvata di " + token + " (" + control + ")");
+      listen(remove, "click", function () {
+        if (busy) return;
+        run(function () { return Promise.resolve(controller.removeOverride(control)).then(resultOrThrow); }, "Rimozione richiesta per " + control + ": se la personalizzazione esisteva, verrà usato il fallback del token. Esporta per rendere la rimozione durevole.");
+      });
+      actions.appendChild(remove);
+    } else {
+      actions.appendChild(make("span", "margin-note", "Rimozione della personalizzazione salvata non disponibile nel runtime attuale."));
+    }
+    var discard = make("button", "wb-ghost", "Scarta la modifica in bozza");
+    discard.type = "button";
+    setAttribute(discard, "data-smart-colors-workbench", "discard-draft");
+    setAttribute(discard, "data-control", control);
+    setAttribute(discard, "aria-label", "Scarta la modifica in bozza di " + token + " (" + control + "), senza rimuovere l'override salvato");
+    listen(discard, "click", function () {
+      if (busy) return;
+      var state = stateNow();
+      var draft = state && isRecord(state.draft) ? state.draft : {};
+      if (!Object.hasOwn(draft, control)) { announce("Nessuna bozza da scartare per " + control + ". Gli override salvati non sono stati modificati."); return; }
+      run(function () { return Promise.resolve(controller.reset(control)).then(resultOrThrow); }, "Bozza scartata per " + control + ". Gli override salvati non sono stati modificati.");
+    });
+    actions.appendChild(discard);
+    row.appendChild(actions);
   }
   // Control values reflect the CURRENT saved draft and clear when a control is no longer overridden.
   // A field the user is editing (dirty) is never overwritten; a restored field returns to its
@@ -1811,6 +2569,7 @@ export function createContrastWorkbenchView(deps) {
       }
       if (entry.node.value !== next) entry.node.value = next;
     }
+    syncLightness(state);
   }
   function measureRow(label, content) {
     var row = make("div", "wb-measure-row");
@@ -1823,11 +2582,15 @@ export function createContrastWorkbenchView(deps) {
   // Per-specimen result: specimen first, then a scoped ratio, the exact criterion and threshold derived
   // from the measurement, the contextual applicability, and the project target with its own state.
   // Any runtime error stays listed and is never hidden.
-  function renderMeasure(node, view, slot, complete, option) {
+  function renderMeasure(node, view, slot, complete, option, state) {
     if (!node) return;
     clear(node);
     if (!view) {
       node.appendChild(field("Rapporto", "Nessuna vista " + slot + " restituita dal runtime."));
+      return;
+    }
+    if (!viewMatchesOption(view, option)) {
+      node.appendChild(field("Rapporto", "La vista " + slot + " non corrisponde alla coppia selezionata: nessun esito viene attribuito a un'altra coppia."));
       return;
     }
     var measurement = isRecord(view.measurement) ? view.measurement : null;
@@ -1844,6 +2607,21 @@ export function createContrastWorkbenchView(deps) {
     ratioRow.appendChild(make("dt", null, "Rapporto"));
     ratioRow.appendChild(ratioDd);
     node.appendChild(ratioRow);
+    // Computed colours are shown verbatim from the runtime measurement. This module never converts or
+    // recalculates them; a missing value fails soft with an explicit sentence instead of a paint.
+    var computedForeground = measurement ? safeComputedColor(measurement.foreground) : null;
+    var computedBackground = measurement ? safeComputedColor(measurement.background) : null;
+    var computed = make("span");
+    if (computedForeground && computedBackground) {
+      computed.appendChild(make("code", null, computedForeground));
+      computed.appendChild(make("span", null, " su "));
+      computed.appendChild(make("code", null, computedBackground));
+    } else if (measurement) {
+      computed.textContent = "Non disponibili: il runtime non ha restituito entrambi i colori calcolati.";
+    } else {
+      computed.textContent = "Non misurati.";
+    }
+    node.appendChild(measureRow("Colori CSS calcolati (runtime)", computed));
     // One criterion+threshold row, one separate target row. Common applicability is stated once
     // above the frames, so each card never repeats the same paragraph.
     var minimumRow = measureRow("Minimo richiesto e criterio", make("span", null, criterionValue(criterion)));
@@ -1852,6 +2630,8 @@ export function createContrastWorkbenchView(deps) {
     var targetRow = measureRow("Obiettivo progetto (non WCAG)", make("span", null, targetText(criterion)));
     targetRow.className += " wb-threshold";
     node.appendChild(targetRow);
+    var personalization = overrideSummary(state, view.theme, option);
+    if (personalization) node.appendChild(measureRow("Stato personalizzazioni", make("span", null, personalization)));
     var provenance = make("details", "is-detail");
     provenance.appendChild(make("summary", null, "Provenienza della misura"));
     provenance.appendChild(make("p", null, slot + " · tema " + themeName(view.theme) + " · " + variantName(view.variant) + " · " + bytesText(view.variant)));
@@ -1872,6 +2652,216 @@ export function createContrastWorkbenchView(deps) {
       errorRow.appendChild(errorList);
       node.appendChild(errorRow);
     }
+  }
+  function setIfChanged(node, value) { if (node && node.textContent !== value) node.textContent = value; }
+  // A neutral chrome sample painted only from the computed serializations the runtime already measured.
+  function renderSample(sampleNode, metaNode, view, state, option) {
+    var measurement = view && isRecord(view.measurement) ? view.measurement : null;
+    var foreground = measurement ? safeComputedColor(measurement.foreground) : null;
+    var background = measurement ? safeComputedColor(measurement.background) : null;
+    if (sampleNode && sampleNode.style && typeof sampleNode.style.setProperty === "function") {
+      sampleNode.style.setProperty("color", foreground && background ? foreground : "");
+      sampleNode.style.setProperty("background-color", foreground && background ? background : "");
+    }
+    setAttribute(sampleNode, "class", foreground && background ? "wb-aa" : "wb-aa is-unmeasured");
+    var text;
+    if (view && foreground && background) {
+      var summary = overrideSummary(state, view.theme, option);
+      text = "Campione «Aa» dai colori CSS calcolati · tema " + themeName(view.theme) + " · " + variantName(view.variant) + " · " + bytesText(view.variant) + (summary ? " · " + summary : "");
+    } else if (view) {
+      text = "Colori CSS calcolati non disponibili per questa vista: nessun campione viene dipinto.";
+    } else {
+      text = "Campione live non disponibile: serve una misura del runtime.";
+    }
+    if (metaNode) setIfChanged(metaNode, text);
+  }
+  function renderSamples(state) {
+    var views = state && Array.isArray(state.views) ? state.views : [];
+    var leftView = null;
+    var rightView = null;
+    for (var index = 0; index < views.length; index += 1) {
+      if (views[index] && views[index].slot === "left") leftView = views[index];
+      if (views[index] && views[index].slot === "right") rightView = views[index];
+    }
+    var phase = state && state.phase ? String(state.phase) : "unavailable";
+    var ready = phase === "complete" || phase === "incomplete";
+    var option = selectedOption();
+    renderSample(leftSample, leftMeta, ready && viewMatchesOption(leftView, option) ? leftView : null, state, option);
+    renderSample(rightSample, rightMeta, ready && viewMatchesOption(rightView, option) ? rightView : null, state, option);
+    if (!ready) {
+      var message = phase === "running" ? "Verifica in corso…" : phase === "idle" ? "Campione live non disponibile: avvia il confronto." : "Campione live non disponibile.";
+      if (leftMeta) setIfChanged(leftMeta, message);
+      if (rightMeta) setIfChanged(rightMeta, message);
+    }
+  }
+  // Matrix: the snapshot columns never change at runtime; only the selected row's live cell is filled
+  // from `views[].measurements`. Every other row explicitly states that a live measurement requires
+  // selecting it, so a build snapshot is never silently presented as a current live value.
+  function renderMatrix(state) {
+    if (!matrixEntries.length) return;
+    var phase = state && state.phase ? String(state.phase) : "unavailable";
+    var ready = phase === "complete" || phase === "incomplete";
+    var views = state && Array.isArray(state.views) ? state.views : [];
+    var leftView = null;
+    var rightView = null;
+    for (var viewIndex = 0; viewIndex < views.length; viewIndex += 1) {
+      if (views[viewIndex] && views[viewIndex].slot === "left") leftView = views[viewIndex];
+      if (views[viewIndex] && views[viewIndex].slot === "right") rightView = views[viewIndex];
+    }
+    var selection = state && isRecord(state.selection) ? state.selection : {};
+    var comparison = selection.comparison === "tuning" || selection.comparison === "draft" ? selection.comparison : "themes";
+    if (matrixViewA) setIfChanged(matrixViewA, matrixViewLabel(leftView, "left", comparison));
+    if (matrixViewB) setIfChanged(matrixViewB, matrixViewLabel(rightView, "right", comparison));
+    var indexes = {
+      left: leftView && ready ? measurementIndex(leftView) : {},
+      right: rightView && ready ? measurementIndex(rightView) : {},
+    };
+    var expected = [];
+    if (leftView) expected.push("left");
+    if (rightView) expected.push("right");
+    for (var index = 0; index < matrixEntries.length; index += 1) {
+      var entry = matrixEntries[index];
+      if (!entry.cells) continue;
+      var statuses = { left: null, right: null };
+      var liveStatuses = [];
+      var hasLive = false;
+      for (var slotIndex = 0; slotIndex < 2; slotIndex += 1) {
+        var slot = slotIndex === 0 ? "left" : "right";
+        var view = slot === "left" ? leftView : rightView;
+        var theme = view ? view.theme : slot === "left" ? "light" : "dark";
+        var measurement = view && ready ? indexes[slot][matrixPairIdForTheme(entry.option, view.theme)] || null : null;
+        var result = renderMatrixCell(entry.cells[slot], entry.option, theme, measurement);
+        statuses[slot] = result;
+        if (result.live) { hasLive = true; liveStatuses.push(result.status); }
+      }
+      var effective;
+      var allPass;
+      var unmeasured;
+      if (hasLive) {
+        effective = worstStatusOf(liveStatuses);
+        allPass = expected.length > 0;
+        unmeasured = false;
+        for (var expectedIndex = 0; expectedIndex < expected.length; expectedIndex += 1) {
+          var expectedSlot = expected[expectedIndex];
+          var stateForSlot = statuses[expectedSlot];
+          if (!stateForSlot || !stateForSlot.live) { allPass = false; unmeasured = true; continue; }
+          if (stateForSlot.status !== "pass") allPass = false;
+          if (stateForSlot.status === "unmeasured") unmeasured = true;
+        }
+      } else {
+        effective = attribute(entry.row, "data-build-status") || attribute(entry.row, "data-status") || "unmeasured";
+        allPass = attribute(entry.row, "data-build-all-pass") === "true" || attribute(entry.row, "data-all-pass") === "true";
+        unmeasured = attribute(entry.row, "data-build-unmeasured") === "true" || attribute(entry.row, "data-unmeasured") === "true";
+      }
+      setAttribute(entry.row, "data-status-effective", effective);
+      setAttribute(entry.row, "data-status-live", hasLive ? worstStatusOf(liveStatuses) : "");
+      setAttribute(entry.row, "data-all-pass", allPass ? "true" : "false");
+      setAttribute(entry.row, "data-unmeasured", unmeasured ? "true" : "false");
+      setAttribute(entry.row, "data-live-status", hasLive ? "true" : "false");
+      setAttribute(entry.row, "data-live-revision", hasLive ? textOf(state && state.revision) : "");
+    }
+    syncMatrixFocus();
+    applyMatrixFilter();
+  }
+  var explorationPairCache = { light: null, dark: null };
+  function explorationPairsFor(theme) {
+    if (typeof controller.explorationPairs !== "function") return [];
+    if (!explorationPairCache[theme]) {
+      try {
+        var list = controller.explorationPairs(theme);
+        explorationPairCache[theme] = Array.isArray(list) ? list : [];
+      } catch (error) { explorationPairCache[theme] = []; }
+    }
+    return explorationPairCache[theme];
+  }
+  function explorationLabel(pairs, measurement, theme) {
+    var pairId = measurement && typeof measurement.pairId === "string" ? measurement.pairId : "";
+    for (var index = 0; index < pairs.length; index += 1) {
+      var pair = pairs[index];
+      if (!isRecord(pair)) continue;
+      if (pair.id === pairId) return pair.label || ((pair.foreground || pair.foregroundToken) + " su " + (pair.background || pair.backgroundToken));
+    }
+    if (measurement && isRecord(measurement) && typeof measurement.foreground === "string" && typeof measurement.background === "string") return measurement.foreground + " su " + measurement.background;
+    return pairId || "coppia non indicata";
+  }
+  // Exploration is advisory and read-only. A stale theme, revision, draft or selection clears the table
+  // instead of leaving old measurements on screen as if they were current.
+  function renderExploration(state) {
+    if (!explorationBox || !explorationResults || !explorationStatus) return;
+    var available = typeof controller.explorationPairs === "function" && typeof controller.measureExploration === "function";
+    explorationBox.hidden = !available;
+    if (!available) return;
+    var theme = checkedTheme();
+    var phase = state && state.phase ? String(state.phase) : "unavailable";
+    var exploration = state && isRecord(state.exploration) ? state.exploration : null;
+    var measurements = exploration && Array.isArray(exploration.measurements) ? exploration.measurements : [];
+    var signature = [theme, textOf(state && state.revision), textOf(exploration && exploration.revision), textOf(exploration && exploration.phase), textOf(exploration && exploration.variant), String(measurements.length), busy ? "busy" : "idle"].join("|");
+    if (available && signature === lastExplorationSignature) return;
+    lastExplorationSignature = signature;
+    if (explorationRun) explorationRun.disabled = busy || phase === "running";
+    clear(explorationResults);
+    explorationResults.hidden = true;
+    if (!exploration) {
+      setIfChanged(explorationStatus, "Non misurato. Nessun dato vecchio viene mostrato.");
+      return;
+    }
+    if (exploration.theme !== theme) {
+      setIfChanged(explorationStatus, "Tema cambiato: rimisura l'esplorazione. I dati precedenti non vengono mostrati come attuali.");
+      return;
+    }
+    if (exploration.revision !== undefined && exploration.revision !== null && state && state.revision !== undefined && state.revision !== null && String(exploration.revision) !== String(state.revision)) {
+      setIfChanged(explorationStatus, "La selezione o la bozza è cambiata: i dati dell'esplorazione non sono aggiornati. Rimisura.");
+      return;
+    }
+    if (exploration.phase === "running") { setIfChanged(explorationStatus, "Misura in corso…"); return; }
+    if (exploration.phase === "idle") { setIfChanged(explorationStatus, "Non misurato."); return; }
+    if (exploration.phase === "unavailable") {
+      var unavailable = Array.isArray(exploration.errors) ? exploration.errors : [];
+      setIfChanged(explorationStatus, "Esplorazione non disponibile." + (unavailable.length ? " " + unavailable.map(function (item) { return isRecord(item) ? textOf(item.message || item.phase) : textOf(item); }).join("; ") : ""));
+      return;
+    }
+    if (!measurements.length) { setIfChanged(explorationStatus, "Nessuna combinazione misurata: nessun dato inventato."); return; }
+    var pairs = explorationPairsFor(theme);
+    var table = make("table", "wb-exploration-table");
+    var caption = make("caption", null, "Combinazioni dei colori base · tema " + themeName(theme) + " · sola lettura, fuori dalla copertura primaria.");
+    table.appendChild(caption);
+    var head = make("thead");
+    var headRow = make("tr");
+    var headings = ["Coppia", "Rapporto", "Minimo", "Target", "Esito"];
+    for (var h = 0; h < headings.length; h += 1) {
+      var th = make("th", null, headings[h]);
+      setAttribute(th, "scope", "col");
+      headRow.appendChild(th);
+    }
+    head.appendChild(headRow);
+    table.appendChild(head);
+    var body = make("tbody");
+    for (var m = 0; m < measurements.length; m += 1) {
+      var measurement = isRecord(measurements[m]) ? measurements[m] : {};
+      var row = make("tr");
+      var rowHead = make("th", null, explorationLabel(pairs, measurement, theme));
+      setAttribute(rowHead, "scope", "row");
+      row.appendChild(rowHead);
+      row.appendChild(make("td", null, finite(measurement.ratio) ? ratioText(measurement.ratio, [measurement.minimum, measurement.target]) : "non misurato"));
+      row.appendChild(make("td", null, finite(measurement.minimum) ? ratioText(measurement.minimum) : "non dichiarato"));
+      row.appendChild(make("td", null, finite(measurement.target) ? ratioText(measurement.target) : "non dichiarato"));
+      row.appendChild(make("td", null, matrixStatusLabel(textOf(measurement.status) || "unmeasured")));
+      body.appendChild(row);
+    }
+    table.appendChild(body);
+    explorationResults.hidden = false;
+    explorationResults.appendChild(table);
+    var summary = measurements.length + (measurements.length === 1 ? " combinazione misurata" : " combinazioni misurate") + " · tema " + themeName(theme) + (exploration.variant ? " · " + variantName(exploration.variant) : "") + " · advisory, non copertura.";
+    var omitted = exploration.omittedFamilies;
+    if (Array.isArray(omitted) && omitted.length) summary += " Famiglie omesse dal limite: " + omitted.map(function (item) { return textOf(item); }).join(", ") + ".";
+    else if (omitted && typeof omitted === "object" && !Array.isArray(omitted)) {
+      var omittedKeys = Object.keys(omitted);
+      if (omittedKeys.length) summary += " Limite famiglie per tema: " + omittedKeys.map(function (key) { return key + " " + textOf(omitted[key]); }).join(", ") + ".";
+    }
+    var errors = Array.isArray(exploration.errors) ? exploration.errors : [];
+    if (errors.length) summary += " Errori: " + errors.map(function (item) { return isRecord(item) ? textOf(item.message || item.phase) : textOf(item); }).join("; ") + ".";
+    if (state && state.error) summary += " Ultimo tentativo non riuscito: " + textOf(state.error) + ".";
+    setIfChanged(explorationStatus, summary);
   }
   function countOf(value) {
     if (Array.isArray(value)) return value.length;
@@ -2066,7 +3056,6 @@ export function createContrastWorkbenchView(deps) {
     for (var index = 0; index < keys.length; index += 1) pairs.push(keys[index] + "=" + textOf(draft[keys[index]]));
     return textOf(selection.pairId) + "|" + textOf(selection.theme) + "|" + textOf(selection.comparison) + "|" + pairs.join(",");
   }
-  function setIfChanged(node, value) { if (node && node.textContent !== value) node.textContent = value; }
   function renderUnavailableSelection(pairId) {
     selectionAvailable = false;
     lastControlsKey = "";
@@ -2649,6 +3638,16 @@ export function createContrastWorkbenchView(deps) {
       if (typeof useSearch.select === "function") useSearch.select();
     }
   }
+  function overviewIsWide() {
+    return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(min-width: 64rem)").matches;
+  }
+  function syncOverviewDisclosure() {
+    if (!overviewBox) return;
+    overviewBox.open = overviewIsWide();
+  }
+  // The native disclosure is collapsed on narrow screens by default; desktop opens it immediately.
+  // A no-JS desktop keeps the native summary, so the matrix stays reachable even without this code.
+  syncOverviewDisclosure();
   // The primary path starts on the light/dark comparison, but ONLY from a clean idle state: an already
   // mounted, already running selection or a preexisting draft is never changed. Initialised from the
   // view through the frozen controller API, so the runtime defaults are never modified.
@@ -2708,19 +3707,23 @@ export function createContrastWorkbenchView(deps) {
         if (views[index] && views[index].slot === "left") leftView = views[index];
         if (views[index] && views[index].slot === "right") rightView = views[index];
       }
-      renderMeasure(leftMeasure, leftView, "sinistra", phase === "complete", selectedOption());
-      renderMeasure(rightMeasure, rightView, "destra", phase === "complete", selectedOption());
+      renderMeasure(leftMeasure, leftView, "sinistra", phase === "complete", selectedOption(), state);
+      renderMeasure(rightMeasure, rightView, "destra", phase === "complete", selectedOption(), state);
       if (phase === "complete") announce("Misure di questa coppia aggiornate in questo browser." + error);
       else announce("Misura incompleta: nessun esito globale." + error);
     }
+    renderSamples(state);
+    renderMatrix(state);
+    renderExploration(state);
     renderSuggestion(state);
     renderSessionStatus(state);
     renderControls(state);
     // The exported text is derived from the CURRENT draft: whenever the draft changes, an already
     // published export is recomputed so it can never show a stale previous state.
     var draftObject = state && isRecord(state.draft) ? state.draft : {};
-    var hasDraft = Object.keys(draftObject).length > 0;
-    var draftSignature = JSON.stringify(draftObject);
+    var removedObject = state && Array.isArray(state.removed) ? state.removed.slice().sort() : [];
+    var hasDraft = Object.keys(draftObject).length > 0 || removedObject.length > 0;
+    var draftSignature = JSON.stringify(draftObject) + "|" + JSON.stringify(removedObject);
     var revision = state && state.revision !== undefined && state.revision !== null ? String(state.revision) : "";
     if (draftSignature !== lastDraftSignature || revision !== lastRevision) {
       lastDraftSignature = draftSignature;
@@ -2762,12 +3765,13 @@ export function createContrastWorkbenchView(deps) {
     // "Prova proposta" is never re-enabled blindly: it stays gated on a verified suggestion. The
     // source swatches and the use chips are deliberately NOT disabled here: disabling the control the
     // user just activated would blur it. Re-entrancy is guarded by the `busy` flag in their handlers.
-    var buttons = [submit, controlsSubmit, resetPair, resetAll, suggestForeground, suggestBackground, exportButton, copyPalette];
+    var buttons = [submit, controlsSubmit, resetPair, resetAll, suggestForeground, suggestBackground, exportButton, copyPalette, explorationRun];
     for (var index = 0; index < buttons.length; index += 1) {
       if (buttons[index]) buttons[index].disabled = busy;
     }
     if (discardButton) discardButton.disabled = busy || !suggestionPresent || typeof controller.discardSuggestion !== "function";
     if (applyButton) applyButton.disabled = busy || !suggestionVerified;
+    if (explorationRun) explorationRun.disabled = busy || typeof controller.measureExploration !== "function" || typeof controller.explorationPairs !== "function";
   }
   // Focus continuity for actions whose own control is disabled or hidden by the successful publish
   // that follows. These helpers are called ONLY from explicit click handlers, never from render or
@@ -2874,35 +3878,107 @@ export function createContrastWorkbenchView(deps) {
     }
     return run(next, "Override pubblici applicati al runtime. La palette sorgente non è stata modificata. Solo i campi modificati sono stati inviati.");
   }
-  function setDownload(css) {
+  function setDownload(css, mode) {
     if (!download) return;
     if (typeof css === "string" && css !== "") {
       download.href = "data:text/css;charset=utf-8," + encodeURIComponent(css);
+      download.download = mode === "complete" ? "colors-tuning.css" : "colors-tuning.patch.css";
+      download.textContent = mode === "complete" ? "Scarica colors-tuning.css (azione manuale)" : "Scarica colors-tuning.patch.css (frammento, azione manuale)";
       download.hidden = false;
     } else {
       download.hidden = true;
+      download.download = "colors-tuning.patch.css";
+      download.textContent = "Scarica il frammento (azione manuale)";
     }
   }
-  // Recompute from the controller every time: the export is always the current draft, never the
-  // previously published text.
-  function refreshExport() {
-    var css = controller.exportTuning();
+  function exportFileModel() {
+    if (typeof controller.exportTuningFile === "function") {
+      try {
+        var file = controller.exportTuningFile();
+        if (isRecord(file)) {
+          var css = typeof file.css === "string" ? file.css : "";
+          var mode = file.mode === "complete" || file.mode === "fragment" ? file.mode : "unavailable";
+          if (css === "") mode = "unavailable";
+          var warnings = [];
+          if (Array.isArray(file.warnings)) {
+            for (var w = 0; w < file.warnings.length; w += 1) if (typeof file.warnings[w] === "string" && file.warnings[w]) warnings.push(file.warnings[w]);
+          }
+          var removed = [];
+          if (Array.isArray(file.removed)) {
+            for (var r = 0; r < file.removed.length; r += 1) if (typeof file.removed[r] === "string" && file.removed[r]) removed.push(file.removed[r]);
+          }
+          var unmatched = [];
+          if (Array.isArray(file.unmatched)) {
+            for (var u = 0; u < file.unmatched.length; u += 1) if (typeof file.unmatched[u] === "string" && file.unmatched[u]) unmatched.push(file.unmatched[u]);
+          }
+          return { css: css, mode: mode, warnings: warnings, removed: removed, unmatched: unmatched };
+        }
+      } catch (error) {
+        var legacy = typeof controller.exportTuning === "function" ? controller.exportTuning() : "";
+        if (typeof legacy !== "string") legacy = "";
+        return { css: legacy, mode: legacy ? "fragment" : "unavailable", warnings: legacy ? ["exportTuningFile non disponibile: " + (error && error.message ? error.message : String(error)) + ". È stato usato il frammento legacy."] : [], removed: [], unmatched: [] };
+      }
+    }
+    var css = typeof controller.exportTuning === "function" ? controller.exportTuning() : "";
     if (typeof css !== "string") css = "";
+    return {
+      css: css,
+      mode: css ? "fragment" : "unavailable",
+      warnings: css ? ["Il runtime espone solo il frammento legacy: l'esportazione non è un file completo."] : [],
+      removed: [],
+      unmatched: [],
+    };
+  }
+  // Recompute from the controller every time: the export is always the current draft, never the
+  // previously published text. `lastExportStamp` changes only when the user actually exports/copies
+  // or downloads, so "dirty" never becomes a lie after an automatic re-render.
+  function refreshExport() {
+    var model = exportFileModel();
+    var css = model.css;
+    var current = stateNow();
+    var currentDraft = current && isRecord(current.draft) ? current.draft : {};
+    var currentRemoved = current && Array.isArray(current.removed) ? current.removed : [];
+    var hasEdits = Object.keys(currentDraft).length > 0 || currentRemoved.length > 0;
     if (exportText) exportText.value = css;
-    if (exportNote) exportNote.textContent = css === ""
-      ? "Nessun tuning pubblico da esportare: nessun override attivo."
-      : "CSS della bozza corrente. Copia o scarica il file per conservarlo: l'anteprima non modifica il progetto.";
-    setDownload(css);
-    return css;
+    setDownload(css, model.mode);
+    var notes = [];
+    if (css === "") {
+      notes.push("Nessun tuning pubblico da esportare: nessun override attivo.");
+    } else if (model.mode === "complete") {
+      notes.push(hasEdits
+        ? "CSS della bozza corrente: file completo pronto per colors-tuning.css, costruito dal tuning salvato. Controlla gli avvisi per le regole non abbinate. L'esportazione non salva nel progetto: sostituisci il file manualmente."
+        : "Nessuna modifica in bozza: file completo del tuning salvato preservato, pronto per colors-tuning.css. L'esportazione non salva nel progetto: sostituisci il file manualmente.");
+    } else if (model.mode === "fragment") {
+      notes.push("CSS della bozza corrente come frammento: colors-tuning.patch.css, non un file completo. Unisci o applica manualmente; l'anteprima non modifica il progetto.");
+    } else {
+      notes.push("Nessun file esportabile: il runtime non ha restituito CSS.");
+    }
+    if (model.removed.length) {
+      notes.push(model.mode === "complete" ? "Rimozioni incluse nel file: " + model.removed.join(", ") + "." : "Rimozioni non applicabili in questo export: " + model.removed.join(", ") + ".");
+    }
+    if (model.unmatched.length) notes.push("Override salvati non trovati nei token attuali: " + model.unmatched.join(", ") + ". Non vengono cancellati automaticamente.");
+    for (var index = 0; index < model.warnings.length; index += 1) notes.push(model.warnings[index]);
+    if (css !== "") {
+      if (lastExportStamp === null) notes.push(hasEdits ? "Non hai ancora esportato questa bozza." : "Il file salvato non è stato ancora scaricato da questa anteprima.");
+      else if (css !== lastExportStamp) notes.push("Modifiche non esportate rispetto all'ultima esportazione.");
+      else notes.push("Nessuna modifica dopo l'ultima esportazione.");
+    }
+    if (exportNote) exportNote.textContent = notes.join(" ");
+    if (exportMode) exportMode.textContent = model.mode === "complete" ? "File completo: colors-tuning.css." : model.mode === "fragment" ? "Frammento: colors-tuning.patch.css, non un file completo." : "Export non disponibile.";
+    return model;
   }
   function exportTuning() {
     // The header owns the only export command; opening it reveals the real generated CSS and the
     // manual download in the secondary disclosure. No second export button exists in the workbench.
     if (exportBox) exportBox.open = true;
-    var css = refreshExport();
+    var model = refreshExport();
     if (exportText && typeof exportText.focus === "function") exportText.focus();
-    if (css === "") { announce("Nessun tuning pubblico da esportare: nessun override attivo."); return; }
-    announce("CSS pubblico esportato nel campo selezionabile. Il download resta un'azione manuale.");
+    if (model.css === "") { announce("Nessun tuning pubblico da esportare: nessun override attivo."); return; }
+    lastExportStamp = model.css;
+    refreshExport();
+    if (model.mode === "complete") announce("File completo esportato nel campo selezionabile: scarica colors-tuning.css. Non è un salvataggio nel progetto.");
+    else if (model.mode === "fragment") announce("Frammento esportato nel campo selezionabile: scarica colors-tuning.patch.css. Non sostituisce colors-tuning.css.");
+    else announce("Nessun file esportabile: il runtime non ha restituito CSS.");
   }
   function copyTextarea(node, label) {
     if (!node) return;
@@ -2926,6 +4002,10 @@ export function createContrastWorkbenchView(deps) {
     if (node && typeof node.addEventListener === "function") node.addEventListener(event, handler);
   }
   function prevent(event) { if (event && typeof event.preventDefault === "function") event.preventDefault(); }
+  function resultOrThrow(result) {
+    if (result && result.error) throw new Error(String(result.error));
+    return result;
+  }
 
   // Establish the primary light/dark comparison before mounting, so the first measurement run already
   // uses it (the runtime defaults are never modified; only the selection is set from the view).
@@ -3001,11 +4081,11 @@ export function createContrastWorkbenchView(deps) {
       if (index >= controls.length) return Promise.resolve(null);
       var control = controls[index];
       index += 1;
-      return Promise.resolve(controller.reset(control)).then(next);
+      return Promise.resolve(controller.reset(control)).then(resultOrThrow).then(next);
     }
-    run(next, "Controlli pubblici della coppia azzerati.");
+    run(next, "Bozza dei controlli della coppia scartata. Gli override salvati non sono stati modificati.");
   });
-  listen(resetAll, "click", function () { run(function () { return controller.reset(); }, "Tutto il tuning pubblico è stato azzerato."); });
+  listen(resetAll, "click", function () { run(function () { return Promise.resolve(controller.reset()).then(resultOrThrow); }, "Bozza di tuning scartata. Gli override salvati non sono stati rimossi: usa Rimuovi personalizzazione per quelli."); });
   listen(suggestForeground, "click", function () { run(function () { return controller.suggest("foreground"); }, "Ricerca della proposta per il primo piano richiesta."); });
   listen(suggestBackground, "click", function () { run(function () { return controller.suggest("background"); }, "Ricerca della proposta per lo sfondo richiesta."); });
   listen(applyButton, "click", function () {
@@ -3049,15 +4129,48 @@ export function createContrastWorkbenchView(deps) {
   // The copy action recomputes the current draft; it never copies a stale export or announces a copy
   // of an empty string.
   listen(copyExport, "click", function () {
-    var css = controller.exportTuning();
-    if (typeof css !== "string" || css === "") { announce("Nessun CSS pubblico da copiare: nessun override attivo."); return; }
-    if (exportText) exportText.value = css;
-    setDownload(css);
+    var model = refreshExport();
+    if (model.css === "") { announce("Nessun CSS pubblico da copiare: nessun override attivo."); return; }
+    lastExportStamp = model.css;
+    refreshExport();
     copyTextarea(exportText, "CSS pubblico");
   });
+  listen(download, "click", function () {
+    if (!exportText || exportText.value === "") return;
+    lastExportStamp = exportText.value;
+    refreshExport();
+  });
+  // Matrix search/filter and roving focus: one tab stop for the whole table body. Arrow keys move
+  // between visible rows, Enter/Space activates the native button, and a filtered-out selected row
+  // hands the tab stop to the first visible row without selecting it.
+  listen(matrixSearch, "input", applyMatrixFilter);
+  listen(matrixFilter, "change", applyMatrixFilter);
+  listen(matrixClear, "click", function () {
+    if (matrixSearch) matrixSearch.value = "";
+    if (matrixFilter) matrixFilter.value = "";
+    applyMatrixFilter();
+    if (matrixSearch && typeof matrixSearch.focus === "function") matrixSearch.focus();
+  });
+  buildMatrix();
+  if (explorationRun) {
+    listen(explorationRun, "click", function () {
+      if (busy) return;
+      if (typeof controller.measureExploration !== "function") { announce("Il runtime non espone la misura esplorativa: nessun dato inventato."); return; }
+      run(function () { return controller.measureExploration(checkedTheme()); }, "Richiesta di esplorazione completata: controlla lo stato dell'esplorazione qui sotto.");
+    });
+  }
 
+  var overviewWide = overviewIsWide();
   if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
     window.addEventListener("pagehide", function () { if (unsubscribe) unsubscribe(); });
+    // Reopen only when the layout crosses into the wide two-column mode. A manual close on desktop
+    // must survive ordinary resizes, and narrowing never forces the user's open matrix shut.
+    window.addEventListener("resize", function () {
+      var next = overviewIsWide();
+      if (next === overviewWide) return;
+      overviewWide = next;
+      if (next && overviewBox) overviewBox.open = true;
+    });
   }
   // The source swatches are inert until the factory wires them: only then are they enabled.
   if (openPicker) openPicker.disabled = false;
@@ -3065,12 +4178,18 @@ export function createContrastWorkbenchView(deps) {
   if (useCategory) useCategory.disabled = false;
   if (useClear) useClear.disabled = false;
   if (closePicker) closePicker.disabled = false;
+  if (matrixSearch) matrixSearch.disabled = false;
+  if (matrixFilter) matrixFilter.disabled = false;
+  if (matrixClear) matrixClear.disabled = false;
+  if (explorationRun) explorationRun.disabled = typeof controller.measureExploration !== "function" || typeof controller.explorationPairs !== "function";
   for (var swatchBind = 0; swatchBind < swatchButtons.length; swatchBind += 1) bindSwatch(swatchButtons[swatchBind]);
+  applyMatrixFilter();
   render(stateNow());
   return {
     render: render,
     destroy: function () {
       if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+      disposeLightnessInputs();
       setProposalFrames(false);
       controller.destroy();
       mounted = false;

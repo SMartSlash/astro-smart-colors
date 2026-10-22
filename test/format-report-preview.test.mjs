@@ -648,9 +648,12 @@ test("the session preview leads with the workbench, keeps the raw source archive
   assert.match(html, /<textarea id="smart-colors-workbench-export-text"/);
   assert.match(html, /<h3 id="smart-colors-workbench-left-title"[^>]*>Tema chiaro<\/h3>/);
   assert.match(html, /<h3 id="smart-colors-workbench-right-title"[^>]*>Tema scuro<\/h3>/);
-  // The redundant restore/reset-all duplicate is gone: reset-all appears once, in controls scope.
+  // The redundant restore/reset-all duplicate is gone: reset-all appears once, in controls scope,
+  // and its copy states that it discards the draft without touching saved overrides.
   assert.doesNotMatch(html, /Ripristina<\/button>/);
-  assert.equal((html.match(/Azzera tutto il tuning<\/button>/g) ?? []).length, 1);
+  assert.doesNotMatch(html, /Azzera tutto il tuning<\/button>/, "the old reset label is gone");
+  assert.equal((html.match(/Scarta la bozza di tuning<\/button>/g) ?? []).length, 1);
+  assert.match(html, /«Scarta la bozza…» non rimuove gli override già salvati/);
   assert.match(html, /Ambito: solo i controlli pubblici dichiarati per i due token della coppia selezionata/);
 });
 
@@ -1402,8 +1405,8 @@ test("every drawn color exposes token, sources, recipe and public control withou
   assert.match(usi, /sorgenti: brand/);
   assert.match(usi, /Ricetta di partenza \(generatore\): text \(contrast\)/);
   assert.match(usi, /Ricetta di partenza \(generatore\): surface \(mix\)/);
-  assert.match(usi, /Controllo per personalizzare/);
-  assert.match(usi, /--color-tune-brand-dark-mix \(default 78%\)/);
+  assert.match(usi, /controlli: /);
+  assert.match(usi, /mix --color-tune-brand-dark-mix \(default 78%\)/);
   assert.match(usi, /--color-tune-light-warmth/);
   assert.doesNotMatch(usi, /--_color-/, "only public --color-tune-* control names, never an internal prefix");
 });
@@ -1417,7 +1420,7 @@ test("for a tuned sample the start recipe is labelled generator and never claims
   const usi = html.match(/<section id="usi"[\s\S]*?<\/section>/)[0];
   assert.match(usi, /Ricetta di partenza \(generatore\)/);
   assert.match(usi, /sostituibile da un controllo/);
-  assert.match(usi, /Controllo per personalizzare — dark: --color-tune-brand-dark-full/);
+  assert.match(usi, /override --color-tune-brand-dark-full/);
   assert.doesNotMatch(usi, /colore misurato deriva|il misurato deriva/);
 });
 

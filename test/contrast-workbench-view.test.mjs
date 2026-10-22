@@ -197,8 +197,8 @@ test("override controls are whitelisted from the design metadata and never edit 
   const html = renderContrastWorkbench(workbenchSession());
   assert.match(html, /data-control="--color-tune-primary-text-light" data-kind="override"/);
   assert.match(html, /data-control="--color-tune-primary-surface-light" data-kind="override"/);
-  assert.match(html, /Azzera i controlli della coppia/);
-  assert.match(html, /Azzera tutto il tuning/);
+  assert.match(html, /Scarta la bozza della coppia/);
+  assert.match(html, /Scarta la bozza di tuning/);
   assert.match(html, /Un override completo ha precedenza sul mix della superficie/);
   // A mix control is only rendered for the theme that declares it (dark).
   assert.doesNotMatch(html, /data-control="--color-tune-primary-text-dark-mix" data-kind="mix"\>/);
@@ -222,7 +222,7 @@ test("the suggestion copy states a bounded min-lightness search for the minimum,
   assert.match(html, /id="smart-colors-workbench-discard-suggestion" data-smart-colors-workbench="discard-suggestion" hidden disabled>Scarta proposta<\/button>/);
   // The redundant restore/reset-all duplicate is gone: reset-all lives once, in the controls scope.
   assert.doesNotMatch(html, /Ripristina<\/button>/);
-  assert.equal((html.match(/Azzera tutto il tuning<\/button>/g) ?? []).length, 1);
+  assert.equal((html.match(/Scarta la bozza di tuning<\/button>/g) ?? []).length, 1);
   assert.match(html, /Ambito: solo i controlli pubblici dichiarati per i due token della coppia selezionata/);
 });
 
@@ -502,6 +502,28 @@ test("the view factory source is self-contained, compiles and carries no unsafe 
 
 // --- Browser behaviour (test-only DOM + frozen controller stub) ---------------
 
+function inputValidity(node) {
+  if (node.tagName !== "input") return true;
+  if (node.type !== "range" && node.type !== "number") return true;
+  const raw = node.value === undefined || node.value === null ? "" : String(node.value);
+  if (raw === "") return true;
+  const value = Number(raw);
+  if (!Number.isFinite(value)) return false;
+  const min = node.getAttribute("min");
+  const max = node.getAttribute("max");
+  if (min !== null && value < Number(min)) return false;
+  if (max !== null && value > Number(max)) return false;
+  const step = node.getAttribute("step");
+  if (step && step !== "any") {
+    const stepValue = Number(step);
+    const base = min !== null ? Number(min) : 0;
+    if (Number.isFinite(stepValue) && stepValue > 0) {
+      const quotient = (value - base) / stepValue;
+      if (Math.abs(quotient - Math.round(quotient)) > 1e-6) return false;
+    }
+  }
+  return true;
+}
 function makeNode(tag) {
   const el = {
     tagName: tag, className: "", textContent: "", value: "", checked: false, selected: false, hidden: false, disabled: false,
@@ -518,6 +540,7 @@ function makeNode(tag) {
     focus() { this.focused = true; },
     select() { this.selectedText = true; },
     setSelectionRange() {},
+    checkValidity() { return this.children.every((child) => child.checkValidity()) && inputValidity(this); },
     querySelector(selector) { return findIn(this, selector); },
     querySelectorAll(selector) { return findAllIn(this, selector); },
   };
@@ -602,23 +625,45 @@ function workbenchDom(session) {
   const correctionBox = makeNode("section"); correctionBox.setAttribute("data-smart-colors-workbench", "correction"); host.appendChild(correctionBox);
   const manualBox = makeNode("details"); manualBox.setAttribute("data-smart-colors-workbench", "manual"); host.appendChild(manualBox);
   const exportBox = makeNode("details"); exportBox.setAttribute("data-smart-colors-workbench", "export"); exportBox.open = false; host.appendChild(exportBox);
+  const overviewBox = makeNode("section"); overviewBox.setAttribute("data-smart-colors-workbench", "overview"); host.appendChild(overviewBox);
+  const matrixSearch = register(makeNode("input"), "smart-colors-workbench-matrix-search"); matrixSearch.value = ""; matrixSearch.disabled = true; overviewBox.appendChild(matrixSearch);
+  const matrixFilter = register(makeNode("select"), "smart-colors-workbench-matrix-filter"); matrixFilter.value = ""; matrixFilter.disabled = true; overviewBox.appendChild(matrixFilter);
+  const matrixClear = register(makeNode("button"), "smart-colors-workbench-matrix-clear"); matrixClear.disabled = true; overviewBox.appendChild(matrixClear);
+  const matrixCount = register(makeNode("p"), "smart-colors-workbench-matrix-count"); overviewBox.appendChild(matrixCount);
+  const matrixViewA = register(makeNode("th"), "smart-colors-workbench-matrix-a"); overviewBox.appendChild(matrixViewA);
+  const matrixViewB = register(makeNode("th"), "smart-colors-workbench-matrix-b"); overviewBox.appendChild(matrixViewB);
+  const matrixBody = makeNode("tbody"); matrixBody.setAttribute("data-smart-colors-workbench", "matrix-body"); overviewBox.appendChild(matrixBody);
+  function matrixRow(value, status, search) {
+    const row = makeNode("tr");
+    row.setAttribute("data-smart-colors-workbench", "matrix-row");
+    row.setAttribute("data-pair-value", value);
+    row.setAttribute("data-status", status);
+    row.setAttribute("data-search", search);
+    row.setAttribute("data-live-status", "false");
+    const live = makeNode("td"); live.setAttribute("data-smart-colors-workbench", "matrix-live"); live.textContent = "Da misurare con JavaScript."; row.appendChild(live);
+    const button = makeNode("button"); button.setAttribute("data-smart-colors-workbench", "matrix-inspect"); button.setAttribute("data-pair-value", value); button.disabled = true; button.textContent = "Ispeziona"; row.appendChild(button);
+    matrixBody.appendChild(row);
+    return { row, button, live };
+  }
+  const matrixPrimary = matrixRow("--color-primary-text|--color-primary-surface|text", "below-minimum", "testo della famiglia primaria primary text primary surface testo");
+  const matrixText = matrixRow("--color-text|--color-bg|text", "pass", "testo sulla pagina text bg canvas testo");
 
   const source = register(makeNode("select"), "smart-colors-workbench-source");
   for (const value of ["", "--palette-brand", "--palette-canvas"]) { const option = optionOf(value || "all", {}); option.value = value; source.appendChild(option); }
   source.value = "--palette-brand";
   const pair = register(makeNode("select"), "smart-colors-workbench-pair");
   const primary = optionOf("--color-primary-text|--color-primary-surface|text", {
-    "data-fg": "--color-primary-text", "data-bg": "--color-primary-surface", "data-kind": "text",
+    "data-fg": "--color-primary-text", "data-bg": "--color-primary-surface", "data-kind": "text", "data-catalogue-kind": "text",
     "data-usage": "Testo della famiglia primaria", "data-sources": "--palette-brand",
     "data-fg-sources": "--palette-brand", "data-bg-sources": "--palette-canvas --palette-brand",
-    "data-thresholds": "4.5,4.6;4.5,4.6",
+    "data-thresholds": "4.5,4.6;4.5,4.6", "data-matrix": "3.1,below-minimum,5.2,pass",
   });
   primary.selected = true;
   const text = optionOf("--color-text|--color-bg|text", {
-    "data-fg": "--color-text", "data-bg": "--color-bg", "data-kind": "text",
+    "data-fg": "--color-text", "data-bg": "--color-bg", "data-kind": "text", "data-catalogue-kind": "text",
     "data-usage": "Testo sulla pagina", "data-sources": "--palette-canvas",
     "data-fg-sources": "--palette-canvas", "data-bg-sources": "--palette-canvas",
-    "data-thresholds": "4.5,4.6;",
+    "data-thresholds": "4.5,4.6;", "data-matrix": "6.4,pass,,unmeasured",
   });
   pair.appendChild(primary); pair.appendChild(text);
   Object.defineProperty(pair, "options", { get() { return this.children.filter((child) => child.tagName === "option"); } });
@@ -637,6 +682,15 @@ function workbenchDom(session) {
   register(makeNode("h3"), "smart-colors-workbench-right-title");
   register(makeNode("div"), "smart-colors-workbench-left").setAttribute("data-smart-colors-workbench", "left");
   register(makeNode("div"), "smart-colors-workbench-right").setAttribute("data-smart-colors-workbench", "right");
+  const leftSample = makeNode("span"); leftSample.setAttribute("data-smart-colors-workbench", "left-sample");
+  const leftMeta = makeNode("span"); leftMeta.setAttribute("data-smart-colors-workbench", "left-meta");
+  const rightSample = makeNode("span"); rightSample.setAttribute("data-smart-colors-workbench", "right-sample");
+  const rightMeta = makeNode("span"); rightMeta.setAttribute("data-smart-colors-workbench", "right-meta");
+  host.appendChild(leftSample); host.appendChild(leftMeta); host.appendChild(rightSample); host.appendChild(rightMeta);
+  const explorationBox = makeNode("details"); explorationBox.setAttribute("data-smart-colors-workbench", "exploration"); explorationBox.hidden = true; host.appendChild(explorationBox);
+  const explorationRun = register(makeNode("button"), "smart-colors-workbench-exploration-run"); explorationRun.disabled = true; explorationBox.appendChild(explorationRun);
+  const explorationStatus = makeNode("p"); explorationStatus.setAttribute("data-smart-colors-workbench", "exploration-status"); explorationBox.appendChild(explorationStatus);
+  const explorationResults = makeNode("div"); explorationResults.setAttribute("data-smart-colors-workbench", "exploration-results"); explorationBox.appendChild(explorationResults);
   register(makeNode("dl"), "smart-colors-workbench-left-measure");
   register(makeNode("dl"), "smart-colors-workbench-right-measure");
   const controlsBody = register(makeNode("div"), "smart-colors-workbench-controls");
@@ -653,6 +707,7 @@ function workbenchDom(session) {
   const sessionStatus = register(makeNode("p"), "smart-colors-workbench-session-status"); sessionStatus.textContent = "Anteprima locale";
   register(makeNode("button"), "smart-colors-workbench-export");
   register(makeNode("textarea"), "smart-colors-workbench-export-text");
+  register(makeNode("p"), "smart-colors-workbench-export-note");
   register(makeNode("a"), "smart-colors-workbench-download");
   register(makeNode("textarea"), "smart-colors-workbench-palette-source");
   register(makeNode("button"), "smart-colors-workbench-copy-palette");
@@ -665,23 +720,24 @@ function workbenchDom(session) {
   register(makeNode("button"), "smart-colors-workbench-suggest-background");
   const payload = register(makeNode("script"), "smart-colors-payload");
   payload.textContent = JSON.stringify({ design: session.design, css: session.css, paletteSource: session.paletteSource });
+  const exportMode = register(makeNode("p"), "smart-colors-workbench-export-mode");
 
   const document = {
     activeElement: null,
     getElementById: (id) => registry.get(id) ?? null,
     createElement: (tag) => makeNode(tag),
   };
-  return { host, status, selection, controlsForm, source, pair, themeLight, themeDark, comparisonThemes, comparisonTuning, comparisonDraft, controlsBody, proposal, proposalFrames, proposalBefore, proposalAfter, usesBox, current, currentUse, openPicker, pickerDialog, pickerSource, useSearch, useCategory, useClear, useCount, usePrev, useNext, closePicker, identity, purpose, actionTheme, resultBox, emptyNote, correctionBox, manualBox, exportBox, sessionStatus, discard, swatchBrand, swatchCanvas, swatchOrphan, document };
+  return { host, status, selection, controlsForm, source, pair, themeLight, themeDark, comparisonThemes, comparisonTuning, comparisonDraft, controlsBody, proposal, proposalFrames, proposalBefore, proposalAfter, usesBox, current, currentUse, openPicker, pickerDialog, pickerSource, useSearch, useCategory, useClear, useCount, usePrev, useNext, closePicker, identity, purpose, actionTheme, resultBox, emptyNote, correctionBox, manualBox, exportBox, sessionStatus, discard, swatchBrand, swatchCanvas, swatchOrphan, overviewBox, matrixSearch, matrixFilter, matrixClear, matrixCount, matrixViewA, matrixViewB, matrixBody, leftSample, leftMeta, rightSample, rightMeta, explorationBox, explorationRun, explorationStatus, explorationResults, exportMode, document };
 }
 
 function controllerStub(options = {}) {
-  const calls = { mount: [], select: [], setOverride: [], reset: [], suggest: [], apply: [], discard: [], unsubscribed: false, destroy: 0 };
-  let state = options.state ?? { phase: "idle", revision: 0, selection: { pairId: null, theme: "light", comparison: "themes" }, draft: {}, views: [], suggestion: null, error: null };
+  const calls = { mount: [], select: [], setOverride: [], setLightness: [], removeOverride: [], reset: [], suggest: [], apply: [], discard: [], explore: [], unsubscribed: false, destroy: 0 };
+  let state = options.state ?? { phase: "idle", revision: 0, selection: { pairId: null, theme: "light", comparison: "themes" }, draft: {}, removed: [], views: [], suggestion: null, error: null };
   let listener = null;
   return {
     calls,
     state: () => state,
-    publish(next) { state = next; if (listener) listener(next); },
+    publish(next) { state = { removed: [], ...next }; if (listener) listener(state); },
     subscribe(handler) { listener = handler; return () => { listener = null; calls.unsubscribed = true; }; },
     pairs: options.pairs ?? (() => [
       { id: "light|color|--color-primary-text|--color-primary-surface", foreground: "--color-primary-text", background: "--color-primary-surface", property: "color" },
@@ -690,6 +746,8 @@ function controllerStub(options = {}) {
     mount(argument) { calls.mount.push(argument); return Promise.resolve(); },
     select(argument) { calls.select.push(argument); return Promise.resolve(); },
     setOverride(control, value) { calls.setOverride.push([control, value]); return Promise.resolve(); },
+    setLightness(control, value) { calls.setLightness.push([control, value]); return Promise.resolve(); },
+    removeOverride(control) { calls.removeOverride.push(control); return Promise.resolve(); },
     reset(control) { calls.reset.push(control); return Promise.resolve(); },
     suggest(side) { calls.suggest.push(side); return Promise.resolve(); },
     applySuggestion() { calls.apply.push(true); return Promise.resolve(); },
@@ -700,10 +758,14 @@ function controllerStub(options = {}) {
       return state;
     },
     exportTuning() { return typeof options.tuning === "function" ? options.tuning() : (options.tuning ?? ":root { --color-tune-primary-text-light: oklch(0.4 0.1 250); }"); },
+    exportTuningFile: options.exportTuningFile,
+    explorationPairs: options.explorationPairs,
+    measureExploration: options.measureExploration,
     destroy() { calls.destroy += 1; },
   };
 }
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function install(session, controller = controllerStub()) {
   const dom = workbenchDom(session);
@@ -744,6 +806,19 @@ function addSearchOption(dom, foreground, background, usage) {
   });
   dom.pair.appendChild(option);
   return option;
+}
+
+function matrixRowByValue(dom, value) {
+  const row = findAllIn(dom.matrixBody, '[data-smart-colors-workbench="matrix-row"]').find((item) => item.getAttribute("data-pair-value") === value);
+  assert.ok(row, "missing matrix row " + value);
+  const cells = row.querySelectorAll('[data-smart-colors-workbench="matrix-cell"]');
+  return {
+    row,
+    button: row.querySelector('[data-smart-colors-workbench="matrix-inspect"]'),
+    cells: Array.from(cells),
+    left: cells[0],
+    right: cells[1],
+  };
 }
 
 test("mount is called only with the real left/right containers and phases are announced concisely", async () => {
@@ -1867,7 +1942,429 @@ const NARROW_PALETTE = [
 ].join("\n");
 const NARROW_TUNING = ":root {\n  --color-tune-text-light: oklch(0.66 0 0);\n}\n";
 
-test("narrow viewport: the verified proposal stays locally scrollable and never widens the document", { skip: NATIVE_PROOF ? false : OPT_IN }, async () => {
+test("a frozen controller without the additive APIs keeps the legacy fragment and disables L instead of failing", () => {
+  const legacy = controllerStub({ tuning: () => ":root { --legacy: 1; }" });
+  delete legacy.setLightness;
+  delete legacy.removeOverride;
+  delete legacy.exportTuningFile;
+  delete legacy.explorationPairs;
+  delete legacy.measureExploration;
+  const { dom } = install(workbenchSession(), legacy);
+  assert.equal(dom.explorationBox.hidden, true, "the optional exploration disclosure stays hidden");
+  const lightness = findAllIn(dom.controlsBody, '[data-kind="lightness"]');
+  assert.ok(lightness.length > 0 && lightness.every((node) => node.disabled), "L inputs stay labelled but disabled");
+  assert.doesNotMatch(flat(dom.controlsBody), /Rimuovi personalizzazione/);
+  assert.match(flat(dom.controlsBody), /Rimozione della personalizzazione salvata non disponibile/);
+  dom.document.getElementById("smart-colors-workbench-export").dispatch("click");
+  assert.equal(dom.document.getElementById("smart-colors-workbench-download").download, "colors-tuning.patch.css");
+  assert.match(dom.document.getElementById("smart-colors-workbench-export-text").value, /--legacy: 1/);
+});
+
+test("the static overview is a bounded semantic matrix with scoped headers and explicit snapshot/live separation", () => {
+  const html = renderContrastWorkbench(workbenchSession());
+  assert.match(html, /<details class="wb-overview" data-smart-colors-workbench="overview"/);
+  assert.match(html, /<summary id="smart-colors-workbench-overview-title" class="wb-overview-summary">Abbinamenti e filtri<\/summary>/);
+  assert.match(html, /<table class="wb-matrix">/);
+  assert.match(html, /<caption id="smart-colors-workbench-matrix-caption">/);
+  assert.match(html, /<th scope="col" class="wb-matrix-uso">Uso e criterio<\/th>/);
+  assert.match(html, /<th scope="col" id="smart-colors-workbench-matrix-a" class="wb-matrix-view">/);
+  assert.match(html, /<th scope="col" id="smart-colors-workbench-matrix-b" class="wb-matrix-view">/);
+  assert.match(html, /<th scope="row" class="wb-matrix-uso">/);
+  assert.match(html, /data-smart-colors-workbench="matrix-inspect"[^>]*disabled>Ispeziona<span class="wb-visually-hidden">/);
+  assert.match(html, /Ogni cella mostra la misura live quando il runtime ne ha una per quella coppia e quella vista/);
+  assert.match(html, /stime di build/);
+  assert.match(html, /<label for="smart-colors-workbench-matrix-search">Cerca un abbinamento<\/label>/);
+  assert.match(html, /<label for="smart-colors-workbench-matrix-filter">Filtra per esito<\/label>/);
+  assert.match(html, /live dove misurato, altrimenti stima build/);
+  // The static no-JS L controls already use the same reachable step as the hydrated ones.
+  assert.match(html, /data-kind="lightness" type="range" min="0" max="100" step="0\.1"/);
+  assert.match(html, /data-kind="lightness" type="number" min="0" max="100" step="any"/);
+  assert.doesNotMatch(html, /type="(range|number)"[^>]*step="0\.5"/, "a 0.5 step would reject a real 49.6 L");
+  assert.doesNotMatch(html, /Contrasto sufficiente|Contrasto insufficiente/, "the matrix never uses a universal pass/fail badge");
+  assert.doesNotMatch(html, /<span class="wb-matrix-status" data-status="[^"]*">[^<]*AAA/, "no universal AAA badge in the matrix");
+  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-matrix-scroll \{[^}]*max-block-size: 22rem;[^}]*overflow: auto;/, "the matrix is a bounded local scroll");
+  assert.match(CONTRAST_WORKBENCH_CSS, /@container wb-shell \(min-width: 64rem\)/, "desktop overview + inspector is container-driven");
+  assert.doesNotMatch(CONTRAST_WORKBENCH_CSS, /min-inline-size: 38rem/, "the matrix no longer forces a 38rem table");
+  assert.match(CONTRAST_WORKBENCH_CSS, /@container wb-shell \(max-width: 48rem\)/, "narrow containers keep the three columns adaptive");
+  const rows = html.match(/<tr data-smart-colors-workbench="matrix-row"/g) ?? [];
+  const rowHeaders = html.match(/<th scope="row" class="wb-matrix-uso">/g) ?? [];
+  assert.ok(rows.length >= 2);
+  assert.equal(rowHeaders.length, rows.length, "every matrix row has its own row header");
+  assert.doesNotMatch(html, /<details[^>]*\bopen\b/, "the static build opens no detail");
+});
+
+test("the matrix uses one roving tab stop, filters real rows and selects a pair", async () => {
+  const { dom, controller } = install(workbenchSession());
+  const primary = matrixRowByValue(dom, "--color-primary-text|--color-primary-surface|text");
+  const textRow = matrixRowByValue(dom, "--color-text|--color-bg|text");
+  assert.equal(primary.button.disabled, false, "the factory enables the real matrix buttons");
+  const zero = findAllIn(dom.overviewBox, '[data-smart-colors-workbench="matrix-inspect"]').filter((button) => button.getAttribute("tabindex") === "0");
+  assert.equal(zero.length, 1, "only one matrix row owns the tab stop");
+  assert.equal(zero[0], primary.button, "the selected row owns the tab stop");
+
+  dom.matrixSearch.value = "pagina";
+  dom.matrixSearch.dispatch("input");
+  assert.equal(primary.row.hidden, true, "a non-matching row is hidden");
+  assert.equal(textRow.row.hidden, false, "the matching row stays visible");
+  assert.equal(textRow.button.getAttribute("tabindex"), "0", "the visible row receives the tab stop");
+  assert.match(flat(dom.matrixCount), /1 abbinamento visibile su 2/);
+
+  textRow.button.dispatch("click");
+  await tick();
+  assert.equal(dom.pair.value, "--color-text|--color-bg|text");
+  assert.deepEqual(controller.calls.select[0], { pairId: "light|color|--color-text|--color-bg", theme: "light", comparison: "themes" });
+
+  dom.matrixClear.dispatch("click");
+  assert.equal(primary.row.hidden, false);
+  dom.matrixFilter.value = "unmeasured";
+  dom.matrixFilter.dispatch("change");
+  assert.equal(primary.row.hidden, true, "a row with a measured theme is not listed as unmeasured");
+  assert.equal(textRow.row.hidden, false, "a row with an unmeasured theme is listed");
+  dom.matrixFilter.value = "pass";
+  dom.matrixFilter.dispatch("change");
+  assert.equal(primary.row.hidden, true, "pass requires both themes, never a single pass");
+  assert.equal(textRow.row.hidden, true);
+  dom.matrixClear.dispatch("click");
+  primary.button.dispatch("keydown", { key: "ArrowDown", preventDefault() {} });
+  assert.equal(textRow.button.focused, true, "arrow keys move focus without selecting");
+  assert.equal(textRow.button.getAttribute("tabindex"), "0");
+});
+
+test("every matrix row takes its own pair measurement from each view, and running never keeps an old live result", () => {
+  const { dom, controller } = install(workbenchSession());
+  const selection = { pairId: "light|color|--color-primary-text|--color-primary-surface", theme: "light", comparison: "themes" };
+  const primaryLight = { pairId: "light|color|--color-primary-text|--color-primary-surface", theme: "light", ratio: 3.1, minimum: 4.5, target: 4.6, status: "below-minimum" };
+  const textLight = { pairId: "light|color|--color-text|--color-bg", theme: "light", ratio: 4.2, minimum: 4.5, target: 4.6, status: "below-minimum" };
+  const primaryDark = { pairId: "dark|color|--color-primary-text|--color-primary-surface", theme: "dark", ratio: 5.2, minimum: 4.5, target: 4.6, status: "pass" };
+  const textDark = { pairId: "dark|color|--color-text|--color-bg", theme: "dark", ratio: 5, minimum: 4.5, target: 4.6, status: "pass" };
+  const views = [
+    { slot: "left", theme: "light", variant: "baseline", pair: { foreground: "--color-primary-text", background: "--color-primary-surface", property: "color" }, measurement: primaryLight, measurements: [primaryLight, textLight], errors: [] },
+    { slot: "right", theme: "dark", variant: "baseline", pair: { foreground: "--color-primary-text", background: "--color-primary-surface", property: "color" }, measurement: primaryDark, measurements: [primaryDark, textDark], errors: [] },
+  ];
+  controller.publish({ phase: "complete", revision: 1, selection, draft: {}, removed: [], suggestion: null, error: null, views });
+  const primary = matrixRowByValue(dom, "--color-primary-text|--color-primary-surface|text");
+  const textRow = matrixRowByValue(dom, "--color-text|--color-bg|text");
+  assert.match(flat(primary.left), /3,10:1/);
+  assert.match(flat(primary.left), /live/);
+  assert.match(flat(primary.right), /5,20:1/);
+  assert.match(flat(textRow.left), /4,20:1/, "a non-selected pair takes its own measurement, never the selected one");
+  assert.match(flat(textRow.right), /5,00:1/);
+  assert.doesNotMatch(flat(textRow.left), /3,10:1/);
+  assert.equal(primary.row.getAttribute("data-live-revision"), "1");
+  assert.equal(textRow.row.getAttribute("data-status-effective"), "below-minimum", "live problems override the build pass");
+  assert.match(flat(dom.matrixViewA), /tema chiaro/);
+  assert.match(flat(dom.matrixViewB), /tema scuro/);
+
+  dom.matrixFilter.value = "issues";
+  dom.matrixFilter.dispatch("change");
+  assert.equal(textRow.row.hidden, false, "the live below-minimum row is a problem even when the build estimate passes");
+  dom.matrixFilter.value = "pass";
+  dom.matrixFilter.dispatch("change");
+  assert.equal(textRow.row.hidden, true, "a live below-minimum row is not a pass");
+
+  controller.publish({ phase: "running", revision: 2, selection, draft: {}, removed: [], suggestion: null, error: null, views });
+  assert.equal(textRow.row.getAttribute("data-live-status"), "false", "running never keeps an old live result");
+  assert.match(flat(textRow.left), /stima build/);
+  assert.doesNotMatch(flat(textRow.left), /live/);
+  dom.matrixFilter.value = "issues";
+  dom.matrixFilter.dispatch("change");
+  assert.equal(textRow.row.hidden, true, "while running the filters fall back to the explicit build estimate");
+
+  controller.publish({
+    phase: "complete", revision: 3, draft: {}, removed: [], suggestion: null, error: null,
+    selection: { pairId: "light|color|--color-primary-text|--color-primary-surface", theme: "light", comparison: "tuning" },
+    views: [
+      { slot: "left", theme: "light", variant: "baseline", measurements: [primaryLight], errors: [] },
+      { slot: "right", theme: "light", variant: "draft", measurements: [primaryLight], errors: [] },
+    ],
+  });
+  assert.match(flat(dom.matrixViewA), /Attuale · tema chiaro · senza tuning/);
+  assert.match(flat(dom.matrixViewB), /Modifica · tema chiaro · bozza/);
+});
+
+test("the live Aa sample is painted only from the runtime computed colours and clears on idle", () => {
+  const { dom, controller } = install(workbenchSession());
+  const selection = { pairId: "light|color|--color-primary-text|--color-primary-surface", theme: "light", comparison: "themes" };
+  controller.publish({
+    phase: "complete", revision: 1, selection, draft: { "--color-tune-primary-text-light": "oklch(0.4 0.1 250)" }, removed: [], suggestion: null, error: null,
+    views: [
+      { slot: "left", theme: "light", variant: "baseline", pair: null, measurement: { ratio: 3.1, minimum: 4.5, target: 4.6, status: "below-minimum", foreground: "rgb(30, 40, 50)", background: "rgb(250, 250, 250)" }, measurements: [{}], errors: [] },
+      { slot: "right", theme: "dark", variant: "baseline", pair: null, measurement: { ratio: 5.2, minimum: 4.5, target: 4.6, status: "pass", foreground: "rgb(245, 245, 245)", background: "rgb(12, 12, 12)" }, measurements: [{}], errors: [] },
+    ],
+  });
+  assert.equal(dom.leftSample.style.props.color, "rgb(30, 40, 50)");
+  assert.equal(dom.leftSample.style.props["background-color"], "rgb(250, 250, 250)");
+  assert.equal(dom.leftSample.getAttribute("class"), "wb-aa");
+  assert.match(flat(dom.leftMeta), /colori CSS calcolati/i);
+  assert.match(flat(dom.leftMeta), /tema chiaro/);
+  assert.match(flat(dom.leftMeta), /override attivo/);
+  assert.match(flat(dom.document.getElementById("smart-colors-workbench-left-measure")), /Colori CSS calcolati \(runtime\)/);
+  assert.match(flat(dom.document.getElementById("smart-colors-workbench-left-measure")), /rgb\(30, 40, 50\)\s+su\s+rgb\(250, 250, 250\)/);
+
+  controller.publish({ phase: "idle", revision: 2, selection, draft: {}, removed: [], suggestion: null, error: null, views: [] });
+  assert.equal(dom.leftSample.style.props.color, "");
+  assert.equal(dom.leftSample.style.props["background-color"], "");
+  assert.equal(dom.leftSample.getAttribute("class"), "wb-aa is-unmeasured");
+  assert.match(flat(dom.leftMeta), /avvia il confronto/);
+  assert.match(flat(matrixRowByValue(dom, "--color-primary-text|--color-primary-surface|text").left), /stima build/i);
+
+  controller.publish({
+    phase: "complete", revision: 3, selection, draft: {}, removed: [], suggestion: null, error: null,
+    views: [{ slot: "left", theme: "light", variant: "baseline", pair: null, measurement: { ratio: 4.6, minimum: 4.5, target: 4.6, status: "pass", foreground: "not-a-colour", background: "rgb(250, 250, 250)" }, measurements: [{}], errors: [] }],
+  });
+  assert.equal(dom.leftSample.style.props.color, "", "an invalid computed string is never painted");
+  assert.match(flat(dom.leftMeta), /non disponibili/i);
+});
+
+test("manual L controls debounce one setLightness call, preserve focus and keep removal distinct from draft reset", async () => {
+  const { dom, controller } = install(workbenchSession());
+  const lightness = findAllIn(dom.controlsBody, '[data-kind="lightness"]');
+  const range = lightness.find((node) => node.type === "range");
+  const number = lightness.find((node) => node.type === "number");
+  assert.ok(range && number, "the override control exposes a range and a numeric L input");
+  const control = range.getAttribute("data-control");
+  assert.equal(control, "--color-tune-primary-text-light");
+  assert.equal(range.hidden, true, "without a readable L the range is hidden");
+  assert.equal(range.disabled, true);
+  assert.equal(number.disabled, true);
+  assert.equal(number.value, "", "no implicit 50 is presented as the current L");
+  assert.match(flat(dom.controlsBody), /L non disponibile/);
+
+  controller.publish({
+    phase: "complete", revision: 1, draft: {}, removed: [], suggestion: null, error: null,
+    views: [{ slot: "left", theme: "light", variant: "baseline", pair: null, measurement: { ratio: 3.1, minimum: 4.5, target: 4.6, status: "below-minimum", foreground: "oklch(0.6 0.1 250)", background: "oklch(0.98 0 0)" }, measurements: [{}], errors: [] }],
+  });
+  assert.equal(range.hidden, false, "a readable OKLCH measurement exposes the range");
+  assert.equal(range.disabled, false);
+  assert.equal(number.disabled, false);
+  assert.equal(range.value, "60");
+  assert.equal(number.value, "60");
+  assert.match(flat(dom.controlsBody), /L letta dal colore CSS calcolato/);
+  assert.match(flat(dom.controlsBody), /altri knob \(mix\/macro\) restano attivi/);
+
+  dom.document.activeElement = range;
+  range.value = "42";
+  range.dispatch("input");
+  assert.equal(number.value, "42");
+  controller.publish({ phase: "complete", revision: 2, draft: { [control]: "oklch(0.2 0.1 250)" }, removed: [], suggestion: null, error: null, views: [] });
+  assert.equal(range.value, "42", "a focused range is never overwritten by a publish");
+  dom.document.activeElement = null;
+  await pause(240);
+  assert.deepEqual(controller.calls.setLightness, [[control, 0.42]], "the view sends L/100 and never a generated colour");
+
+  controller.publish({ phase: "complete", revision: 3, draft: { [control]: "oklch(0.4 0.1 250)" }, removed: [], suggestion: null, error: null, views: [] });
+  assert.equal(range.value, "40", "the range follows the runtime draft when it is not focused");
+
+  controller.publish({ phase: "complete", revision: 4, draft: {}, removed: [control], suggestion: null, error: null, views: [] });
+  assert.match(flat(dom.controlsBody), /Personalizzazione rimossa: verrà usato il fallback del token/);
+  const remove = findAllIn(dom.controlsBody, '[data-smart-colors-workbench="remove-override"]')[0];
+  const discard = findAllIn(dom.controlsBody, '[data-smart-colors-workbench="discard-draft"]')[0];
+  assert.ok(remove && discard, "removal and draft discard are distinct controls");
+  remove.dispatch("click");
+  await tick();
+  assert.deepEqual(controller.calls.removeOverride, [control]);
+  controller.publish({ phase: "complete", revision: 5, draft: { [control]: "oklch(0.4 0.1 250)" }, removed: [], suggestion: null, error: null, views: [] });
+  discard.dispatch("click");
+  await tick();
+  assert.ok(controller.calls.reset.includes(control));
+});
+
+test("an RGB computed colour never invents L=50 and keeps the range disabled", () => {
+  const { dom, controller } = install(workbenchSession());
+  const range = findAllIn(dom.controlsBody, '[data-kind="lightness"]').find((node) => node.type === "range");
+  const number = findAllIn(dom.controlsBody, '[data-kind="lightness"]').find((node) => node.type === "number");
+  controller.publish({
+    phase: "complete", revision: 1, draft: {}, removed: [], suggestion: null, error: null,
+    views: [{ slot: "left", theme: "light", variant: "baseline", pair: null, measurement: { ratio: 3.1, minimum: 4.5, target: 4.6, status: "below-minimum", foreground: "rgb(30, 40, 50)", background: "rgb(250, 250, 250)" }, measurements: [{}], errors: [] }],
+  });
+  assert.equal(range.hidden, true, "the range is not shown with an invented value");
+  assert.equal(range.disabled, true);
+  assert.equal(number.disabled, true);
+  assert.equal(number.value, "", "the numeric input remains empty");
+  assert.match(flat(dom.controlsBody), /non ha restituito una L leggibile/);
+  assert.match(flat(dom.controlsBody), /Nessun valore viene inventato/);
+});
+
+test("a fractional measured L keeps the L inputs and the override form valid, and the override text can be submitted", async () => {
+  const { dom, controller } = install(workbenchSession());
+  const lightness = findAllIn(dom.controlsBody, '[data-kind="lightness"]');
+  const range = lightness.find((node) => node.type === "range");
+  const number = lightness.find((node) => node.type === "number");
+  assert.ok(range && number, "the override control exposes a range and a numeric L input");
+  controller.publish({
+    phase: "complete", revision: 1, draft: {}, removed: [], suggestion: null, error: null,
+    views: [{
+      slot: "left", theme: "light", variant: "baseline", pair: null, measurements: [{}], errors: [],
+      // The saved cohort exposes the parsed channels per side; the computed colour stays RGB.
+      measurement: {
+        ratio: 3.1, minimum: 4.5, target: 4.6, status: "below-minimum",
+        foreground: "rgb(120, 130, 140)", background: "rgb(250, 250, 250)",
+        foregroundOklch: { l: 0.4963, c: 0.012, h: 245.4 },
+        backgroundOklch: { l: 0.9431, c: 0.004, h: 250 },
+      },
+    }],
+  });
+  assert.equal(range.hidden, false, "the saved per-side channels expose the range");
+  assert.equal(range.disabled, false);
+  assert.equal(range.getAttribute("step"), "0.1", "the range uses a reachable step");
+  assert.equal(number.getAttribute("step"), "any", "the numeric input accepts any real fraction");
+  assert.equal(range.value, "49.6");
+  assert.equal(number.value, "49.6");
+  assert.equal(range.checkValidity(), true, "a real fractional L is not a range step mismatch");
+  assert.equal(number.checkValidity(), true, "a real fractional L is not a number step mismatch");
+  assert.equal(dom.controlsForm.checkValidity(), true, "the override form is never blocked by a valid measured L");
+  assert.match(flat(dom.controlsBody), /arrotondata a 0,1/);
+
+  const text = findAllIn(dom.controlsBody, '[data-kind="override"]')[0];
+  text.value = "oklch(0.58 0.11 255)";
+  text.dispatch("input");
+  assert.equal(dom.controlsForm.checkValidity(), true);
+  dom.controlsForm.dispatch("submit", { type: "submit", preventDefault() {} });
+  await tick();
+  assert.deepEqual(controller.calls.setOverride, [[range.getAttribute("data-control"), "oklch(0.58 0.11 255)"]], "the text override submits while L holds a real value");
+});
+
+test("the background L reads backgroundOklch and never converts the RGB computed colour", () => {
+  const { dom, controller } = install(workbenchSession());
+  controller.publish({
+    phase: "complete", revision: 1, draft: {}, removed: [], suggestion: null, error: null,
+    views: [{
+      slot: "left", theme: "light", variant: "baseline", pair: null, measurements: [{}], errors: [],
+      measurement: {
+        ratio: 3.1, minimum: 4.5, target: 4.6, status: "below-minimum",
+        foreground: "rgb(120, 130, 140)", background: "rgb(250, 250, 250)",
+        foregroundOklch: { l: 0.4963, c: 0.012, h: 245.4 },
+        backgroundOklch: { l: 0.9431, c: 0.004, h: 250 },
+      },
+    }],
+  });
+  const values = findAllIn(dom.controlsBody, '[data-kind="lightness"]')
+    .filter((node) => node.type === "number")
+    .map((node) => [node.getAttribute("data-control"), node.value]);
+  assert.deepEqual(values, [
+    ["--color-tune-primary-text-light", "49.6"],
+    ["--color-tune-primary-surface-light", "94.3"],
+  ], "each side reads its own saved channels, with no second conversion");
+});
+
+test("a pending 180ms L commit is cancelled when the pair or theme changes and on destroy", async () => {
+  const { dom, controller, view } = install(workbenchSession());
+  function publishLight(revision) {
+    controller.publish({
+      phase: "complete", revision, draft: {}, removed: [], suggestion: null, error: null,
+      views: [{
+        slot: "left", theme: "light", variant: "baseline", pair: null, measurements: [{}], errors: [],
+        measurement: {
+          ratio: 3.1, minimum: 4.5, target: 4.6, status: "below-minimum",
+          foreground: "rgb(120, 130, 140)", background: "rgb(250, 250, 250)",
+          foregroundOklch: { l: 0.4963, c: 0.012, h: 245.4 },
+          backgroundOklch: { l: 0.9431, c: 0.004, h: 250 },
+        },
+      }],
+    });
+  }
+  function rangeNow() {
+    return findAllIn(dom.controlsBody, '[data-kind="lightness"]').find((node) => node.type === "range");
+  }
+
+  publishLight(1);
+  assert.equal(rangeNow().disabled, false);
+  rangeNow().value = "42";
+  rangeNow().dispatch("input");
+  dom.themeDark.checked = true;
+  dom.themeLight.checked = false;
+  dom.themeDark.dispatch("change");
+  await pause(240);
+  assert.deepEqual(controller.calls.setLightness, [], "a theme change cancels the pending edit before it is sent");
+
+  dom.themeLight.checked = true;
+  dom.themeDark.checked = false;
+  dom.themeLight.dispatch("change");
+  publishLight(2);
+  assert.equal(rangeNow().disabled, false);
+  rangeNow().value = "43";
+  rangeNow().dispatch("input");
+  view.destroy();
+  await pause(240);
+  assert.deepEqual(controller.calls.setLightness, [], "destroy cancels the pending edit before it is sent");
+});
+
+test("export prefers exportTuningFile, names complete and fragment downloads, and reports dirty vs the last export", async () => {
+  let file = { css: ":root { --a: 1; }", mode: "complete", warnings: ["Avviso del runtime."], removed: ["--removed-a"], unmatched: ["--unmatched-a"] };
+  const { dom, controller } = install(workbenchSession(), controllerStub({ exportTuningFile: () => file }));
+  controller.publish({ phase: "complete", revision: 1, draft: { "--a": "1" }, removed: [], suggestion: null, error: null, views: [] });
+  dom.document.getElementById("smart-colors-workbench-export").dispatch("click");
+  assert.equal(dom.document.getElementById("smart-colors-workbench-export-text").value, ":root { --a: 1; }");
+  const download = dom.document.getElementById("smart-colors-workbench-download");
+  assert.equal(download.download, "colors-tuning.css");
+  assert.equal(download.hidden, false);
+  const exportNoteNode = dom.document.getElementById("smart-colors-workbench-export-note");
+  const exportModeNode = dom.document.getElementById("smart-colors-workbench-export-mode");
+  assert.match(flat(exportNoteNode), /CSS della bozza corrente: file completo/);
+  assert.match(flat(exportNoteNode), /Rimozioni incluse nel file: --removed-a/);
+  assert.match(flat(exportNoteNode), /non trovati nei token attuali: --unmatched-a/);
+  assert.match(flat(exportNoteNode), /Avviso del runtime/);
+  assert.match(flat(exportModeNode), /File completo/);
+
+  file = { css: ":root { --a: 2; }", mode: "complete", warnings: [], removed: [], unmatched: [] };
+  controller.publish({ phase: "complete", revision: 2, draft: { "--a": "2" }, removed: [], suggestion: null, error: null, views: [] });
+  assert.match(flat(exportNoteNode), /Modifiche non esportate rispetto all'ultima esportazione/);
+
+  file = { css: ":root { --a: 3; }", mode: "fragment", warnings: [], removed: ["--removed-b"], unmatched: [] };
+  controller.publish({ phase: "complete", revision: 3, draft: { "--a": "3" }, removed: [], suggestion: null, error: null, views: [] });
+  dom.document.getElementById("smart-colors-workbench-export").dispatch("click");
+  assert.equal(download.download, "colors-tuning.patch.css");
+  assert.match(flat(exportNoteNode), /CSS della bozza corrente come frammento: colors-tuning\.patch\.css/);
+  assert.match(flat(exportNoteNode), /Rimozioni non applicabili in questo export: --removed-b/);
+});
+
+test("export with no draft shows the preserved saved source from exportTuningFile", () => {
+  const file = { css: ":root { --saved-source: 1; }", mode: "complete", warnings: [], removed: [], unmatched: [] };
+  const { dom } = install(workbenchSession(), controllerStub({ exportTuningFile: () => file }));
+  dom.document.getElementById("smart-colors-workbench-export").dispatch("click");
+  assert.equal(dom.document.getElementById("smart-colors-workbench-export-text").value, ":root { --saved-source: 1; }", "no draft still shows the preserved saved source, never an arbitrary empty string");
+  assert.equal(dom.document.getElementById("smart-colors-workbench-download").download, "colors-tuning.css");
+  assert.match(flat(dom.document.getElementById("smart-colors-workbench-export-note")), /Nessuna modifica in bozza: file completo del tuning salvato preservato/);
+});
+
+test("exploration is an optional advisory disclosure and a stale revision is never shown as current", async () => {
+  let explored = 0;
+  const controller = controllerStub({
+    explorationPairs: () => [{ id: "explore|color|--a|--b", label: "A su B", foreground: "--a", background: "--b" }],
+    measureExploration: () => { explored += 1; return Promise.resolve(); },
+  });
+  const { dom } = install(workbenchSession(), controller);
+  assert.equal(dom.explorationBox.hidden, false, "the disclosure is revealed only when the runtime exposes both APIs");
+  assert.equal(dom.explorationRun.disabled, false);
+
+  controller.publish({
+    phase: "complete", revision: 5, draft: {}, removed: [], suggestion: null, error: null, views: [],
+    exploration: { theme: "light", variant: "baseline", revision: 5, phase: "complete", measurements: [{ pairId: "explore|color|--a|--b", ratio: 4.6, minimum: 4.5, target: 7, status: "pass", foreground: "rgb(1,1,1)", background: "rgb(255,255,255)" }], errors: [], omittedFamilies: ["gamma"] },
+  });
+  const results = flat(dom.explorationResults);
+  assert.match(results, /Combinazioni dei colori base/);
+  assert.match(results, /A su B/);
+  assert.match(results, /4,60:1/);
+  assert.match(results, /minimo raggiunto/);
+  assert.match(flat(dom.explorationStatus), /advisory/);
+  assert.match(flat(dom.explorationStatus), /Famiglie omesse dal limite: gamma/);
+  assert.equal(findAllIn(dom.explorationResults, "button").length, 0, "exploration is read-only");
+
+  controller.publish({
+    phase: "complete", revision: 6, draft: {}, removed: [], suggestion: null, error: null, views: [],
+    exploration: { theme: "light", variant: "baseline", revision: 5, phase: "complete", measurements: [{ pairId: "explore|color|--a|--b", ratio: 4.6, minimum: 4.5, target: 7, status: "pass" }], errors: [], omittedFamilies: [] },
+  });
+  assert.match(flat(dom.explorationStatus), /non sono aggiornati/);
+  assert.equal(dom.explorationResults.children.length, 0, "stale exploration data is cleared, never shown as current");
+
+  controller.publish({ phase: "idle", revision: 7, draft: {}, removed: [], suggestion: null, error: null, views: [], exploration: null });
+  assert.match(flat(dom.explorationStatus), /Non misurato/);
+  dom.explorationRun.dispatch("click");
+  await tick();
+  assert.equal(explored, 1);
+});
+
+test("narrow viewport keeps the proposal locally scrollable and the document narrow, and desktop becomes overview + inspector", { skip: NATIVE_PROOF ? false : OPT_IN }, async () => {
   if (!NATIVE_PROOF) return;
   const { chromium } = resolvePlaywright();
   let browser = null;
@@ -2081,19 +2578,33 @@ test("narrow viewport: the verified proposal stays locally scrollable and never 
     }
     assert.ok(tabbed.includes("smart-colors-workbench-proposal-before") && tabbed.includes("smart-colors-workbench-proposal-after"), "both proposal regions are keyboard reachable: " + JSON.stringify(tabbed));
 
-    // Desktop: the same DOM becomes the full-width workspace with the horizontal palette toolbar.
+    // Desktop: the workbench is now overview + inspector. The three-column overview occupies the
+    // first column, the comparison/inspector the second, and the toolbar spans both. Inside the
+    // narrower inspector column the two specimens stack, because the container query follows that
+    // column and not the viewport.
     await page.setViewportSize({ width: 1280, height: 900 });
+    await page.waitForFunction(() => {
+      const node = document.querySelector("#banco .wb-overview");
+      return Boolean(node) && node.open;
+    }, null, { timeout: 10_000 });
     const wideLayout = await page.evaluate(() => {
       const workspace = document.querySelector("#banco .wb-workspace");
       const toolbar = document.querySelector("#banco .wb-toolbar");
+      const overview = document.querySelector("#banco .wb-overview");
+      const matrixScroll = overview.querySelector(".wb-matrix-scroll");
       const main = document.querySelector("#banco .wb-main");
       const results = document.getElementById("smart-colors-workbench-result");
       const toolbarBox = toolbar.getBoundingClientRect();
+      const overviewBox = overview.getBoundingClientRect();
       const mainBox = main.getBoundingClientRect();
       const sourceBox = document.querySelector("#banco .wb-source-select");
       const palette = document.querySelector("#banco .wb-palette");
       return {
         columns: getComputedStyle(workspace).gridTemplateColumns.split(" ").length,
+        overviewOpen: overview.open,
+        overviewHeight: Math.round(overviewBox.height),
+        overviewTable: Boolean(overview.querySelector("table.wb-matrix")),
+        matrixScrollHeight: matrixScroll ? matrixScroll.clientHeight : 0,
         specimenColumns: getComputedStyle(results).gridTemplateColumns.split(" ").length,
         proposalColumns: getComputedStyle(document.getElementById("smart-colors-workbench-proposal-frames")).gridTemplateColumns.split(" ").length,
         proposalFrames: [...document.querySelectorAll("#smart-colors-workbench-proposal-frames .wb-frame")].map((node) => {
@@ -2107,16 +2618,24 @@ test("narrow viewport: the verified proposal stays locally scrollable and never 
         specimenTop: window.scrollY + document.getElementById("smart-colors-workbench-left").getBoundingClientRect().top,
         toolbarWidth: toolbarBox.width,
         toolbarTop: toolbarBox.top,
-        mainTop: mainBox.top,
         toolbarLeft: toolbarBox.left,
+        overviewLeft: overviewBox.left,
+        overviewTop: overviewBox.top,
         mainLeft: mainBox.left,
+        mainTop: mainBox.top,
+        mainWidth: mainBox.width,
         viewport: document.documentElement.clientWidth,
         document: document.documentElement.scrollWidth,
       };
     });
-    assert.equal(wideLayout.columns, 1, "the workspace stays one full-width column: " + JSON.stringify(wideLayout));
-    assert.equal(wideLayout.specimenColumns, 2, "light and dark specimens sit side by side: " + JSON.stringify(wideLayout));
-    assert.equal(wideLayout.proposalColumns, 2, "the fixed proposal frames sit side by side from 48rem: " + JSON.stringify(wideLayout));
+    assert.equal(wideLayout.columns, 2, "desktop is the overview + inspector layout: " + JSON.stringify(wideLayout));
+    assert.equal(wideLayout.overviewOpen, true, "the desktop overview is open by default");
+    assert.ok(wideLayout.overviewTable, "the overview column carries the semantic matrix");
+    assert.ok(wideLayout.overviewHeight > 200, "the overview column has real content: " + wideLayout.overviewHeight);
+    assert.ok(wideLayout.matrixScrollHeight > 0 && wideLayout.matrixScrollHeight <= 360, "the matrix stays bounded inside the overview column: " + wideLayout.matrixScrollHeight);
+    assert.ok(wideLayout.overviewLeft < wideLayout.mainLeft, "the overview is the first column and the inspector the second: " + JSON.stringify(wideLayout));
+    assert.equal(wideLayout.specimenColumns, 1, "inside the narrower inspector column the two specimens stack: " + JSON.stringify(wideLayout));
+    assert.equal(wideLayout.proposalColumns, 1, "the fixed proposal frames stack inside the narrower inspector column: " + JSON.stringify(wideLayout));
     assert.equal(wideLayout.proposalFrames.length, 2, "both proposal frames are mounted");
     for (const frame of wideLayout.proposalFrames) {
       assert.equal(frame.overflowX, "auto", "each proposal container keeps local scrolling");
@@ -2127,9 +2646,9 @@ test("narrow viewport: the verified proposal stays locally scrollable and never 
     assert.equal(wideLayout.paletteOverflow, "auto", "the palette strip is bounded and scrolls locally");
     assert.equal(wideLayout.sourceDisplay, "none", "the native select is removed on desktop, with no invisible focus stop: " + JSON.stringify(wideLayout));
     assert.ok(wideLayout.specimenTop < 450, "the specimen starts above 450px at 1280: " + wideLayout.specimenTop);
-    assert.ok(wideLayout.toolbarWidth > 600, "the toolbar spans the full workbench width: " + wideLayout.toolbarWidth);
-    assert.ok(Math.abs(wideLayout.toolbarLeft - wideLayout.mainLeft) <= 1, "toolbar and comparison share the same full-width column");
-    assert.ok(wideLayout.toolbarTop < wideLayout.mainTop, "toolbar and comparison start in the same column, toolbar first");
+    assert.ok(wideLayout.toolbarWidth > 600, "the toolbar spans both desktop columns: " + wideLayout.toolbarWidth);
+    assert.ok(Math.abs(wideLayout.toolbarLeft - wideLayout.overviewLeft) <= 1, "the toolbar starts at the overview edge and spans both columns");
+    assert.ok(wideLayout.toolbarTop < wideLayout.overviewTop && wideLayout.toolbarTop < wideLayout.mainTop, "the toolbar precedes overview and inspector");
     assert.ok(wideLayout.document <= wideLayout.viewport + 1, "the desktop layout never widens the document: " + JSON.stringify(wideLayout));
 
     assert.ok(requests.every((url) => url.startsWith("file:")), "offline: no remote request " + JSON.stringify(requests));

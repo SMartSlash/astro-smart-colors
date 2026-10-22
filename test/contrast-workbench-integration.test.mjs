@@ -1271,31 +1271,40 @@ test("an existing draft hidden by the tuning/themes comparison is re-shown by su
   }
 });
 
-test("export and copy always reflect the current draft, and an empty export is never a success", { skip: NATIVE_PROOF ? false : OPT_IN }, async () => {
+test("export and copy preserve the saved tuning source and follow the current draft", { skip: NATIVE_PROOF ? false : OPT_IN }, async () => {
   if (!NATIVE_PROOF) return;
   const { page } = await openWorkbenchPage(mainContext, main.file);
   try {
     // The export controls live in a native detail: open it as a real user would.
     await revealDetails(page);
-    // Empty: export and copy must announce the emptiness, not a success, and leave the field empty.
+    // With no draft edits the source-aware export returns the saved file byte-for-byte, never the
+    // legacy unsaved fragment and never an empty success.
+    const saved = await page.evaluate(() => window.__smartColorsWorkbench.exportTuningFile());
+    assert.equal(saved.css, MAIN_TUNING, "the saved tuning source is preserved exactly");
+    assert.equal(saved.mode, "complete");
     await page.click("#smart-colors-workbench-export");
     let exported = await page.evaluate(() => ({
       text: document.getElementById("smart-colors-workbench-export-text").value,
       status: document.getElementById("smart-colors-workbench-status").textContent,
+      note: document.getElementById("smart-colors-workbench-export-note").textContent,
       downloadHidden: document.getElementById("smart-colors-workbench-download").hidden,
     }));
-    assert.equal(exported.text, "");
-    assert.match(exported.status, /Nessun tuning pubblico da esportare/);
-    assert.equal(exported.downloadHidden, true);
+    assert.equal(exported.text, MAIN_TUNING, "the published export is the saved source file");
+    assert.match(exported.note, /file completo del tuning salvato preservato/);
+    assert.match(exported.status, /File completo esportato/);
+    assert.doesNotMatch(exported.status, /Nessun tuning pubblico da esportare/);
+    assert.equal(exported.downloadHidden, false, "the saved source offers the manual download");
     await page.click("#smart-colors-workbench-copy-export");
+    await page.waitForFunction(() => /copiato|selezionato/.test(document.getElementById("smart-colors-workbench-status").textContent), null, { timeout: 5000 });
     exported = await page.evaluate(() => ({
       text: document.getElementById("smart-colors-workbench-export-text").value,
       status: document.getElementById("smart-colors-workbench-status").textContent,
     }));
-    assert.equal(exported.text, "");
-    assert.match(exported.status, /Nessun CSS pubblico da copiare/);
+    assert.equal(exported.text, MAIN_TUNING);
+    assert.match(exported.status, /copiato|selezionato/);
 
-    // Set a draft, then change it: the published export follows the current draft every time.
+    // Set a draft, then change it: the published export follows the current draft every time while
+    // preserving every saved declaration that is not edited.
     await choosePair(page, { fg: "--color-text", bg: "--color-bg" });
     const bgControl = await page.evaluate(() => Array.from(document.querySelectorAll("#smart-colors-workbench-controls input"))
       .find((node) => node.getAttribute("data-control") === "--color-tune-bg-light").id);
@@ -1304,16 +1313,20 @@ test("export and copy always reflect the current draft, and an empty export is n
     await settle(page);
     const afterFirst = await page.evaluate(() => ({
       text: document.getElementById("smart-colors-workbench-export-text").value,
-      live: window.__smartColorsWorkbench.exportTuning(),
+      live: window.__smartColorsWorkbench.exportTuningFile().css,
+      legacy: window.__smartColorsWorkbench.exportTuning(),
     }));
     assert.match(afterFirst.text, /--color-tune-bg-light: oklch\(0\.7 0 0\);/);
-    assert.equal(afterFirst.text, afterFirst.live, "the published export equals the current draft");
+    assert.match(afterFirst.text, /--color-tune-text-light: oklch\(0\.66 0 0\);/, "an untouched saved declaration is preserved");
+    assert.match(afterFirst.text, /--color-tune-lagoon2-ink-light: oklch\(0\.52 0\.13 255\);/, "every saved declaration survives the patch");
+    assert.equal(afterFirst.text, afterFirst.live, "the published export equals the current source-aware export");
+    assert.doesNotMatch(afterFirst.legacy, /--color-tune-text-light/, "the legacy fragment stays a fragment and is not the published export");
 
     await page.click("#smart-colors-workbench-copy-export");
     await page.waitForFunction(() => /copiato|selezionato/.test(document.getElementById("smart-colors-workbench-status").textContent), null, { timeout: 5000 });
     const afterCopy = await page.evaluate(() => ({
       text: document.getElementById("smart-colors-workbench-export-text").value,
-      live: window.__smartColorsWorkbench.exportTuning(),
+      live: window.__smartColorsWorkbench.exportTuningFile().css,
       status: document.getElementById("smart-colors-workbench-status").textContent,
       downloadHidden: document.getElementById("smart-colors-workbench-download").hidden,
     }));
@@ -1327,23 +1340,52 @@ test("export and copy always reflect the current draft, and an empty export is n
     await settle(page);
     const afterSecond = await page.evaluate(() => ({
       text: document.getElementById("smart-colors-workbench-export-text").value,
-      live: window.__smartColorsWorkbench.exportTuning(),
+      live: window.__smartColorsWorkbench.exportTuningFile().css,
     }));
     assert.match(afterSecond.text, /--color-tune-bg-light: oklch\(0\.6 0 0\);/);
     assert.equal(afterSecond.text, afterSecond.live, "the export is recomputed for every draft change");
 
-    // Reset all: the export empties and a fresh export is again not a success.
+    // Reset all: the draft disappears but the saved tuning file remains the exportable source.
     await page.click("#smart-colors-workbench-reset-all");
     await settle(page);
     await page.click("#smart-colors-workbench-export");
     const reset = await page.evaluate(() => ({
       text: document.getElementById("smart-colors-workbench-export-text").value,
+      file: window.__smartColorsWorkbench.exportTuningFile(),
+      legacy: window.__smartColorsWorkbench.exportTuning(),
       status: document.getElementById("smart-colors-workbench-status").textContent,
+      note: document.getElementById("smart-colors-workbench-export-note").textContent,
       downloadHidden: document.getElementById("smart-colors-workbench-download").hidden,
     }));
-    assert.equal(reset.text, "");
-    assert.match(reset.status, /Nessun tuning pubblico da esportare/);
-    assert.equal(reset.downloadHidden, true);
+    assert.equal(reset.text, MAIN_TUNING, "after a reset the saved source file is still exportable");
+    assert.equal(reset.file.css, MAIN_TUNING);
+    assert.equal(reset.legacy, "", "the legacy fragment is empty after a reset");
+    assert.match(reset.note, /file completo del tuning salvato preservato/);
+    assert.match(reset.status, /File completo esportato/);
+    assert.equal(reset.downloadHidden, false, "the preserved source keeps the manual download");
+  } finally {
+    await page.close();
+  }
+});
+
+test("a preview with no saved tuning never reports an empty export as a success", { skip: NATIVE_PROOF ? false : OPT_IN }, async () => {
+  if (!NATIVE_PROOF) return;
+  const { page } = await openWorkbenchPage(mainContext, main.large.file);
+  try {
+    await revealDetails(page);
+    const file = await page.evaluate(() => window.__smartColorsWorkbench.exportTuningFile());
+    assert.equal(file.css, "", "no saved bytes and no draft means no CSS");
+    await page.click("#smart-colors-workbench-export");
+    const exported = await page.evaluate(() => ({
+      text: document.getElementById("smart-colors-workbench-export-text").value,
+      status: document.getElementById("smart-colors-workbench-status").textContent,
+      note: document.getElementById("smart-colors-workbench-export-note").textContent,
+      downloadHidden: document.getElementById("smart-colors-workbench-download").hidden,
+    }));
+    assert.equal(exported.text, "");
+    assert.match(exported.status, /Nessun tuning pubblico da esportare/);
+    assert.match(exported.note, /Nessun tuning pubblico da esportare/);
+    assert.equal(exported.downloadHidden, true);
   } finally {
     await page.close();
   }
@@ -1405,7 +1447,8 @@ test("the shell header owns the single export command and the session badge, and
     assert.equal(shell.legacyUses, 0, "the old bounded uses disclosure is gone");
     assert.equal(shell.legacyRail, 0, "the toolbar carries no legacy source rail");
 
-    // The header command reveals the real textarea/download; an empty export is never a success.
+    // The header command reveals the real textarea/download; the saved tuning source is exported
+    // byte-for-byte (a real file, not an empty success and not the legacy unsaved fragment).
     await page.click("#smart-colors-workbench-export");
     const opened = await page.evaluate(() => ({
       open: document.querySelector('#smart-colors-workbench [data-smart-colors-workbench="export"]').open,
@@ -1418,13 +1461,13 @@ test("the shell header owns the single export command and the session badge, and
       description: document.getElementById("smart-colors-workbench-export-text").getAttribute("aria-describedby"),
     }));
     assert.equal(opened.open, true, "the header export command opens the export disclosure");
-    assert.equal(opened.text, "");
-    assert.equal(opened.downloadHidden, true);
+    assert.equal(opened.text, MAIN_TUNING, "the saved source is exported exactly");
+    assert.equal(opened.downloadHidden, false, "the saved source offers the manual download");
     assert.equal(opened.focused, "smart-colors-workbench-export-text", "the revealed CSS field receives keyboard focus");
-    assert.match(opened.status, /Nessun tuning pubblico da esportare/);
-    assert.doesNotMatch(opened.status, /esportato nel campo selezionabile/);
-    assert.match(opened.note, /Nessun tuning pubblico da esportare/);
-    assert.equal(opened.noteVisible, true, "the empty export has visible feedback, not only a hidden live announcement");
+    assert.doesNotMatch(opened.status, /Nessun tuning pubblico da esportare/);
+    assert.match(opened.status, /File completo esportato/);
+    assert.match(opened.note, /file completo del tuning salvato preservato/);
+    assert.equal(opened.noteVisible, true, "the export has visible feedback, not only a hidden live announcement");
     assert.equal(opened.description, "smart-colors-workbench-export-note");
 
     // A real draft is exported verbatim, then changing it replaces the published text instead of
@@ -1441,14 +1484,15 @@ test("the shell header owns the single export command and the session badge, and
     await settle(page);
     const drafted = await page.evaluate(() => ({
       text: document.getElementById("smart-colors-workbench-export-text").value,
-      live: window.__smartColorsWorkbench.exportTuning(),
+      live: window.__smartColorsWorkbench.exportTuningFile().css,
       downloadHidden: document.getElementById("smart-colors-workbench-download").hidden,
       badge: document.getElementById("smart-colors-workbench-session-status").textContent,
       note: document.getElementById("smart-colors-workbench-export-note").textContent,
     }));
     assert.match(drafted.note, /CSS della bozza corrente/);
     assert.match(drafted.text, /--color-tune-bg-light: oklch\(0\.7 0 0\);/);
-    assert.equal(drafted.text, drafted.live, "the published export re-reads the current draft");
+    assert.match(drafted.text, /--color-tune-text-light: oklch\(0\.66 0 0\);/, "the saved declarations are still in the complete file");
+    assert.equal(drafted.text, drafted.live, "the published export re-reads the current source-aware draft");
     assert.equal(drafted.downloadHidden, false, "a non-empty export offers the manual download");
     assert.match(drafted.badge, /1 modifica in bozza non salvata/, "the badge names the unsaved draft");
 
@@ -1457,25 +1501,30 @@ test("the shell header owns the single export command and the session badge, and
     await settle(page);
     const changed = await page.evaluate(() => ({
       text: document.getElementById("smart-colors-workbench-export-text").value,
-      live: window.__smartColorsWorkbench.exportTuning(),
+      live: window.__smartColorsWorkbench.exportTuningFile().css,
     }));
     assert.match(changed.text, /--color-tune-bg-light: oklch\(0\.55 0 0\);/);
     assert.doesNotMatch(changed.text, /oklch\(0\.7 0 0\)/, "a previous export is never left stale after a draft change");
     assert.equal(changed.text, changed.live);
 
-    // Resetting the draft clears the published export and the download, rather than keeping stale CSS.
+    // Resetting the draft removes the draft patch but keeps the saved source file exportable: the
+    // published export returns to those exact bytes instead of becoming empty or stale.
     await page.click("#smart-colors-workbench-reset-all");
     await settle(page);
     const cleared = await page.evaluate(() => ({
       text: document.getElementById("smart-colors-workbench-export-text").value,
-      live: window.__smartColorsWorkbench.exportTuning(),
+      live: window.__smartColorsWorkbench.exportTuningFile().css,
+      legacy: window.__smartColorsWorkbench.exportTuning(),
       downloadHidden: document.getElementById("smart-colors-workbench-download").hidden,
       badge: document.getElementById("smart-colors-workbench-session-status").textContent,
+      note: document.getElementById("smart-colors-workbench-export-note").textContent,
     }));
-    assert.equal(cleared.text, "");
-    assert.equal(cleared.live, "");
-    assert.equal(cleared.downloadHidden, true, "a cleared export hides the stale download");
-    assert.equal(cleared.badge, "Anteprima locale", "an empty draft returns the badge to the plain local-preview state");
+    assert.equal(cleared.text, MAIN_TUNING, "the saved source returns after the draft is discarded");
+    assert.equal(cleared.live, MAIN_TUNING);
+    assert.equal(cleared.legacy, "", "the legacy fragment is empty, so the full file is not a fragment");
+    assert.match(cleared.note, /file completo del tuning salvato preservato/);
+    assert.equal(cleared.downloadHidden, false, "the preserved source keeps the manual download");
+    assert.equal(cleared.badge, "Anteprima locale", "no draft returns the badge to the plain local-preview state");
   } finally {
     await page.close();
   }
@@ -1503,7 +1552,7 @@ test("discarding a verified proposal preserves the draft and export and keeps ke
     await page.click("#smart-colors-workbench-export");
     const exportedBefore = await page.evaluate(() => ({
       text: document.getElementById("smart-colors-workbench-export-text").value,
-      live: window.__smartColorsWorkbench.exportTuning(),
+      live: window.__smartColorsWorkbench.exportTuningFile().css,
     }));
     assert.match(exportedBefore.text, /--color-tune-bg-light: oklch\(0\.78 0 0\);/);
     assert.equal(exportedBefore.text, exportedBefore.live);
@@ -1542,7 +1591,7 @@ test("discarding a verified proposal preserves the draft and export and keeps ke
         suggestion: window.__smartColorsWorkbench.state().suggestion,
         draft: window.__smartColorsWorkbench.state().draft,
         text: document.getElementById("smart-colors-workbench-export-text").value,
-        live: window.__smartColorsWorkbench.exportTuning(),
+        live: window.__smartColorsWorkbench.exportTuningFile().css,
         downloadHidden: document.getElementById("smart-colors-workbench-download").hidden,
         frames: document.querySelectorAll('iframe[data-smart-colors-workbench-frame="proposal"]').length,
         hidden: document.getElementById("smart-colors-workbench-proposal-frames").hidden,

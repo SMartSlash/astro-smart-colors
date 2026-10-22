@@ -21,6 +21,13 @@
  *   suggest(side) async, applySuggestion() async,
  *   exportTuning() -> string, state(), subscribe(listener) -> unsubscribe, destroy().
  * Additive helpers: controls(), containsUnsupportedResources(css), mounted/destroyed/frames getters.
+ *
+ * Additive 2026-10 tuning surface (no change to the frozen methods above):
+ *   setLightness(control, L) async, removeOverride(control) async,
+ *   explorationPairs(theme) -> Pair[], measureExploration(theme) async,
+ *   exportTuningFile() -> { css, mode, warnings, removed, unmatched }.
+ * `exportTuning()` stays the legacy unsaved-draft fragment and never emits a tombstone.
+ * `measureExploration` is advisory: it never changes the primary phase, error, views or coverage.
  */
 import { createContrastAdvice } from "./contrast-advice.mjs";
 import { createDomVerifier } from "./verification-dom.mjs";
@@ -157,6 +164,9 @@ export function createContrastWorkbench(deps) {
   let phase = "idle";
   let views = [];
   let suggestion = null;
+  // Advisory exploration is deliberately separate from the primary run: its own phase, measurements
+  // and errors can never confirm or block a primary pair.
+  let exploration = null;
   let error = null;
   let notes = [];
   let parsedPayload = null;
@@ -189,6 +199,10 @@ export function createContrastWorkbench(deps) {
 
   function trim(value) {
     return String(value == null ? "" : value).trim();
+  }
+
+  function escapeRegExp(value) {
+    return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
 
   function nowIso() {
@@ -464,6 +478,65 @@ export function createContrastWorkbench(deps) {
     return savedTuning().present ? "tuned" : "baseline";
   }
 
+  // Advisory exploration catalog from the existing core contract. It is read-only and never enters
+  // the primary `pairs()` surface, coverage or exit policy.
+  function explorationPairs(theme) {
+    if (theme !== "light" && theme !== "dark") return [];
+    const source = contract && isRecord(contract.explorationPairs) ? contract.explorationPairs[theme] : null;
+    return isArray(source) ? clone(source) : [];
+  }
+
+  function explorationOmitted(theme) {
+    const scope = contract && isRecord(contract.explorationScope) ? contract.explorationScope : null;
+    const families = scope && isRecord(scope.omittedFamilies) ? scope.omittedFamilies : null;
+    return families && isArray(families[theme]) ? clone(families[theme]) : [];
+  }
+
+  function tombstoneNames(values) {
+    const source = values || draft;
+    return Object.keys(source).filter((name) => source[name] === "initial").sort();
+  }
+
+  function hasSavedDeclaration(control) {
+    const saved = savedTuning();
+    if (!saved.present || typeof saved.css !== "string") return false;
+    const active = saved.css.replace(/\/\*[\s\S]*?\*\//g, (comment) => comment.replace(/[^\r\n]/g, " "));
+    return new RegExp("(^|[;{])\\s*" + escapeRegExp(control) + "\\s*:").test(active);
+  }
+
+  function visibleFrameFor(theme, variant) {
+    for (const handle of visibleFrames) {
+      const frame = handle && handle.frame;
+      if (!frame || typeof frame.getAttribute !== "function") continue;
+      if (frame.getAttribute(THEME_ATTRIBUTE) !== theme) continue;
+      if (variant && frame.getAttribute(VARIANT_ATTRIBUTE) !== variant) continue;
+      return handle;
+    }
+    return null;
+  }
+
+  // The frame whose CSS the user is actually looking at for this theme. `currentView()` is declared
+  // later in the factory; function declarations are hoisted, so this is one shared rule, not a copy.
+  function currentVariantFor(theme) {
+    const view = currentView();
+    if (view && view.theme === theme && typeof view.variant === "string") return view.variant;
+    if (selection.theme === theme && selection.comparison === "draft") return "draft";
+    return savedVariant();
+  }
+
+  // Resolve a real token colour in the measured frame. The scratch span is the same mechanism the
+  // verifier uses for a visible pair: no RGB round-trip and no second colour model is introduced.
+  function computedTokenColor(handle, token) {
+    const frame = handle && handle.frame;
+    const frameDocument = frame && frame.contentDocument;
+    if (!frameDocument || !frameDocument.defaultView) throw new Error("the measured frame document is not available");
+    const view = frameDocument.defaultView;
+    if (typeof view.getComputedStyle !== "function") throw new Error("the measured frame cannot compute styles");
+    const computed = resolveCssColor(frameDocument, view, "var(" + token + ")");
+    if (computed === "") throw new Error(token + " resolved to an empty colour");
+    return { computed, parsed: core.parseComputedColor(computed, token) };
+  }
+
   function buildNotes() {
     const list = [];
     const baseline = baselineBytes();
@@ -510,26 +583,319 @@ export function createContrastWorkbench(deps) {
   // Draft state and serialization
   // ---------------------------------------------------------------------------
 
-  function draftDeclarations(values) {
+  function draftDeclarations(values, includeTombstones) {
     const source = values || draft;
     const lines = [];
     for (const name of Object.keys(source).sort()) {
       const value = source[name];
       if (typeof value !== "string" || value === "") continue;
       if (!KNOWN_KNOB.test(name)) continue;
+      // The legacy export and any "saved file" view never receive the live tombstone keyword.
+      if (!includeTombstones && value === "initial") continue;
       lines.push("  " + name + ": " + value + ";");
     }
     return lines;
   }
 
-  function draftCssFor(values) {
-    const lines = draftDeclarations(values);
+  function draftCssFor(values, includeTombstones) {
+    const lines = draftDeclarations(values, includeTombstones === true);
     if (lines.length === 0) return "";
     return ":root {\n" + lines.join("\n") + "\n}\n";
   }
 
+  // Legacy fragment: unsaved draft only, never a tombstone and never a claim to be the whole file.
   function exportTuning() {
-    return draftCssFor(draft);
+    return draftCssFor(draft, false);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Source-aware tuning export
+  //
+  // A conservative scanner, not a CSS parser: comments and strings are masked before any structural
+  // search, braces delimit blocks, and an edited declaration is only patched when it is unique and
+  // lives in a top-level `:root` (there may be several). Anything ambiguous is a declared fragment;
+  // the original user file is never deleted or rebuilt.
+  // ---------------------------------------------------------------------------
+
+  function scanCssStructure(text) {
+    const source = String(text);
+    const mask = source.split("");
+    const blocks = [];
+    const comments = [];
+    const stack = [];
+    let statementStart = 0;
+    let index = 0;
+    let malformed = false;
+    const blank = (at) => {
+      if (at >= 0 && at < mask.length && mask[at] !== "\n") mask[at] = " ";
+    };
+    while (index < source.length) {
+      const character = source[index];
+      if (character === "/" && source[index + 1] === "*") {
+        const commentStart = index;
+        blank(index);
+        blank(index + 1);
+        index += 2;
+        while (index < source.length && !(source[index] === "*" && source[index + 1] === "/")) {
+          blank(index);
+          index += 1;
+        }
+        if (index < source.length) {
+          blank(index);
+          blank(index + 1);
+          index += 2;
+          comments.push({ start: commentStart, end: index });
+        } else {
+          malformed = true;
+        }
+        continue;
+      }
+      if (character === "\"" || character === "'") {
+        const quote = character;
+        blank(index);
+        index += 1;
+        let closed = false;
+        while (index < source.length) {
+          if (source[index] === "\\") {
+            blank(index);
+            blank(index + 1);
+            index += 2;
+            continue;
+          }
+          if (source[index] === quote) {
+            blank(index);
+            index += 1;
+            closed = true;
+            break;
+          }
+          blank(index);
+          index += 1;
+        }
+        if (!closed) malformed = true;
+        continue;
+      }
+      if (character === "{") {
+        const block = { selector: mask.slice(statementStart, index).join("").trim(), open: index, close: -1, depth: stack.length };
+        blocks.push(block);
+        stack.push(block);
+        statementStart = index + 1;
+        index += 1;
+        continue;
+      }
+      if (character === "}") {
+        const block = stack.pop();
+        if (block) block.close = index;
+        else malformed = true;
+        statementStart = index + 1;
+        index += 1;
+        continue;
+      }
+      if (character === ";") statementStart = index + 1;
+      index += 1;
+    }
+    if (stack.length > 0) malformed = true;
+    return { mask: mask.join(""), blocks, comments, malformed };
+  }
+
+  function enclosingBlock(blocks, index) {
+    let best = null;
+    for (const block of blocks) {
+      if (block.close <= block.open) continue;
+      if (block.open < index && index < block.close) {
+        if (!best || (block.close - block.open) < (best.close - best.open)) best = block;
+      }
+    }
+    return best;
+  }
+
+  function scanDeclarations(text, mask, blocks, comments) {
+    const pattern = /(^|[;{])\s*(--[A-Za-z0-9_-]+)\s*:/g;
+    const declarations = [];
+    const commentRanges = isArray(comments) ? comments : [];
+    let malformed = false;
+    let match;
+    while ((match = pattern.exec(mask))) {
+      const name = match[2];
+      const nameStart = mask.indexOf(name, match.index);
+      const colon = mask.indexOf(":", nameStart + name.length);
+      const block = enclosingBlock(blocks, nameStart);
+      if (colon === -1 || !block || block.close <= nameStart) {
+        malformed = true;
+        continue;
+      }
+      const semicolon = mask.indexOf(";", colon + 1);
+      if (semicolon === -1 || semicolon > block.close) {
+        malformed = true;
+        continue;
+      }
+      let valueStart = colon + 1;
+      while (valueStart < semicolon && /\s/.test(mask[valueStart])) valueStart += 1;
+      let valueEnd = semicolon;
+      while (valueEnd > valueStart && /\s/.test(mask[valueEnd - 1])) valueEnd -= 1;
+      const declarationEnd = semicolon + 1;
+      const hasComment = commentRanges.some((comment) => comment.start < declarationEnd && comment.end > nameStart);
+      declarations.push({
+        name,
+        start: nameStart,
+        end: declarationEnd,
+        valueStart,
+        valueEnd,
+        // The mask blanks comments and strings, so `! /* hint */ important` cannot hide precedence.
+        important: /!\s*important\s*$/i.test(mask.slice(colon + 1, semicolon).trimEnd()),
+        comment: hasComment,
+        block,
+      });
+    }
+    return { declarations, malformed };
+  }
+
+  function patchTuningText(base, values) {
+    const text = String(base);
+    const edited = Object.keys(values).filter((name) => typeof values[name] === "string" && values[name] !== "").sort();
+    if (edited.length === 0) return { ok: true, css: text, unmatched: [] };
+
+    const scan = scanCssStructure(text);
+    if (scan.malformed) {
+      return { ok: false, reason: "unbalanced braces, comments or strings; no complete file was produced", unmatched: [] };
+    }
+    if (scan.blocks.some((block) => block.close === -1)) {
+      return { ok: false, reason: "unclosed CSS block; no complete file was produced", unmatched: [] };
+    }
+    // An active escape can spell the same custom property with a different source text; the plain
+    // control name would no longer prove which declaration is edited. Refuse rather than guess.
+    if (scan.mask.indexOf("\\") !== -1) {
+      return { ok: false, reason: "active CSS escapes make declaration precedence ambiguous", unmatched: [] };
+    }
+    // Multiple top-level `:root` blocks are legitimate (macro + elevation). Patch only a globally
+    // unique knob inside one of them; duplicates and conditional/nested declarations stay fragments.
+    const roots = scan.blocks.filter((block) => block.depth === 0 && block.selector === ":root" && block.close > block.open);
+    const appendRoot = roots.length > 0 ? roots[roots.length - 1] : null;
+    const scanned = scanDeclarations(text, scan.mask, scan.blocks, scan.comments);
+    if (scanned.malformed) {
+      return { ok: false, reason: "unparseable declaration; no complete file was produced", unmatched: [] };
+    }
+
+    const unmatched = [...new Set(scanned.declarations
+      .filter((declaration) => /^--color-tune-/.test(declaration.name) && !controlIndex.has(declaration.name))
+      .map((declaration) => declaration.name))].sort();
+    const operations = [];
+    const missing = [];
+
+    for (const name of edited) {
+      const found = scanned.declarations.filter((declaration) => declaration.name === name);
+      if (found.length > 1) {
+        return { ok: false, reason: "duplicate declaration for " + name + "; precedence is ambiguous", unmatched };
+      }
+      if (found.length === 1) {
+        if (!roots.includes(found[0].block)) {
+          return { ok: false, reason: name + " is declared outside a top-level :root; conditional or selector precedence is ambiguous", unmatched };
+        }
+        if (found[0].important) {
+          return { ok: false, reason: name + " uses !important; the workbench does not rewrite important precedence", unmatched };
+        }
+        if (found[0].comment) {
+          return { ok: false, reason: name + " contains an author comment inside the declaration; it is not rewritten", unmatched };
+        }
+        if (values[name] === "initial") operations.push({ start: found[0].start, end: found[0].end, text: "" });
+        else operations.push({ start: found[0].valueStart, end: found[0].valueEnd, text: values[name] });
+        continue;
+      }
+      // A name that exists in the masked source but did not parse is not safe to patch.
+      if (scan.mask.indexOf(name) !== -1) {
+        return { ok: false, reason: name + " has an unparseable declaration", unmatched };
+      }
+      if (values[name] !== "initial") missing.push(name);
+    }
+
+    if (!appendRoot) {
+      const substantive = scan.mask.replace(/\s+/g, "");
+      if (substantive !== "") {
+        return { ok: false, reason: "no top-level :root block; a new root would be ambiguous", unmatched };
+      }
+      if (!missing.length) return { ok: true, css: text, unmatched };
+      const lines = missing.map((name) => "  " + name + ": " + values[name] + ";");
+      const ending = text === "" || text.endsWith("\n") ? "" : "\n";
+      return { ok: true, css: text + ending + ":root {\n" + lines.join("\n") + "\n}\n", unmatched };
+    }
+
+    if (missing.length) {
+      const lines = missing.map((name) => "  " + name + ": " + values[name] + ";");
+      // New declarations go to the last top-level root; existing bytes stay untouched.
+      operations.push({ start: appendRoot.close, end: appendRoot.close, text: "\n" + lines.join("\n") + "\n" });
+    }
+    operations.sort((left, right) => right.start - left.start || right.end - left.end);
+    let css = text;
+    for (const operation of operations) css = css.slice(0, operation.start) + operation.text + css.slice(operation.end);
+    return { ok: true, css, unmatched };
+  }
+
+  // Read-only analysis used when there are no edits: it never changes the bytes, but it still
+  // reports saved overrides that no longer belong to a current control. Unsupported or ambiguous
+  // sources return the exact bytes with an explicit warning instead of a fabricated orphan list.
+  function analyzeTuningText(text) {
+    const scan = scanCssStructure(text);
+    if (scan.malformed) return { ok: false, reason: "unbalanced braces, comments or strings" };
+    if (scan.mask.indexOf("\\") !== -1) return { ok: false, reason: "active CSS escapes make declaration analysis ambiguous" };
+    const scanned = scanDeclarations(text, scan.mask, scan.blocks, scan.comments);
+    if (scanned.malformed) return { ok: false, reason: "unparseable declaration" };
+    const unmatched = [...new Set(scanned.declarations
+      .filter((declaration) => /^--color-tune-/.test(declaration.name) && !controlIndex.has(declaration.name))
+      .map((declaration) => declaration.name))].sort();
+    return { ok: true, unmatched };
+  }
+
+  function exportTuningFile() {
+    const removed = tombstoneNames(draft);
+    if (!payloadRead.ok || !parsedPayload) {
+      return { css: "", mode: "unavailable", warnings: [payloadRead.message || "the payload is unavailable"], removed, unmatched: [] };
+    }
+    const saved = savedTuning();
+    // `present` describes whether the bytes are applied; an unsupported saved file still exists and
+    // must be returned exactly when there are no edits.
+    const base = typeof saved.css === "string" ? saved.css : "";
+    const edits = Object.keys(draft).filter((name) => typeof draft[name] === "string" && draft[name] !== "");
+    if (edits.length === 0) {
+      const warnings = [];
+      if (base === "") warnings.push("Nessun file di tuning salvato: il testo restituito è la sorgente esatta disponibile.");
+      if (saved.support === "unsupported") warnings.push("Il tuning salvato non è applicato (unsupported): i byte sono restituiti esatti e nessuna patch viene proposta.");
+      const analysis = analyzeTuningText(base);
+      if (!analysis.ok) {
+        // `complete` is the whole saved file verbatim, not a verified interpretation.
+        warnings.push("Analisi degli override salvati non disponibile: " + analysis.reason + ". Il file salvato è restituito esatto e completo; l'interpretazione non è verificata.");
+      } else if (analysis.unmatched.length) {
+        warnings.push("Override salvati non più corrispondenti a un controllo corrente (non rimossi): " + analysis.unmatched.join(", ") + ".");
+      }
+      return {
+        css: base,
+        mode: "complete",
+        warnings,
+        removed,
+        unmatched: analysis.ok ? analysis.unmatched : [],
+      };
+    }
+    if (saved.support === "unsupported") {
+      return {
+        css: draftCssFor(draft, false),
+        mode: "fragment",
+        warnings: ["Il tuning salvato contiene @import o url(): non viene riscritto. Esportato solo il frammento della bozza." + (removed.length ? " Rimozioni non applicate al file salvato: " + removed.join(", ") + "." : "")],
+        removed,
+        unmatched: [],
+      };
+    }
+    const patch = patchTuningText(base, draft);
+    if (!patch.ok) {
+      return {
+        css: draftCssFor(draft, false),
+        mode: "fragment",
+        warnings: [patch.reason + ". Esportato solo il frammento della bozza." + (removed.length ? " Rimozioni non applicate al file salvato: " + removed.join(", ") + "." : "")],
+        removed,
+        unmatched: patch.unmatched,
+      };
+    }
+    const warnings = [];
+    if (!saved.present) warnings.push("Nessun file di tuning salvato: creato un nuovo :root con i soli override della bozza.");
+    if (patch.unmatched.length) warnings.push("Override salvati non più corrispondenti a un controllo corrente (non rimossi): " + patch.unmatched.join(", ") + ".");
+    return { css: patch.css, mode: "complete", warnings, removed, unmatched: patch.unmatched };
   }
 
   // A successful public edit always shows its result: the draft comparison becomes the displayed
@@ -541,6 +907,7 @@ export function createContrastWorkbench(deps) {
   function rerun(reason) {
     revision += 1;
     suggestion = null;
+    exploration = null;
     views = [];
     phase = mounted ? "running" : "idle";
     error = null;
@@ -598,13 +965,13 @@ export function createContrastWorkbench(deps) {
       appendStyle(frameDocument, "tuning", "@layer tokens {\n" + tuning.css + "\n}");
     }
     if (variant === "draft") {
-      const css = draftCssFor(values);
+      const css = draftCssFor(values, true);
       if (css !== "") appendStyle(frameDocument, "draft", "@layer tokens {\n" + css + "}");
     }
     // Trial-only declaration(s) are injected after the base variant, whatever that variant is, so a
     // suggestion is verified against the CSS the user actually sees plus the candidate control.
     if (extraValues) {
-      const extra = draftCssFor(extraValues);
+      const extra = draftCssFor(extraValues, true);
       if (extra !== "") appendStyle(frameDocument, "draft-trial", "@layer tokens {\n" + extra + "}");
     }
   }
@@ -992,6 +1359,14 @@ export function createContrastWorkbench(deps) {
       if (!descriptor) continue;
       const expected = draft[name];
       const actual = trim(rootStyle.getPropertyValue(name));
+      // A tombstone is a guaranteed-invalid custom property: the computed root must be empty so a
+      // `var(--knob, fallback)` reads the generated fallback. A stronger `!important` rule is named.
+      if (expected === "initial") {
+        if (actual !== "") {
+          errors.push({ phase: "draft", cause: "draft-not-applied", knob: name, message: name + " tombstone is blocked by a stronger declaration: " + actual });
+        }
+        continue;
+      }
       if (actual === "") {
         errors.push({ phase: "draft", cause: "draft-not-applied", knob: name, message: name + " was drafted but is not declared on the isolated root" });
         continue;
@@ -1062,6 +1437,23 @@ export function createContrastWorkbench(deps) {
     };
   }
 
+  // Additive metadata: the shared core parses the browser serialization into {l,c,h}, or null.
+  function oklchMetadata(value) {
+    try {
+      const parsed = core.parseComputedColor(value, "workbench measurement");
+      return { l: parsed.l, c: parsed.c, h: parsed.h };
+    } catch (cause) {
+      return null;
+    }
+  }
+
+  function withOklchMetadata(entry) {
+    const next = clone(entry);
+    next.foregroundOklch = oklchMetadata(entry.foreground);
+    next.backgroundOklch = oklchMetadata(entry.background);
+    return next;
+  }
+
   async function renderView(descriptor, token) {
     const pair = findPair(descriptor.theme, descriptor.pairId);
     const view = viewShell(descriptor, pair);
@@ -1116,9 +1508,9 @@ export function createContrastWorkbench(deps) {
       view.support = measured.support;
       view.colorScheme = measured.colorScheme;
       view.observedPreference = measured.observedPreference;
-      view.measurements = measured.measurements;
+      view.measurements = measured.measurements.map(withOklchMetadata);
       view.errors = measured.errors.concat(draftErrors);
-      view.measurement = measured.measurements.find((entry) => entry.pairId === pair.id) || null;
+      view.measurement = view.measurements.find((entry) => entry.pairId === pair.id) || null;
       if (measured.support !== "supported" && measured.error) {
         view.errors.push({ phase: "measure", cause: "unsupported-document", scenarioId: view.scenarioId, pairId: pair.id, message: measured.error });
       }
@@ -1641,6 +2033,65 @@ export function createContrastWorkbench(deps) {
     return invalidateDraftState("select");
   }
 
+  // Advisory, on-demand exploration. It reuses the already mounted frame, the same DOM collector and
+  // the same core contract shape the diagnostic runtime uses; it never touches the primary run.
+  async function measureExploration(theme) {
+    if (destroyed) throw new Error("the workbench has been destroyed");
+    if (theme !== "light" && theme !== "dark") return setError("measureExploration expects theme 'light' or 'dark'");
+    if (!payloadRead.ok || !parsedPayload) return setError("measureExploration is unavailable: " + (payloadRead.message || "the payload is unavailable"));
+    if (!contract) return setError("measureExploration is unavailable: the payload config did not form a contract");
+    if (phase === "running") return setError("measureExploration cannot run while a primary measurement is running; wait for the current run");
+    const pairs = explorationPairs(theme);
+    if (!pairs.length) return setError("measureExploration found no exploration pairs for theme " + theme);
+    if (!mounted) return setError("measureExploration requires a mounted frame; mount and select a pair first");
+    const variant = currentVariantFor(theme);
+    if (exploration && exploration.phase === "complete" && exploration.revision === revision && exploration.theme === theme && exploration.variant === variant) return state();
+    const handle = visibleFrameFor(theme, variant);
+    if (!handle) return setError("measureExploration cannot use a current " + theme + " frame; select that theme first");
+    const frame = handle.frame;
+    const frameDocument = frame && frame.contentDocument;
+    if (!frameDocument || !frameDocument.documentElement) return setError("measureExploration cannot read the " + theme + " frame document");
+
+    const tokenRevision = revision;
+    const tokenTheme = selection.theme;
+    const tokenVariant = variant;
+    exploration = { theme, variant, revision: tokenRevision, phase: "running", measurements: [], errors: [], omittedFamilies: explorationOmitted(theme) };
+    publish("exploration-running");
+
+    let measured;
+    try {
+      measured = verifier.measureDocument(
+        frameDocument,
+        { id: "workbench-exploration-" + theme, theme, variant, preference: observePreference().active },
+        { pairs: { [theme]: pairs } },
+      );
+      markTechnicalProbes(frameDocument);
+    } catch (cause) {
+      if (destroyed || revision !== tokenRevision) return state();
+      exploration = { theme, variant, revision: tokenRevision, phase: "incomplete", measurements: [], errors: [{ phase: "exploration", cause: "exploration-failed", message: messageOf(cause) }], omittedFamilies: explorationOmitted(theme) };
+      publish("exploration-error");
+      return state();
+    }
+
+    // A late advisory result is discarded; it can never overwrite a newer revision or theme.
+    if (destroyed || revision !== tokenRevision || selection.theme !== tokenTheme || currentVariantFor(theme) !== tokenVariant) return state();
+    const errors = isArray(measured.errors) ? clone(measured.errors) : [];
+    if (measured.support !== "supported" && !errors.length) {
+      errors.push({ phase: "exploration", cause: "exploration-unsupported", message: measured.error || "the exploration pairs could not be measured" });
+    }
+    exploration = {
+      theme,
+      variant,
+      revision: tokenRevision,
+      phase: measured.support === "supported" ? "complete" : "incomplete",
+      measurements: isArray(measured.measurements) ? measured.measurements.map(withOklchMetadata) : [],
+      errors,
+      omittedFamilies: explorationOmitted(theme),
+    };
+    publish("exploration-measured");
+    return state();
+  }
+
   function normalizePercent(value) {
     let number = null;
     if (typeof value === "number") {
@@ -1690,6 +2141,33 @@ export function createContrastWorkbench(deps) {
     return null;
   }
 
+  // Manual OKLCH lightness edit: the current computed colour supplies C/H, so only L moves and no
+  // second colour conversion is introduced. The resulting full override goes through setOverride.
+  async function setLightness(control, lightness) {
+    if (destroyed) throw new Error("the workbench has been destroyed");
+    const descriptor = typeof control === "string" ? controlIndex.get(control) : null;
+    if (!descriptor) return setError("setLightness: unknown tuning control " + String(control));
+    if (descriptor.macro || descriptor.kind !== "override" || !descriptor.token) {
+      return setError("setLightness requires a per-token full colour control; " + control + " is a " + descriptor.kind + " knob");
+    }
+    if (typeof lightness !== "number" || !Number.isFinite(lightness) || lightness < 0 || lightness > 1) {
+      return setError("setLightness expects a finite number between 0 and 1 for " + control);
+    }
+    if (phase === "running") return setError("setLightness cannot run while a measurement is running; wait for the current run");
+    if (!mounted) return setError("setLightness requires a mounted measured frame; mount and select a pair first");
+    const variant = currentVariantFor(descriptor.theme);
+    const handle = visibleFrameFor(descriptor.theme, variant);
+    if (!handle) return setError("setLightness cannot resolve a current " + descriptor.theme + " frame for " + control + "; select that theme first");
+    let parsed;
+    try {
+      parsed = computedTokenColor(handle, descriptor.token).parsed;
+    } catch (cause) {
+      return setError("setLightness cannot read the computed colour of " + descriptor.token + " in " + descriptor.theme + ": " + messageOf(cause));
+    }
+    const value = core.oklch({ l: lightness, c: parsed.c, h: parsed.h });
+    return setOverride(descriptor.name, value);
+  }
+
   async function setOverride(control, value) {
     if (destroyed) throw new Error("the workbench has been destroyed");
     const descriptor = typeof control === "string" ? controlIndex.get(control) : null;
@@ -1721,6 +2199,36 @@ export function createContrastWorkbench(deps) {
     }
     showDraft();
     return invalidateDraftState("reset");
+  }
+
+  // Remove a saved or draft override without copying the generated colour: the tombstone makes the
+  // unregistered knob guaranteed-invalid, so every `var(--knob, fallback)` reads its generated
+  // fallback. The export removes the declaration instead of writing `initial`.
+  async function removeOverride(control) {
+    if (destroyed) throw new Error("the workbench has been destroyed");
+    const descriptor = typeof control === "string" ? controlIndex.get(control) : null;
+    if (!descriptor) return setError("removeOverride: unknown tuning control " + String(control));
+    if (draft[control] === "initial") {
+      error = null;
+      publish("remove-noop");
+      return state();
+    }
+    const wasSaved = hasSavedDeclaration(control);
+    if (!wasSaved && !Object.prototype.hasOwnProperty.call(draft, control)) {
+      error = null;
+      publish("remove-noop");
+      return state();
+    }
+    draft[descriptor.name] = "initial";
+    showDraft();
+    const snapshot = await invalidateDraftState("remove-override");
+    if (destroyed) return state();
+    const variant = currentVariantFor(descriptor.theme);
+    const view = isArray(snapshot.views) ? snapshot.views.find((entry) => entry && entry.theme === descriptor.theme && entry.variant === variant) : null;
+    if (!view) return setError("removeOverride could not verify " + control + ": no measured " + descriptor.theme + " draft frame is available");
+    const blocked = (isArray(view.errors) ? view.errors : []).find((entry) => entry && entry.phase === "draft" && entry.knob === control);
+    if (blocked) return setError("removeOverride did not take effect for " + control + ": " + (blocked.message || "the tombstone is blocked"));
+    return snapshot;
   }
 
   // `discardSuggestion` is a synchronous, additive escape hatch for the host UI. It drops only the
@@ -1761,6 +2269,8 @@ export function createContrastWorkbench(deps) {
       revision,
       selection: clone(selection),
       draft: clone(draft),
+      removed: tombstoneNames(draft),
+      exploration: clone(exploration),
       views: clone(views),
       suggestion: clone(suggestion),
       error,
@@ -1886,11 +2396,16 @@ export function createContrastWorkbench(deps) {
     mount,
     select,
     setOverride,
+    setLightness,
+    removeOverride,
     reset,
+    explorationPairs,
+    measureExploration,
     suggest,
     discardSuggestion,
     applySuggestion,
     exportTuning,
+    exportTuningFile,
     state,
     subscribe,
     destroy,

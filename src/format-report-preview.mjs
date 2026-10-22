@@ -11,11 +11,14 @@
 // final emitted script bytes; the static report never gains a script. Local measurements
 // only touch the in-memory DOM: they never rewrite this file or the report.
 import { createHash } from "node:crypto";
-import { createContrastWorkbenchSource, WORKBENCH_RUNTIME_GLOBAL } from "./contrast-workbench-runtime.mjs";
-import { CONTRAST_WORKBENCH_CSS, createContrastWorkbenchViewSource, renderContrastWorkbench } from "./contrast-workbench-view.mjs";
+import { createContrastAdvice } from "./contrast-advice.mjs";
+import { createContrastWorkbench, WORKBENCH_RUNTIME_GLOBAL } from "./contrast-workbench-runtime.mjs";
+import { CONTRAST_WORKBENCH_CSS, createContrastWorkbenchView, renderContrastWorkbench } from "./contrast-workbench-view.mjs";
 import { createDesignerLanguage } from "./designer-language.mjs";
 import { createDesignTools } from "./design-recipes.mjs";
-import { createDiagnosticRuntimeSource, DIAGNOSTIC_RUNTIME_GLOBAL } from "./diagnostic-runtime.mjs";
+import { createDiagnosticRuntime, DIAGNOSTIC_RUNTIME_GLOBAL } from "./diagnostic-runtime.mjs";
+import { createDomVerifier } from "./verification-dom.mjs";
+import { createVerificationCore } from "./verification-core.mjs";
 import {
   CSP, MARKER, VARIANT_SHIFT_THRESHOLD, agree, automationHtml, baselineNote, colorChoice, colorCss, compactRatio, cssEmbedHtml,
   deltaSummary, entriesFor, escape, familyAtlasData, fileRole, isDiagnosticSession, it, list, overlapList, prepareContrastReport,
@@ -99,6 +102,9 @@ const PREVIEW_CSS = `
   .pair-title { font-size: 1.4rem; font-weight: 700; line-height: 1.25; }
   .pair-text { font-size: 1.0625rem; }
   .pair-label { font-size: var(--text-sm); }
+  .pair-visual--sample { display: flex; flex-direction: column; justify-content: center; gap: .45rem; font-size: 1.0625rem; }
+  .pair-visual--sample::before { content: "Titolo grande"; font-size: 1.4rem; font-weight: 700; line-height: 1.25; }
+  .pair-visual--sample::after { content: "Etichetta piccola"; font-size: var(--text-sm); }
   .pair-border { display: block; width: 6rem; height: 1.5rem; border: 1px solid var(--sample-fg, var(--ink)); border-radius: 2px; }
   .pair-border--2 { border-width: 2px; }
   .pair-border--3 { border-width: 3px; }
@@ -121,6 +127,7 @@ const PREVIEW_CSS = `
   .family-visual { display: grid; gap: .35rem; padding: var(--space-3); border-block-end: 1px solid var(--line); background: var(--sample-bg, var(--soft)); color: var(--sample-fg, var(--ink)); }
   .sample-title { padding: var(--space-2) var(--space-3) 0; font-weight: 700; font-size: var(--text-sm); }
   .sample-note { padding: var(--space-2) var(--space-3) var(--space-3); font-size: var(--text-xs); color: var(--ink-soft); }
+  .family-sample details > p { margin: 0; font-size: var(--text-sm); color: var(--ink-soft); }
   .variant-swatch { display: inline-block; width: 1.4rem; height: 1.4rem; vertical-align: -.4rem; margin-inline-end: var(--space-2); border: 1px solid var(--ink-soft); border-radius: var(--radius-sm); background: var(--sample-color, var(--soft)); }
   .variant-list { padding-inline-start: 1.2rem; font-size: var(--text-sm); }
   .variant-list li { margin-block: var(--space-2); }
@@ -272,9 +279,15 @@ function measureState(item) {
   return `<span class="tier">${item.kind === "non-text" ? "3:1" : "AA"}</span> ${ratio}`;
 }
 
-function sampleFigure(item) {
+function sampleFigure(item, compact = false) {
   const foreground = colorCss(item.foreground), background = colorCss(item.background);
   if (!foreground || !background) return "";
+  // The session archive repeats the same decorative specimen 90+ times. Its two caption lines are
+  // constant copy, so the compact form moves them into the scoped CSS above and keeps one real text
+  // node for the body. The legacy preview still renders the full inline specimen.
+  if (compact && item.kind !== "non-text") {
+    return `<div class="pair-visual pair-visual--sample" aria-hidden="true" style="--sample-fg:${foreground};--sample-bg:${background}">Corpo del testo di esempio</div>`;
+  }
   return `<div class="pair-visual" aria-hidden="true" style="--sample-fg:${foreground};--sample-bg:${background}">${sampleVisual(item)}</div>`;
 }
 
@@ -1066,32 +1079,68 @@ export function createLocalPresenter(deps) {
   return { render: render };
 }
 
-/** Classic-script fragment that installs the local presenter on the runtime controller. */
-export function localPresenterSource() {
-  const lines = ["(function () {", '  "use strict";'];
-  // The designer factory is serialized verbatim so the browser reuses the exact same algorithm and
-  // labels as the build. The import above is mandatory, so the factory is always present here.
-  lines.push("  var createDesignerLanguage = " + createDesignerLanguage.toString() + ";");
-  lines.push("  var language = createDesignerLanguage();");
-  // The generator's design tools are serialized the same way, so the browser reuses the identical
-  // factory (recipes, darkBlendMix, describeToken) as the build.
-  lines.push("  var createDesignTools = " + createDesignTools.toString() + ";");
-  lines.push("  var tools = createDesignTools();");
-  lines.push("  var createLocalPresenter = " + createLocalPresenter.toString() + ";");
-  lines.push("  createLocalPresenter({ controller: globalThis." + DIAGNOSTIC_RUNTIME_GLOBAL + ", document: document, language: language, tools: tools });");
-  lines.push("})();", "");
-  return lines.join("\n");
+// Same serialization normalization already used by `createContrastWorkbenchViewSource`: drop only
+// the leading line indentation, keeping every comment, newline, string and executable token. None of
+// the serialized factories contains a multiline template literal or a line-continuation escape, so
+// leading spaces are never payload data. This is not a minifier: no token is removed or rewritten.
+function serializedFactory(factory) {
+  return factory.toString().replace(/^[\t ]+/gm, "");
 }
 
-// The exact bytes the preview hashes: the legacy diagnostic runtime and presenter,
-// the workbench runtime and the workbench view factory. Order matters for installation:
-// each runtime installs its controller before its view/presenter reads it. The workbench
-// runtime is mandatory; a missing module fails at import time, never silently.
+// The designer factory and the generator's design tools are serialized verbatim so the browser
+// reuses the exact same algorithms and labels as the build. The imports are mandatory: a missing
+// module fails at import time, never silently.
+function presenterInstallLines() {
+  return [
+    "  var createDesignerLanguage = " + serializedFactory(createDesignerLanguage) + ";",
+    "  var language = createDesignerLanguage();",
+    "  var createDesignTools = " + serializedFactory(createDesignTools) + ";",
+    "  var tools = createDesignTools();",
+    "  var createLocalPresenter = " + serializedFactory(createLocalPresenter) + ";",
+    "  createLocalPresenter({ controller: globalThis." + DIAGNOSTIC_RUNTIME_GLOBAL + ", document: document, language: language, tools: tools });",
+  ];
+}
+
+/** Classic-script fragment that installs the local presenter on the runtime controller. */
+export function localPresenterSource() {
+  return ["(function () {", '  "use strict";', ...presenterInstallLines(), "})();", ""].join("\n");
+}
+
+// The exact bytes the preview hashes. The preview used to concatenate the two standalone runtime
+// bundles, which serialized `createVerificationCore` and `createDomVerifier` twice (~54 KB). One
+// outer IIFE now serializes the shared factories exactly once and installs both controllers in the
+// same order as before: diagnostic controller, presenter, workbench controller, workbench view.
+// The standalone `createDiagnosticRuntimeSource`/`createContrastWorkbenchSource` stay untouched for
+// their own consumers; no new global helper is introduced and the CSP hash covers these final bytes.
 function previewScriptSource() {
-  return createDiagnosticRuntimeSource()
-    + localPresenterSource()
-    + createContrastWorkbenchSource()
-    + createContrastWorkbenchViewSource(WORKBENCH_RUNTIME_GLOBAL);
+  return [
+    "(function () {",
+    '  "use strict";',
+    "  var createVerificationCore = " + serializedFactory(createVerificationCore) + ";",
+    "  var createDomVerifier = " + serializedFactory(createDomVerifier) + ";",
+    "  var createContrastAdvice = " + serializedFactory(createContrastAdvice) + ";",
+    "  var createDiagnosticRuntime = " + serializedFactory(createDiagnosticRuntime) + ";",
+    "  globalThis." + DIAGNOSTIC_RUNTIME_GLOBAL + " = createDiagnosticRuntime({",
+    "    createVerificationCore: createVerificationCore,",
+    "    createDomVerifier: createDomVerifier,",
+    "    document: document,",
+    "    window: window",
+    "  });",
+    ...presenterInstallLines(),
+    "  var createContrastWorkbench = " + serializedFactory(createContrastWorkbench) + ";",
+    "  globalThis." + WORKBENCH_RUNTIME_GLOBAL + " = createContrastWorkbench({",
+    "    createVerificationCore: createVerificationCore,",
+    "    createDomVerifier: createDomVerifier,",
+    "    createContrastAdvice: createContrastAdvice,",
+    "    document: document,",
+    "    window: window,",
+    "    globalThis: globalThis",
+    "  });",
+    "  var createContrastWorkbenchView = " + serializedFactory(createContrastWorkbenchView) + ";",
+    "  createContrastWorkbenchView({ controller: globalThis[" + JSON.stringify(WORKBENCH_RUNTIME_GLOBAL) + "], document: document });",
+    "})();",
+    "",
+  ].join("\n");
 }
 
 // Same isolation shape validated in SC-01/SC-04: one script hash, inline styles only,
@@ -1238,18 +1287,39 @@ function designRecipeLine(design, tools, token, theme) {
   }
   return parts.join(" · ");
 }
+// One row per token keeps the same public control names, themes and defaults while avoiding one
+// `<li>` plus the repeated prose prefix for every single knob (the gallery is a compact archive).
+function designControlsInline(design, token) {
+  if (!record(design) || !record(design.tokens) || !record(design.tokens[token])) return "";
+  const controls = record(design.tokens[token].controls) ? design.tokens[token].controls : null;
+  if (!controls) return "";
+  const parts = [];
+  for (const theme of ["light", "dark"]) {
+    const control = record(controls[theme]) ? controls[theme] : null;
+    if (!control) continue;
+    // The public control name already carries its `-light`/`-dark` suffix, so the theme word would
+    // only repeat it. `override`/`mix` still distinguishes the two public control kinds.
+    if (typeof control.override === "string" && control.override) parts.push(`override ${escape(control.override)}`);
+    if (typeof control.mix === "string" && control.mix) {
+      const defaultMix = formatMixPercent(control.defaultMix);
+      parts.push(`mix ${escape(control.mix)}${defaultMix ? ` (default ${defaultMix})` : ""}`);
+    }
+  }
+  return parts.join("; ");
+}
 function designFamilyHtml(design, tools, tokens) {
   if (!record(design) || !record(design.tokens)) return "";
   const rows = [];
   for (const token of tokens) {
+    const parts = [];
     const line = designRecipeLine(design, tools, token, "light");
-    if (line) rows.push(line);
-    if (record(design.tokens[token])) {
-      for (const controlLine of designControlLines(design, token)) rows.push(escape(controlLine));
-    }
+    if (line) parts.push(line);
+    const controls = designControlsInline(design, token);
+    if (controls) parts.push(`controlli: ${controls}`);
+    if (parts.length) rows.push(parts.join(" · "));
   }
   if (!rows.length) return "";
-  return `<details class="is-detail"><summary>Colori: ricetta di partenza e controlli</summary><ul class="design-list">${rows.map((row) => `<li>${row}</li>`).join("")}</ul></details>`;
+  return `<details class="is-detail"><summary>Ricetta e controlli</summary><ul class="design-list">${rows.map((row) => `<li>${row}</li>`).join("")}</ul></details>`;
 }
 function designDrawnHtml(design, foreground, background, theme, tools) {
   if (!record(design) || !record(design.tokens)) return "";
@@ -1343,12 +1413,7 @@ function sessionFamiliesHtml(samples, language, design, tools) {
         if (!item || !colorCss(item.foreground) || !colorCss(item.background)) return "";
         tokens.add(item.foregroundToken);
         tokens.add(item.backgroundToken);
-        return `<li class="family-sample">
-${sampleFigure(item)}
-<p class="sample-title">${escape(pairTitleOf(language, item, label))}</p>
-<p class="sample-note">Stima: <span class="contrast-value">${compactRatio(item.ratio, [item.minimum, item.target])}</span> · non verificata</p>
-<details class="is-detail"><summary>Token e soglie</summary>
-<p class="margin-note"><code>${escape(item.foregroundToken)}</code> su <code>${escape(item.backgroundToken)}</code> · ${item.kind === "non-text" ? "bordo/indicatore" : "testo"} · ${thresholdsText(item)}</p></details></li>`;
+        return `<li class="family-sample">${sampleFigure(item, true)}<p class="sample-title">${escape(pairTitleOf(language, item, label))}</p><p class="sample-note">Stima: <span class="contrast-value">${compactRatio(item.ratio, [item.minimum, item.target])}</span> · non verificata</p><details class="is-detail"><summary>Token e soglie</summary><p><code>${escape(item.foregroundToken)}</code> su <code>${escape(item.backgroundToken)}</code> · ${item.kind === "non-text" ? "bordo/indicatore" : "testo"} · ${thresholdsText(item)}</p></details></li>`;
       }).filter(Boolean);
       if (!found.length) return "";
       return `<div class="family-theme"><p class="eyebrow">${escape(labelFrom(language, "themeLabel", scheme))}</p>

@@ -18,7 +18,7 @@
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -455,6 +455,261 @@ test("setOverride accepts only whitelisted controls and validated values", async
   assert.equal(controller.exportTuning(), "");
 });
 
+test("setLightness validates the additive full-colour surface and fails closed without a measured frame", async () => {
+  const { controller } = makeWorkbench(syntheticPayload());
+
+  await controller.setLightness("--color-tune-evil", 0.5);
+  assert.match(controller.state().error, /unknown tuning control/);
+  await controller.setLightness("--color-tune-light-warmth", 0.5);
+  assert.match(controller.state().error, /per-token full colour control|full color control/);
+  await controller.setLightness("--color-tune-brand-surface-light-mix", 0.5);
+  assert.match(controller.state().error, /per-token full colour control|full color control/);
+  for (const value of ["0.5", -0.01, 1.01, Number.NaN]) {
+    await controller.setLightness("--color-tune-text-light", value);
+    assert.match(controller.state().error, /between 0 and 1/, "rejects " + String(value));
+  }
+  assert.deepEqual(controller.state().draft, {});
+
+  await controller.setLightness("--color-tune-text-light", 0.5);
+  assert.match(controller.state().error, /mounted measured frame/);
+  assert.deepEqual(controller.state().draft, {}, "a missing frame never writes a colour");
+});
+
+test("removeOverride uses a live tombstone, keeps reset() as draft discard, and removes it from the legacy export", async () => {
+  const { controller } = makeWorkbench(syntheticPayload());
+
+  await controller.removeOverride("--color-tune-evil");
+  assert.match(controller.state().error, /unknown tuning control/);
+
+  // No saved declaration and no draft edit: nothing to remove, no tombstone is invented.
+  const noop = await controller.removeOverride("--color-tune-text-light");
+  assert.deepEqual(noop.removed, []);
+  assert.deepEqual(noop.draft, {});
+
+  await controller.setOverride("--color-tune-text-light", "oklch(0.5 0 0)");
+  const removed = await controller.removeOverride("--color-tune-text-light");
+  assert.equal(removed.draft["--color-tune-text-light"], "initial");
+  assert.deepEqual(removed.removed, ["--color-tune-text-light"]);
+  assert.match(removed.error, /no measured light draft frame/, "the fake DOM must fail closed instead of claiming success");
+  assert.equal(controller.exportTuning(), "", "the legacy export never writes initial");
+
+  const resetState = await controller.reset("--color-tune-text-light");
+  assert.deepEqual(resetState.draft, {});
+  assert.deepEqual(resetState.removed, []);
+  assert.equal(resetState.error, null);
+});
+
+test("exportTuningFile preserves the saved source and patches only whitelisted declarations", async () => {
+  const saved = [
+    "/* keep this comment */",
+    ":root {",
+    "  /* header */",
+    "  --color-tune-text-light: oklch(0.66 0 0);",
+    "  --color-tune-dark-warmth: 90%;",
+    "  --color-tune-not-managed: 12%;",
+    "}",
+    ".keep { color: red; }",
+    "",
+  ].join("\n");
+  const { controller } = makeWorkbench(syntheticPayload({ css: { tuning: saved, tuningSupport: "supported" } }));
+
+  const untouched = controller.exportTuningFile();
+  assert.equal(untouched.mode, "complete");
+  assert.equal(untouched.css, saved, "no edits always return the exact saved bytes");
+  assert.deepEqual(untouched.removed, []);
+  assert.deepEqual(untouched.unmatched, ["--color-tune-not-managed"], "orphan saved overrides are reported without editing");
+  assert.match(untouched.warnings.join(" "), /non più corrispondenti/);
+
+  await controller.setOverride("--color-tune-text-light", "oklch(0.5 0 0)");
+  const merged = controller.exportTuningFile();
+  assert.equal(merged.mode, "complete");
+  assert.ok(merged.css.includes("/* keep this comment */"));
+  assert.ok(merged.css.includes("/* header */"));
+  assert.ok(merged.css.includes("--color-tune-text-light: oklch(0.5 0 0);"));
+  assert.ok(merged.css.includes("--color-tune-not-managed: 12%;"), "unknown saved knobs are preserved");
+  assert.ok(merged.css.includes(".keep { color: red; }"), "unknown rules are preserved");
+  assert.deepEqual(merged.unmatched, ["--color-tune-not-managed"]);
+  assert.match(merged.warnings.join(" "), /non più corrispondenti/);
+
+  const unsupportedText = '@import url("x.css");\n:root { --color-tune-text-light: oklch(0.66 0 0); }\n';
+  const unsupported = makeWorkbench(syntheticPayload({ css: { tuning: unsupportedText, tuningSupport: "unsupported" } })).controller;
+  const unsupportedResult = unsupported.exportTuningFile();
+  assert.equal(unsupportedResult.css, unsupportedText, "no edits always return the exact saved source, even when it is not applied");
+  assert.equal(unsupportedResult.mode, "complete");
+  assert.deepEqual(unsupportedResult.removed, []);
+  assert.deepEqual(unsupportedResult.unmatched, []);
+  assert.match(unsupportedResult.warnings.join(" "), /non è applicato \(unsupported\)/);
+
+  const escapedText = ":root { --color-tune-text-li\\67 ht: oklch(0.66 0 0); }";
+  const escaped = makeWorkbench(syntheticPayload({ css: { tuning: escapedText, tuningSupport: "supported" } })).controller.exportTuningFile();
+  assert.equal(escaped.css, escapedText, "no edits still return the exact escaped source");
+  assert.equal(escaped.mode, "complete", "no edits return the whole saved file even when its analysis is unavailable");
+  assert.deepEqual(escaped.unmatched, []);
+  assert.match(escaped.warnings.join(" "), /escape/);
+  assert.match(escaped.warnings.join(" "), /non è verificata/, "the warning states the interpretation is not verified");
+
+  const brokenText = ":root { --color-tune-text-light: oklch(0.66 0 0); } }";
+  const broken = makeWorkbench(syntheticPayload({ css: { tuning: brokenText, tuningSupport: "supported" } })).controller.exportTuningFile();
+  assert.equal(broken.css, brokenText);
+  assert.equal(broken.mode, "complete", "no edits return the whole saved file even when braces are unbalanced");
+  assert.match(broken.warnings.join(" "), /unbalanced braces/);
+  assert.match(broken.warnings.join(" "), /non è verificata/);
+
+  await controller.removeOverride("--color-tune-dark-warmth");
+  const removed = controller.exportTuningFile();
+  assert.equal(removed.mode, "complete");
+  assert.ok(!removed.css.includes("--color-tune-dark-warmth"));
+  assert.ok(!removed.css.includes("initial"), "a tombstone is never exported as a saved value");
+  assert.deepEqual(removed.removed, ["--color-tune-dark-warmth"]);
+});
+
+test("exportTuningFile fails closed to a fragment on ambiguous precedence and never deletes user content", async () => {
+  const cases = [
+    {
+      name: "duplicate declaration",
+      css: ":root { --color-tune-text-light: oklch(0.66 0 0); --color-tune-text-light: oklch(0.6 0 0); }",
+      reason: /duplicate declaration/,
+    },
+    {
+      name: "conditional selector",
+      css: "[data-theme=\"dark\"] { --color-tune-text-light: oklch(0.66 0 0); }",
+      reason: /no top-level :root|outside a top-level :root/,
+    },
+    {
+      name: "conditional selector beside a root",
+      css: ":root { --color-bg: white; }\n[data-theme=\"dark\"] { --color-tune-text-light: oklch(0.66 0 0); }",
+      reason: /outside a top-level :root/,
+    },
+    {
+      name: "nested block inside a root",
+      css: ":root { .theme { --color-tune-text-light: oklch(0.66 0 0); } }",
+      reason: /outside a top-level :root/,
+    },
+    {
+      name: "duplicate declaration across roots",
+      css: ":root { --color-tune-text-light: oklch(0.66 0 0); }\n:root { --color-tune-text-light: oklch(0.6 0 0); }",
+      reason: /duplicate declaration/,
+    },
+    {
+      name: "important precedence",
+      css: ":root { --color-tune-text-light: oklch(0.66 0 0) !important; }",
+      reason: /!important/,
+    },
+    {
+      name: "commented important precedence",
+      css: ":root { --color-tune-text-light: oklch(0.66 0 0) ! /* hint */ important; }",
+      reason: /!important/,
+    },
+    {
+      name: "author comment inside the declaration",
+      css: ":root { --color-tune-text-light: /* motivo autore */ oklch(0.66 0 0); }",
+      reason: /author comment/,
+    },
+    {
+      name: "active CSS escape",
+      css: ":root { --color-tune-text-li\\67 ht: oklch(0.66 0 0); }",
+      reason: /escape/,
+    },
+    {
+      name: "unmatched closing brace",
+      css: ":root { --color-tune-text-light: oklch(0.66 0 0); } }",
+      reason: /unbalanced braces/,
+    },
+  ];
+  for (const item of cases) {
+    const { controller } = makeWorkbench(syntheticPayload({ css: { tuning: item.css, tuningSupport: "supported" } }));
+    // No edits: the ambiguous file is still the complete source copy, byte-exact; only its analysis
+    // is declared unavailable. It is never disguised as a patch.
+    const untouched = controller.exportTuningFile();
+    assert.equal(untouched.mode, "complete", "no edits: " + item.name);
+    assert.equal(untouched.css, item.css, "no edits return the raw source unchanged: " + item.name);
+    assert.deepEqual(untouched.unmatched, [], "no edits: " + item.name);
+    const noEditWarning = untouched.warnings.join(" ");
+    if (noEditWarning) assert.match(noEditWarning, /non è verificata/, "an unavailable analysis is declared, not verified: " + item.name);
+
+    // With an edit the same ambiguous source cannot be patched: only the draft delta is emitted.
+    await controller.setOverride("--color-tune-text-light", "oklch(0.5 0 0)");
+    const result = controller.exportTuningFile();
+    assert.equal(result.mode, "fragment", item.name);
+    assert.match(result.warnings.join(" "), item.reason, item.name);
+    assert.ok(result.css.includes("--color-tune-text-light: oklch(0.5 0 0);"), "the fragment still carries the draft");
+    assert.ok(!result.css.includes(item.css), "the fragment never includes the ambiguous saved file");
+    assert.ok(!result.css.includes("initial"), "the fragment never carries a tombstone");
+  }
+});
+
+test("exportTuningFile patches a unique knob across the real two-root tuning file and preserves the other root", async () => {
+  const real = await readFile(path.join(WORKSPACE_ROOT, "src/styles/tokens/colors-tuning.css"), "utf8");
+  assert.ok((real.match(/:root \{/g) || []).length >= 2, "the real tuning file keeps two top-level roots");
+  const { controller } = makeWorkbench(syntheticPayload({ css: { tuning: real, tuningSupport: "supported" } }));
+
+  const untouched = controller.exportTuningFile();
+  assert.equal(untouched.mode, "complete");
+  assert.equal(untouched.css, real, "no edits return the real file byte-exact");
+  assert.deepEqual(untouched.unmatched, [], "the real template has no orphan public knobs");
+
+  await controller.setOverride("--color-tune-dark-warmth", "60%");
+  const patched = controller.exportTuningFile();
+  assert.equal(patched.mode, "complete", "a unique declaration in the first root is patchable");
+  assert.equal(patched.css, real.replace("--color-tune-dark-warmth: 75%;", "--color-tune-dark-warmth: 60%;"),
+    "only the unique declaration changes; both roots and every comment stay byte-exact");
+  assert.equal((patched.css.match(/:root \{/g) || []).length, 2, "both top-level roots survive");
+  assert.match(patched.css, /1\. MACRO THEME TUNING/);
+  assert.match(patched.css, /3\. ELEVATION TUNING/);
+  assert.ok(patched.css.includes("--elevation-filter-surface: var(--elevation-filter-1);"), "the elevation root is untouched");
+});
+
+test("exportTuningFile appends new knobs to the last top-level root and removes a unique declaration in place", async () => {
+  const real = await readFile(path.join(WORKSPACE_ROOT, "src/styles/tokens/colors-tuning.css"), "utf8");
+  const { controller } = makeWorkbench(syntheticPayload({ css: { tuning: real, tuningSupport: "supported" } }));
+
+  await controller.setOverride("--color-tune-bg-light", "oklch(0.97 0.005 250)");
+  const appended = controller.exportTuningFile();
+  assert.equal(appended.mode, "complete");
+  const lastRoot = appended.css.lastIndexOf(":root {");
+  const lastClose = appended.css.indexOf("}", lastRoot);
+  const newIndex = appended.css.indexOf("--color-tune-bg-light:");
+  assert.ok(newIndex > lastRoot && newIndex < lastClose, "a new knob is appended to the last top-level root");
+  assert.equal(appended.css.slice(0, lastRoot).indexOf("--color-tune-bg-light:"), -1, "the first root is not used for a new knob");
+  assert.equal(appended.css, real.replace(/\}\n$/, "\n  --color-tune-bg-light: oklch(0.97 0.005 250);\n}\n"),
+    "all other bytes are preserved when the new declaration is appended");
+
+  const { controller: removal } = makeWorkbench(syntheticPayload({ css: { tuning: real, tuningSupport: "supported" } }));
+  await removal.removeOverride("--color-tune-dark-warmth");
+  const removed = removal.exportTuningFile();
+  assert.equal(removed.mode, "complete");
+  assert.equal(removed.css, real.replace("--color-tune-dark-warmth: 75%;", ""),
+    "removal keeps the declaration position, both roots and every comment");
+  assert.ok(!/^\s*--color-tune-dark-warmth\s*:/m.test(removed.css), "the active declaration is gone, while comments naming it remain");
+  assert.match(removed.css, /--color-tune-dark-warmth\n     Quanto calore/, "the macro comment is preserved");
+});
+
+test("exportTuningFile reports unmatched knobs across roots without blocking a unique patch", async () => {
+  const css = ":root { --color-tune-dark-warmth: 75%; }\n:root { --color-tune-not-managed: 12%; }\n";
+  const { controller } = makeWorkbench(syntheticPayload({ css: { tuning: css, tuningSupport: "supported" } }));
+  await controller.setOverride("--color-tune-dark-warmth", "60%");
+  const result = controller.exportTuningFile();
+  assert.equal(result.mode, "complete");
+  assert.equal(result.css, css.replace("--color-tune-dark-warmth: 75%;", "--color-tune-dark-warmth: 60%;"));
+  assert.deepEqual(result.unmatched, ["--color-tune-not-managed"], "orphans are reported across every root");
+  assert.match(result.warnings.join(" "), /non più corrispondenti/);
+});
+
+test("explorationPairs exposes the bounded advisory catalog and measureExploration fails closed without a frame", async () => {
+  const { controller } = makeWorkbench(syntheticPayload());
+  assert.equal(controller.explorationPairs("light").length, 2);
+  assert.equal(controller.explorationPairs("dark").length, 2);
+  assert.deepEqual(controller.explorationPairs("sepia"), []);
+  assert.ok(controller.explorationPairs("light").every((pair) => pair.exploration === true));
+  assert.equal(controller.state().exploration, null);
+
+  await controller.measureExploration("sepia");
+  assert.match(controller.state().error, /theme 'light' or 'dark'/);
+  await controller.measureExploration("light");
+  assert.match(controller.state().error, /mounted frame/);
+  assert.equal(controller.state().exploration, null);
+});
+
 test("subscribe is isolated, preference changes invalidate, and destroy is idempotent", async () => {
   const { controller, preferenceListeners, globalObject } = makeWorkbench(syntheticPayload());
   const received = [];
@@ -839,6 +1094,15 @@ async function mountAndSettle(page, options = {}) {
   return page.evaluate(() => window.__smartColorsWorkbench.state());
 }
 
+function oklchOf(value) {
+  try {
+    const parsed = core.parseComputedColor(value, "test metadata");
+    return { l: parsed.l, c: parsed.c, h: parsed.h };
+  } catch {
+    return null;
+  }
+}
+
 function ratioOf(state, slot) {
   const view = state.views.find((entry) => entry.slot === slot);
   assert.ok(view, "missing view " + slot);
@@ -957,6 +1221,14 @@ test("browser proof: visible specimen, real CSS measurement, verified suggestion
   assert.equal(state.views[1].measurements.length, meta.lightPairs.length);
   assert.equal(state.views[0].measurement.status, "pass");
   assert.equal(state.views[1].measurement.status, "below-minimum");
+  // Additive metadata: every shown measurement carries the shared core's {l,c,h} for the exact
+  // browser serialization, or null when that serialization cannot be parsed. Ratio/status are intact.
+  for (const view of state.views) {
+    for (const measurement of view.measurements) {
+      assert.deepEqual(measurement.foregroundOklch, oklchOf(measurement.foreground), "foregroundOklch mirrors the shared core");
+      assert.deepEqual(measurement.backgroundOklch, oklchOf(measurement.background), "backgroundOklch mirrors the shared core");
+    }
+  }
   assert.ok(ratioOf(state, "left") >= 4.5);
   assert.ok(ratioOf(state, "right") < 4.5);
   assert.deepEqual(state.provenance.palette, meta.payload.paletteSource, "provenance exposes the real paletteSource, not an invented output");
@@ -2247,4 +2519,110 @@ test("browser regression: border/outline samples sit on the measured surface wit
 
   await loaded.page.close();
   await context.close();
+});
+
+test("browser proof: OKLCH lightness, saved-override tombstone and advisory exploration", { skip: NATIVE_PROOF ? false : "opt-in: set SMART_COLORS_NATIVE_PROOF=1 to run the Chromium proof" }, async (t) => {
+  if (!NATIVE_PROOF) return;
+  const playwright = resolvePlaywright();
+  const browser = await openChromium(playwright.chromium);
+  t.after(() => browser.close());
+  const source = createContrastWorkbenchSource();
+  const dir = await mkdtemp(path.join(tmpdir(), "smart-colors-workbench-tuning-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+
+  const tuning = [
+    "/* keep this comment */",
+    ":root {",
+    "  --color-tune-text-light: oklch(0.66 0 0);",
+    "  --color-tune-brand-light: oklch(0.56 0.14 255);",
+    "  --color-tune-not-managed: 12%;",
+    "}",
+    ".keep { color: red; }",
+    "",
+  ].join("\n");
+  const real = await createRealPayload(t, { tuning });
+  const file = path.join(dir, "tuning.html");
+  await writeFile(file, buildFixtureHtml({ title: "Workbench tuning", payload: real, source, hostColorScheme: "light" }), "utf8");
+  const context = await browser.newContext({ colorScheme: "light", reducedMotion: "reduce" });
+  t.after(() => context.close());
+  const loaded = await loadFixture(context, file);
+  t.after(() => loaded.page.close());
+  const initial = await mountAndSettle(loaded.page);
+  assert.equal(initial.phase, "complete");
+
+  const result = await loaded.page.evaluate(async () => {
+    const controller = window.__smartColorsWorkbench;
+    const pair = controller.pairs("light").find((entry) => entry.foreground === "--color-brand-ink" && entry.background === "--color-brand");
+    if (!pair) return { missing: true };
+    await controller.select({ pairId: pair.id, theme: "light", comparison: "tuning" });
+    const before = controller.state();
+    const beforeView = before.views.find((view) => view.measurement && view.measurement.pairId === pair.id) || before.views[0];
+    const beforeMetadata = beforeView && beforeView.measurement
+      ? { foreground: beforeView.measurement.foregroundOklch, background: beforeView.measurement.backgroundOklch }
+      : null;
+    // Force a real RGB computed color first: the metadata must come from the shared core and then
+    // supply the exact C/H reused by the additive lightness edit.
+    const rgbState = await controller.setOverride("--color-tune-brand-light", "rgb(128 64 32)");
+    const rgbView = rgbState.views.find((view) => view.measurement && view.measurement.pairId === pair.id && view.variant === "draft")
+      || rgbState.views.find((view) => view.measurement && view.measurement.pairId === pair.id);
+    const rgbRaw = rgbView && rgbView.measurement ? rgbView.measurement.background : null;
+    const rgbMetadata = rgbView && rgbView.measurement ? rgbView.measurement.backgroundOklch : null;
+    const afterLightness = await controller.setLightness("--color-tune-brand-light", 0.5);
+    const lightnessValue = afterLightness.draft["--color-tune-brand-light"];
+    const firstExport = controller.exportTuningFile();
+    const afterRemoval = await controller.removeOverride("--color-tune-text-light");
+    const secondExport = controller.exportTuningFile();
+    const explorationPairs = controller.explorationPairs("light");
+    const afterExploration = await controller.measureExploration("light");
+    return {
+      missing: false,
+      beforeViews: before.views.length,
+      beforeMetadata,
+      rgbRaw,
+      rgbMetadata,
+      lightnessValue,
+      firstExport,
+      removalError: afterRemoval.error,
+      removed: afterRemoval.removed,
+      removalDraft: afterRemoval.draft["--color-tune-text-light"],
+      secondExport,
+      explorationPairs: explorationPairs.length,
+      exploration: afterExploration.exploration,
+      phaseAfter: afterExploration.phase,
+      viewsAfter: afterExploration.views.length,
+      removedAfter: afterExploration.removed,
+    };
+  });
+
+  assert.equal(result.missing, false);
+  assert.ok(result.beforeMetadata && result.beforeMetadata.background, "the before view exposes OKLCH metadata");
+  assert.ok(result.rgbRaw, "the forced override must produce a measured RGB background");
+  assert.match(result.rgbRaw, /^(?:rgb|color\(srgb)/, "the forced override is measured through an RGB serialization");
+  assert.ok(result.rgbMetadata, "the RGB serialization must produce OKLCH metadata");
+  assert.deepEqual(result.rgbMetadata, oklchOf(result.rgbRaw), "RGB serialization is parsed by the shared core");
+  const lightnessColor = core.parseComputedColor(result.lightnessValue, "lightness value");
+  assert.ok(Math.abs(lightnessColor.l - 0.5) < 1e-6, "the lightness edit keeps the requested L");
+  assert.ok(Math.abs(lightnessColor.c - result.rgbMetadata.c) < 1e-3, "the lightness edit preserves C from the RGB metadata");
+  const hueDelta = Math.min(Math.abs(lightnessColor.h - result.rgbMetadata.h), 360 - Math.abs(lightnessColor.h - result.rgbMetadata.h));
+  assert.ok(hueDelta < 1e-3, "the lightness edit preserves H from the RGB metadata");
+  assert.match(result.lightnessValue, /^oklch\(0\.5 /);
+  assert.equal(result.firstExport.mode, "complete");
+  assert.ok(result.firstExport.css.includes("/* keep this comment */"));
+  assert.ok(result.firstExport.css.includes(".keep { color: red; }"));
+  assert.ok(result.firstExport.css.includes("--color-tune-brand-light: " + result.lightnessValue + ";"));
+  assert.ok(result.firstExport.css.includes("--color-tune-not-managed: 12%;"));
+  assert.deepEqual(result.firstExport.unmatched, ["--color-tune-not-managed"]);
+  assert.equal(result.removalError, null);
+  assert.ok(result.removed.includes("--color-tune-text-light"));
+  assert.equal(result.removalDraft, "initial");
+  assert.equal(result.secondExport.mode, "complete");
+  assert.ok(!result.secondExport.css.includes("--color-tune-text-light"));
+  assert.ok(!result.secondExport.css.includes("initial"));
+  assert.ok(result.secondExport.css.includes("/* keep this comment */"));
+  assert.ok(result.explorationPairs > 0);
+  assert.equal(result.exploration.phase, "complete");
+  assert.ok(result.exploration.measurements.length > 0);
+  assert.equal(result.phaseAfter, "complete");
+  assert.equal(result.viewsAfter, result.beforeViews);
+  assert.deepEqual(result.removedAfter, result.removed);
 });

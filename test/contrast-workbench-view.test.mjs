@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -226,7 +227,7 @@ test("the suggestion copy states a bounded min-lightness search for the minimum,
   // The redundant restore/reset-all duplicate is gone: reset-all lives once, in the controls scope.
   assert.doesNotMatch(html, /Ripristina<\/button>/);
   assert.equal((html.match(/Scarta la bozza di tuning<\/button>/g) ?? []).length, 1);
-  assert.match(html, /Ambito: solo i controlli pubblici dichiarati per i due token della coppia selezionata/);
+  assert.match(html, /L e mix agiscono sulla bozza temporanea della coppia e del tema attivo/);
 });
 
 test("captured palette bytes cannot break the textarea, the download or the inert payload", () => {
@@ -264,6 +265,10 @@ test("the workbench frames stay empty for the runtime and the specimen precedes 
   const html = renderContrastWorkbench(workbenchSession());
   assert.match(html, /<div id="smart-colors-workbench-result" data-smart-colors-workbench="result" class="wb-frames" role="group" aria-label="Campioni CSS del consumatore">/);
   assert.doesNotMatch(html, /<div id="smart-colors-workbench" data-smart-colors-workbench="host"[^>]*role="region"/, "the outer workbench section owns the landmark, not the inner host");
+  assert.match(html, /<div class="wb-view-head"><span data-smart-colors-workbench="left-sample" class="wb-aa is-unmeasured" aria-hidden="true">Aa<\/span><h3 id="smart-colors-workbench-left-title" class="wb-view-title">Tema chiaro<\/h3><\/div>/);
+  assert.match(html, /id="smart-colors-workbench-left-meta" data-smart-colors-workbench="left-meta" class="wb-view-meta wb-visually-hidden"><\/span>/);
+  assert.match(html, /class="wb-measure-row wb-measure-ratio"/);
+  assert.doesNotMatch(html, /wb-view-chrome/, "the repeated metadata row is gone");
   assert.match(html, /<div id="smart-colors-workbench-left" data-smart-colors-workbench="left" class="wb-frame" role="group" aria-label="Vista CSS sinistra"><\/div>/);
   assert.match(html, /<div id="smart-colors-workbench-right" data-smart-colors-workbench="right" class="wb-frame" role="group" aria-label="Vista CSS destra"><\/div>/);
   // Proposal frames are real consumer slots too: empty in the markup, populated only by the runtime.
@@ -294,31 +299,38 @@ test("the workbench frames stay empty for the runtime and the specimen precedes 
   assert.doesNotMatch(html, /wb-rail|wb-layout/, "the old source sidebar is gone");
 });
 
-test("CONTRAST_WORKBENCH_CSS builds a compact horizontal toolbar and full-width specimens, is forced-colors aware and resource-free", () => {
-  // The palette strip and the specimen pair are named container queries, never viewport media queries.
+test("the extracted workbench stylesheet wraps the palette, scopes focus and keeps container-driven layout", () => {
+  const source = readFileSync(new URL("../src/report-styles/workbench.css", import.meta.url), "utf8");
+  assert.equal(CONTRAST_WORKBENCH_CSS, source, "the exported constant is the shipped stylesheet, loaded once");
+  // Source chips wrap in a real grid instead of a horizontal carousel.
+  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-palette \{[^}]*grid-template-columns: repeat\(auto-fill, minmax\(8\.5rem, 1fr\)\);[^}]*\}/);
+  assert.doesNotMatch(CONTRAST_WORKBENCH_CSS, /\.wb-palette \{[^}]*overflow-x: auto;/, "no hidden horizontal carousel survives");
+  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-swatch \{[^}]*min-height: 44px;[^}]*\}/, "every source target keeps a 44px target");
+  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-palette \{ display: grid; \}/, "the wrapping grid is the desktop source control");
+  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-source-select \{ display: none; \}/, "the native select is fully removed on desktop");
   assert.match(CONTRAST_WORKBENCH_CSS, /@container preview-section \(min-width: 45rem\)/);
-  assert.match(CONTRAST_WORKBENCH_CSS, /@container wb-main \(min-width: 40rem\)/);
+  assert.match(CONTRAST_WORKBENCH_CSS, /@container wb-main \(min-width: 36rem\)/);
   assert.match(CONTRAST_WORKBENCH_CSS, /@container wb-main \(min-width: 48rem\) \{\s*\.wb-proposal-frames \{ grid-template-columns: repeat\(2, minmax\(0, 1fr\)\); \}\s*\}/, "the fixed proposal frames sit side by side from 48rem");
-  assert.doesNotMatch(CONTRAST_WORKBENCH_CSS, /\.wb-rail|\.wb-layout/, "no sidebar layout rule survives");
-  // The palette is a bounded horizontal strip; the pair selector is promoted in the same toolbar.
-  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-palette \{[^}]*display: none;[^}]*overflow-x: auto;/, "mobile keeps the native select and no overflowing strip");
-  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-palette \{ display: flex; \}/, "the swatches are the desktop counterpart");
-  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-source-select \{ display: none; \}/, "the native select is fully removed on desktop, not an invisible focus stop");
-  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-swatch \{[^}]*height: 44px;[^}]*\}/, "every source target is 44px high");
-  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-pair-field \{[^}]*flex: 1 1 20rem;/, "the pair selector is a first-class toolbar control");
-  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-picker-dialog \{[^}]*width: min\(40rem, calc\(100vw - 2rem\)\);[^}]*max-block-size: 90dvh;/, "the picker is a compact native viewport-bound dialog");
+  assert.match(CONTRAST_WORKBENCH_CSS, /@container wb-catalogue \(max-width: 32rem\)/, "the matrix adapts to its own column, not only the viewport");
+  assert.match(CONTRAST_WORKBENCH_CSS, /@container wb-shell \(min-width: 64rem\) \{\s*\.wb-workspace \{ grid-template-columns: minmax\(0, 2fr\) minmax\(0, 3fr\); \}/, "desktop catalogue and inspector stay roughly 40/60");
+  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-picker-dialog \{[^}]*width: min\(40rem, calc\(100vw - 2rem\)\);[^}]*max-block-size: 90dvh;/, "the picker is a compact native dialog");
   assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-picker-results \{[^}]*overflow: auto;/, "only the results area scrolls inside the picker");
-  assert.doesNotMatch(CONTRAST_WORKBENCH_CSS, /\.wb-more/, "the giant more-pairs disclosure is gone");
-  assert.doesNotMatch(CONTRAST_WORKBENCH_CSS, /wb-swatch-role/, "the compact toolbar drops the secondary role");
-  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-theme-fieldset \{[^}]*border: 0;/);
-  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-uses \{[^}]*display: grid/);
-  assert.doesNotMatch(CONTRAST_WORKBENCH_CSS, /border-radius: 999px/);
+  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-scope-toggle \{[^}]*min-height: 2\.75rem;/, "the all-pairs control has a full target");
+  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-field select \{ block-size: 2\.75rem; \}/, "WebKit native selects keep the 44px target via block-size");
+  assert.doesNotMatch(CONTRAST_WORKBENCH_CSS, /appearance:\s*none/, "the native select appearance is never replaced");
+  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-overview-summary \{[^}]*display: flex;/, "the active scope is visible even when the matrix is closed");
+  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-measure-more > summary/, "long measurement documentation is a native detail");
+  assert.match(CONTRAST_WORKBENCH_CSS, /color-mix\(in oklab, var\(--accent\) 6%, var\(--paper\)\)/, "selection uses a restrained accent tint");
   assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-frames:not\(\.wb-proposal-frames\) \{ grid-template-columns: repeat\(2, minmax\(0, 1fr\)\); \}/, "the two specimens share the full width when the workbench is wide");
+  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-frames:not\(\.wb-proposal-frames\) \.wb-frame iframe \{ block-size: 13rem; \}/, "side-by-side specimens stay compact");
+  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-compare \.wb-fieldset \{ flex: 1 1 auto;/, "the comparison group takes the flexible space");
+  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-compare \.wb-theme-fieldset \{ flex: 0 0 auto; \}/, "the theme group stays compact and overrides the shared fieldset");
+  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-measure-ratio \{ display: block; \}/, "the ratio uses the full column under the specimen");
+  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-aa \{[^}]*min-inline-size: 2rem;[^}]*\}/, "the Aa sample is a small heading companion");
   assert.match(CONTRAST_WORKBENCH_CSS, /@media \(forced-colors: active\)/);
   assert.match(CONTRAST_WORKBENCH_CSS, /@media print/);
   assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-proposal-frames\[hidden\] \{ display: none; \}/, "the hidden attribute must beat the grid display");
   assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-action-strip \[hidden\] \{ display: none; \}/, "the discard action is never painted without a suggestion");
-  // The hidden rules must live in `layout`, otherwise the later `layout` grid rule would win the cascade.
   const layoutLayer = CONTRAST_WORKBENCH_CSS.indexOf("@layer layout {");
   const preferencesLayer = CONTRAST_WORKBENCH_CSS.indexOf("@layer preferences {");
   const hiddenRule = CONTRAST_WORKBENCH_CSS.indexOf(".wb-proposal-frames[hidden]");
@@ -327,6 +339,7 @@ test("CONTRAST_WORKBENCH_CSS builds a compact horizontal toolbar and full-width 
   assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-frame \{ min-height: 7rem;[^}]*overflow: hidden; \}/, "the main views keep clipping");
   assert.doesNotMatch(CONTRAST_WORKBENCH_CSS, /@import|url\(|https?:/i);
   assert.doesNotMatch(CONTRAST_WORKBENCH_CSS, /position:\s*fixed/);
+  assert.doesNotMatch(CONTRAST_WORKBENCH_CSS, /border-radius: 999px/);
 });
 
 test("the static workspace separates source values from the generated catalogue and shows the pair identity outside the closed details", () => {
@@ -359,6 +372,10 @@ test("the static workspace separates source values from the generated catalogue 
   assert.ok(currentUseBlock, "the toolbar exposes a current-use summary");
   assert.match(currentUseBlock[1], /Testo sul callout primary/);
   assert.doesNotMatch(currentUseBlock[1], /--color-primary-text|--color-primary-surface/, "the primary summary never leads with tokens");
+  assert.match(html, /Chiaro\/scuro/);
+  assert.match(html, /Generato\/tuning/);
+  assert.match(html, /Prima\/dopo/);
+  assert.match(html, /<fieldset class="wb-fieldset wb-theme-fieldset"><legend>Tema<\/legend>/);
   // The dialog owns the search, category, paginated results and native footer.
   assert.match(html, /<h2 id="smart-colors-workbench-picker-title">Scegli cosa verificare<\/h2>/);
   assert.match(html, /id="smart-colors-workbench-picker-source"[^>]*>Sorgente: /);
@@ -368,7 +385,7 @@ test("the static workspace separates source values from the generated catalogue 
   assert.match(html, /id="smart-colors-workbench-use-prev"[^>]*disabled>Precedenti<\/button>/);
   assert.match(html, /id="smart-colors-workbench-use-next"[^>]*disabled>Successivi<\/button>/);
   assert.match(html, /id="smart-colors-workbench-close-picker"[^>]*disabled>Chiudi<\/button>/);
-  assert.match(html, /id="smart-colors-workbench-open-picker"[^>]*disabled>Cambia uso<\/button>/);
+  assert.match(html, /id="smart-colors-workbench-open-picker"[^>]*aria-haspopup="dialog"[^>]*disabled>Cambia uso<\/button>/);
   assert.match(html, /id="smart-colors-workbench-use-count"[^>]*role="status"/);
   assert.ok(html.indexOf('id="smart-colors-workbench-uses"') > html.indexOf('<dialog id="smart-colors-workbench-picker"'), "the uses hook lives inside the dialog");
   assert.ok((html.match(/class="wb-use"/g) ?? []).length <= 6, "at most six real uses are rendered per page");
@@ -383,7 +400,7 @@ test("the static workspace separates source values from the generated catalogue 
   const detailsIndex = html.indexOf('class="is-detail wb-technical"');
   assert.ok(identityIndex >= 0 && identityIndex < detailsIndex, "the identity is visible before any closed detail");
   assert.match(html, /<code>--color-primary-text<\/code> su <code>--color-primary-surface<\/code> · testo/);
-  assert.match(html, /Testo normale · soglia AA 4,5:1 \(SC 1\.4\.3\)\. Il corpo del campione è da 16 px\./);
+  assert.match(html, /Testo normale · AA 4,5:1 \(SC 1\.4\.3\) · campione a 16 px\./);
   assert.doesNotMatch(html, /titolo 22 px non bold/);
   // The mode form stays above the specimen; the theme recovery fieldset lives in the toolbar,
   // outside the correction strip, and keeps its form association.
@@ -406,10 +423,10 @@ test("the static workspace separates source values from the generated catalogue 
   assert.match(html, /Testo grande · AAA<\/dt><dd>4,5:1 · <a href="https:\/\/www\.w3\.org\/TR\/WCAG22\/#contrast-enhanced">SC 1\.4\.6<\/a>/);
   assert.match(html, /<a href="https:\/\/www\.w3\.org\/TR\/WCAG22\/#non-text-contrast">SC 1\.4\.11<\/a>/);
   assert.match(html, /per esempio 7,5:1 non è una soglia WCAG/);
-  // Manual and export stay closed; no detail is opened by the build.
-  assert.match(html, /<details class="is-detail wb-advanced"[^>]*><summary>Modifica manualmente \(avanzato\)<\/summary>/);
+  // Manual L is discoverable and open; the export and other archives stay closed.
+  assert.match(html, /<details class="is-detail wb-advanced"[^>]*\bopen\b[^>]*><summary>Regola la coppia \(L\)<\/summary>/);
   assert.match(html, /<details class="is-detail wb-export"[^>]*><summary>Esporta modifiche<\/summary>/);
-  assert.doesNotMatch(html, /<details[^>]*\bopen\b/);
+  assert.doesNotMatch(html, /<details class="is-detail wb-export"[^>]*\bopen\b/);
 });
 
 test("a known on-color pair has one readable selection label and keeps the exact technical identity", () => {
@@ -464,7 +481,7 @@ test("the toolbar keeps current use, the change-use opener, comparison and theme
   assert.match(html, /id="smart-colors-workbench-theme-dark" type="radio"[^>]*form="smart-colors-workbench-selection"/);
 });
 
-test("the horizontal palette toolbar keeps 16 source buttons at 44px targets and uses the native select on narrow containers", () => {
+test("the palette keeps 16 source buttons at 44px targets and uses the native select on narrow containers", () => {
   const session = workbenchSession({
     design: { ...workbenchSession().design, sources: [] },
     paletteSource: {
@@ -482,10 +499,10 @@ test("the horizontal palette toolbar keeps 16 source buttons at 44px targets and
   assert.equal((html.match(/data-smart-colors-workbench="swatch"/g) ?? []).length, 16, "all 16 source buttons are present");
   assert.match(html, /class="wb-field wb-source-select"/, "the single native source select stays available on narrow containers");
   assert.equal((html.match(/id="smart-colors-workbench-source"/g) ?? []).length, 1);
-  // A bounded horizontal strip of 44px targets; the native select is the mobile fallback.
-  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-swatch \{[^}]*height: 44px;[^}]*\}/);
-  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-palette \{[^}]*overflow-x: auto;[^}]*\}/);
-  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-palette \{ display: flex; \}/);
+  // A wrapping grid of 44px targets; the native select is the narrow-container fallback.
+  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-swatch \{[^}]*min-height: 44px;[^}]*\}/);
+  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-palette \{[^}]*grid-template-columns: repeat\(auto-fill, minmax\(8\.5rem, 1fr\)\);/);
+  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-palette \{ display: grid; \}/);
   assert.doesNotMatch(html, /wb-swatch-role/, "the compact toolbar drops the human role");
   assert.match(html, /<code>--palette-source-0<\/code> · ruolo dichiarato: interfaccia/, "the source archive keeps the human role");
 });
@@ -635,6 +652,8 @@ function workbenchDom(session) {
   const matrixSearch = register(makeNode("input"), "smart-colors-workbench-matrix-search"); matrixSearch.value = ""; matrixSearch.disabled = true; overviewBox.appendChild(matrixSearch);
   const matrixFilter = register(makeNode("select"), "smart-colors-workbench-matrix-filter"); matrixFilter.value = ""; matrixFilter.disabled = true; overviewBox.appendChild(matrixFilter);
   const matrixClear = register(makeNode("button"), "smart-colors-workbench-matrix-clear"); matrixClear.disabled = true; overviewBox.appendChild(matrixClear);
+  const matrixAll = register(makeNode("input"), "smart-colors-workbench-matrix-all"); matrixAll.checked = true; matrixAll.disabled = true; overviewBox.appendChild(matrixAll);
+  const overviewScope = register(makeNode("span"), "smart-colors-workbench-overview-scope"); overviewBox.appendChild(overviewScope);
   const matrixCount = register(makeNode("p"), "smart-colors-workbench-matrix-count"); overviewBox.appendChild(matrixCount);
   const matrixViewA = register(makeNode("th"), "smart-colors-workbench-matrix-a"); overviewBox.appendChild(matrixViewA);
   const matrixViewB = register(makeNode("th"), "smart-colors-workbench-matrix-b"); overviewBox.appendChild(matrixViewB);
@@ -733,7 +752,7 @@ function workbenchDom(session) {
     getElementById: (id) => registry.get(id) ?? null,
     createElement: (tag) => makeNode(tag),
   };
-  return { host, status, selection, controlsForm, source, pair, themeLight, themeDark, comparisonThemes, comparisonTuning, comparisonDraft, controlsBody, proposal, proposalFrames, proposalBefore, proposalAfter, usesBox, current, currentUse, openPicker, pickerDialog, pickerSource, useSearch, useCategory, useClear, useCount, usePrev, useNext, closePicker, identity, purpose, actionTheme, resultBox, emptyNote, correctionBox, manualBox, exportBox, sessionStatus, discard, swatchBrand, swatchCanvas, swatchOrphan, overviewBox, matrixSearch, matrixFilter, matrixClear, matrixCount, matrixViewA, matrixViewB, matrixBody, leftSample, leftMeta, rightSample, rightMeta, explorationBox, explorationRun, explorationStatus, explorationResults, exportMode, document };
+  return { host, status, selection, controlsForm, source, pair, themeLight, themeDark, comparisonThemes, comparisonTuning, comparisonDraft, controlsBody, proposal, proposalFrames, proposalBefore, proposalAfter, usesBox, current, currentUse, openPicker, pickerDialog, pickerSource, useSearch, useCategory, useClear, useCount, usePrev, useNext, closePicker, identity, purpose, actionTheme, resultBox, emptyNote, correctionBox, manualBox, exportBox, sessionStatus, discard, swatchBrand, swatchCanvas, swatchOrphan, overviewBox, matrixSearch, matrixFilter, matrixClear, matrixAll, overviewScope, matrixCount, matrixViewA, matrixViewB, matrixBody, leftSample, leftMeta, rightSample, rightMeta, explorationBox, explorationRun, explorationStatus, explorationResults, exportMode, document };
 }
 
 function controllerStub(options = {}) {
@@ -858,20 +877,29 @@ test("mount is called only with the real left/right containers and phases are an
   assert.match(left, /4,60:1 · non raggiunto/);
   assert.doesNotMatch(left, /obiettivo del progetto, non una soglia WCAG/, "the closed reference owns the non-WCAG target explanation");
   assert.doesNotMatch(left, /corpo 16 px|nota 14 px/, "common applicability is not repeated per card");
-  assert.match(flat(dom.purpose), /Testo normale · soglia AA 4,5:1 \(SC 1\.4\.3\)\. Il corpo del campione è da 16 px\./);
+  assert.match(flat(dom.purpose), /Testo normale · AA 4,5:1 \(SC 1\.4\.3\) · campione a 16 px\./);
   assert.doesNotMatch(flat(dom.purpose), /titolo 22 px non bold/, "the actual 650 title is never claimed as bold or non-bold large text");
   assert.match(dom.status.className, /wb-visually-hidden/, "routine complete status is visually hidden but remains a live region");
   assert.doesNotMatch(left, /Contrasto sufficiente|Contrasto insufficiente/, "no universal pass/fail badge survives");
-  // The two threshold rows are DIRECT semantic groups of the measure <dl>: div.wb-measure-row.wb-threshold > dt/dd.
+  // The visible ratio row is a direct dl group; the long criterion/target documentation lives in
+  // one native disclosure, still as semantic dt/dd groups.
   const leftMeasureNode = dom.document.getElementById("smart-colors-workbench-left-measure");
   assert.equal(leftMeasureNode.tagName, "dl");
-  const thresholdRows = leftMeasureNode.children.filter((child) => /(^|\s)wb-measure-row(\s|$)/.test(child.className) && /(^|\s)wb-threshold(\s|$)/.test(child.className));
-  assert.equal(thresholdRows.length, 2, "minimum and target are two direct semantic threshold rows");
+  const collect = (node, found) => {
+    for (const child of node.children) {
+      if (/(^|\s)wb-threshold(\s|$)/.test(child.className)) found.push(child);
+      collect(child, found);
+    }
+    return found;
+  };
+  const thresholdRows = collect(leftMeasureNode, []);
+  assert.equal(thresholdRows.length, 2, "minimum and target stay two semantic threshold rows");
   for (const row of thresholdRows) {
     assert.equal(row.tagName, "div");
-    assert.equal(row.children.map((child) => child.tagName).join(","), "dt,dd", "each threshold row is a dt/dd group");
-    assert.equal(row.parentNode, leftMeasureNode, "the threshold group is a direct child of the measure dl");
+    assert.equal(row.children.map((child) => child.tagName).join(","), "span,span", "each threshold row is a label/value group");
+    assert.equal(row.parentNode.tagName, "details", "the threshold groups live in the measurement detail");
   }
+  assert.equal(leftMeasureNode.children.filter((child) => /(^|\s)wb-measure-row(\s|$)/.test(child.className)).length >= 1, true, "the ratio stays visible outside the detail");
   assert.equal(leftMeasureNode.children.filter((child) => /(^|\s)wb-thresholds-inline(\s|$)/.test(child.className)).length, 0, "the invalid inline wrapper is gone");
   assert.match(flat(dom.document.getElementById("smart-colors-workbench-right-measure")), /Soglia AA per testo normale raggiunta/);
   assert.match(flat(dom.document.getElementById("smart-colors-workbench-right-measure")), /4,60:1 · raggiunto/);
@@ -928,7 +956,7 @@ test("each specimen reports its scoped AA criterion and the project target separ
   assert.match(flat(dom.identity), /--color-primary-text/);
   assert.match(flat(dom.identity), /--color-primary-surface/);
   assert.match(flat(dom.identity), /testo/);
-  assert.match(flat(dom.purpose), /Testo normale · soglia AA 4,5:1 \(SC 1\.4\.3\)\. Il corpo del campione è da 16 px\./);
+  assert.match(flat(dom.purpose), /Testo normale · AA 4,5:1 \(SC 1\.4\.3\) · campione a 16 px\./);
   assert.doesNotMatch(flat(dom.purpose), /titolo 22 px non bold/);
   // The selected theme is stated next to the suggestion action.
   assert.match(dom.actionTheme.textContent, /Tema per proposta e override: chiaro/);
@@ -1013,7 +1041,7 @@ test("a noncanonical threshold never earns a normative positive", () => {
   assert.match(left, /Soglia non canonica per questo tipo: nessun criterio WCAG applicato/);
   assert.doesNotMatch(left, /SC 1\.4\.3|SC 1\.4\.11|Soglia AA per testo normale/, "a noncanonical threshold is never called normative");
   // The purpose sentence still states the normative rule for the catalogue kind, not the odd threshold.
-  assert.match(flat(dom.purpose), /Testo normale · soglia AA 4,5:1 \(SC 1\.4\.3\)/);
+  assert.match(flat(dom.purpose), /Testo normale · AA 4,5:1 \(SC 1\.4\.3\)/);
 });
 
 test("an on-color specimen states only its 16px button label, never the title/note pair", () => {
@@ -1021,7 +1049,7 @@ test("an on-color specimen states only its 16px button label, never the title/no
   const staticHtml = renderContrastWorkbench(workbenchSession({
     model: { diagnostics: [{ label: "on-primary", scheme: "light", foregroundToken: "--color-primary-ink", backgroundToken: "--color-primary", ratio: 6, minimum: 4.5, target: 4.6, kind: "text", status: "pass", provenance: "generated" }], errors: [], warnings: [] },
   }));
-  assert.match(staticHtml, /Testo su riempimento · soglia AA 4,5:1 \(SC 1\.4\.3\)\. L(?:&#39;|')etichetta del campione è da 16 px\./);
+  assert.match(staticHtml, /Testo su riempimento · AA 4,5:1 \(SC 1\.4\.3\) · etichetta a 16 px\./);
   assert.doesNotMatch(staticHtml, /nota 14 px|corpo 16 px/);
   assert.match(staticHtml, /data-catalogue-kind="on-color"/);
 
@@ -1046,7 +1074,7 @@ test("an on-color specimen states only its 16px button label, never the title/no
   });
   createContrastWorkbenchView({ document: dom.document, controller });
   assert.match(flat(dom.identity), /testo su riempimento/);
-  assert.match(flat(dom.purpose), /Testo su riempimento · soglia AA 4,5:1 \(SC 1\.4\.3\)\. L'etichetta del campione è da 16 px\./);
+  assert.match(flat(dom.purpose), /Testo su riempimento · AA 4,5:1 \(SC 1\.4\.3\) · etichetta a 16 px\./);
   assert.doesNotMatch(flat(dom.purpose), /nota 14 px|corpo 16 px/);
   const left = flat(dom.document.getElementById("smart-colors-workbench-left-measure"));
   assert.match(left, /Soglia AA per testo normale raggiunta/);
@@ -1088,10 +1116,8 @@ test("a non-text pair reports SC 1.4.11 and 3:1 with its applicability, never th
   assert.match(flat(dom.identity), /--color-focus-ring/);
   assert.match(flat(dom.identity), /--color-bg/);
   assert.match(flat(dom.identity), /anello/);
-  assert.match(flat(dom.purpose), /Componente non testuale · soglia 3:1 \(SC 1\.4\.11\)/);
-  assert.match(flat(dom.purpose), /per le informazioni necessarie a identificare componenti e stati/);
-  assert.match(flat(dom.purpose), /bordo decorativo non è automaticamente soggetto/);
-  assert.match(flat(dom.purpose), /non verifica focus, comportamento, visibilità o oscuramento/);
+  assert.match(flat(dom.purpose), /Componente non testuale · 3:1 \(SC 1\.4\.11\)/);
+  assert.match(flat(dom.purpose), /non verifica focus, comportamento o oscuramento/);
 
   // A declared non-text kind with a text threshold is a mismatch: it never becomes SC 1.4.11.
   focus.setAttribute("data-thresholds", "4.5,7;4.5,7");
@@ -2022,7 +2048,7 @@ test("a frozen controller without the additive APIs keeps the legacy fragment an
 test("the static overview is a bounded semantic matrix with scoped headers and explicit snapshot/live separation", () => {
   const html = renderContrastWorkbench(workbenchSession());
   assert.match(html, /<details class="wb-overview" data-smart-colors-workbench="overview"/);
-  assert.match(html, /<summary id="smart-colors-workbench-overview-title" class="wb-overview-summary">Abbinamenti e filtri<\/summary>/);
+  assert.match(html, /<summary id="smart-colors-workbench-overview-title" class="wb-overview-summary">Abbinamenti e filtri <span id="smart-colors-workbench-overview-scope" class="wb-overview-scope">Tutti gli abbinamenti<\/span><\/summary>/);
   assert.match(html, /<table class="wb-matrix">/);
   assert.match(html, /<caption id="smart-colors-workbench-matrix-caption">/);
   assert.match(html, /<th scope="col" class="wb-matrix-uso">Uso e criterio<\/th>/);
@@ -2030,18 +2056,21 @@ test("the static overview is a bounded semantic matrix with scoped headers and e
   assert.match(html, /<th scope="col" id="smart-colors-workbench-matrix-b" class="wb-matrix-view">/);
   assert.match(html, /<th scope="row" class="wb-matrix-uso">/);
   assert.match(html, /data-smart-colors-workbench="matrix-inspect"[^>]*disabled>Ispeziona<span class="wb-visually-hidden">/);
-  assert.match(html, /Ogni cella mostra la misura live quando il runtime ne ha una per quella coppia e quella vista/);
+  assert.match(html, /Misure live quando disponibili; altrimenti stime di build etichettate\./);
   assert.match(html, /stime di build/);
   assert.match(html, /<label for="smart-colors-workbench-matrix-search">Cerca un abbinamento<\/label>/);
   assert.match(html, /<label for="smart-colors-workbench-matrix-filter">Filtra per esito<\/label>/);
-  assert.match(html, /live dove misurato, altrimenti stima build/);
+  assert.match(html, /<label class="wb-scope-toggle"><input id="smart-colors-workbench-matrix-all"[^>]*type="checkbox" checked disabled> Tutti gli abbinamenti<\/label>/, "the wrapping label needs no redundant for");
+  assert.match(html, /data-smart-colors-workbench="matrix-empty" hidden><td colspan="3">Nessun abbinamento corrisponde alla selezione corrente\.<\/td><\/tr>/, "an explicit empty row exists instead of a blank table");
+  assert.match(html, /<noscript><p class="wb-snapshot-note">Senza JavaScript la matrice mostra solo le prime stime di build, non le misure live\.<\/p><\/noscript>/);
+  assert.match(html, /<details class="is-detail wb-matrix-help"><summary>Come leggere la matrice<\/summary>/);
   // The static no-JS L controls already use the same reachable step as the hydrated ones.
   assert.match(html, /data-kind="lightness" type="range" min="0" max="100" step="0\.1"/);
   assert.match(html, /data-kind="lightness" type="number" min="0" max="100" step="any"/);
   assert.doesNotMatch(html, /type="(range|number)"[^>]*step="0\.5"/, "a 0.5 step would reject a real 49.6 L");
   assert.doesNotMatch(html, /Contrasto sufficiente|Contrasto insufficiente/, "the matrix never uses a universal pass/fail badge");
   assert.doesNotMatch(html, /<span class="wb-matrix-status" data-status="[^"]*">[^<]*AAA/, "no universal AAA badge in the matrix");
-  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-matrix-scroll \{[^}]*max-block-size: 22rem;[^}]*overflow: auto;/, "the matrix is a bounded local scroll");
+  assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-matrix-scroll \{[^}]*max-block-size: 24rem;[^}]*overflow: auto;/, "the matrix is a bounded local scroll");
   assert.match(CONTRAST_WORKBENCH_CSS, /@container wb-shell \(min-width: 64rem\)/, "desktop overview + inspector is container-driven");
   assert.doesNotMatch(CONTRAST_WORKBENCH_CSS, /min-inline-size: 38rem/, "the matrix no longer forces a 38rem table");
   assert.match(CONTRAST_WORKBENCH_CSS, /@container wb-shell \(max-width: 48rem\)/, "narrow containers keep the three columns adaptive");
@@ -2049,7 +2078,7 @@ test("the static overview is a bounded semantic matrix with scoped headers and e
   const rowHeaders = html.match(/<th scope="row" class="wb-matrix-uso">/g) ?? [];
   assert.ok(rows.length >= 2);
   assert.equal(rowHeaders.length, rows.length, "every matrix row has its own row header");
-  assert.doesNotMatch(html, /<details[^>]*\bopen\b/, "the static build opens no detail");
+  assert.match(html, /<details class="is-detail wb-advanced"[^>]*\bopen\b/, "only the manual L disclosure opens by default");
 });
 
 test("the matrix uses one roving tab stop, filters real rows and selects a pair", async () => {
@@ -2057,9 +2086,20 @@ test("the matrix uses one roving tab stop, filters real rows and selects a pair"
   const primary = matrixRowByValue(dom, "--color-primary-text|--color-primary-surface|text");
   const textRow = matrixRowByValue(dom, "--color-text|--color-bg|text");
   assert.equal(primary.button.disabled, false, "the factory enables the real matrix buttons");
+  // The active source scopes the catalogue before any user filter runs.
+  assert.equal(primary.row.hidden, false, "the selected source's pair is visible");
+  assert.equal(textRow.row.hidden, true, "an unrelated source's pair is not in the default scope");
+  assert.equal(dom.matrixAll.checked, false, "a selected source starts scoped");
+  assert.match(flat(dom.matrixCount), /1 abbinamento per Brand/);
+  assert.match(flat(dom.overviewScope), /Brand/);
   const zero = findAllIn(dom.overviewBox, '[data-smart-colors-workbench="matrix-inspect"]').filter((button) => button.getAttribute("tabindex") === "0");
   assert.equal(zero.length, 1, "only one matrix row owns the tab stop");
   assert.equal(zero[0], primary.button, "the selected row owns the tab stop");
+
+  // The explicit control widens the catalogue back to every pair.
+  dom.matrixAll.checked = true;
+  dom.matrixAll.dispatch("change");
+  assert.equal(textRow.row.hidden, false, "Tutti gli abbinamenti shows the full catalogue");
 
   dom.matrixSearch.value = "pagina";
   dom.matrixSearch.dispatch("input");
@@ -2089,8 +2129,36 @@ test("the matrix uses one roving tab stop, filters real rows and selects a pair"
   assert.equal(textRow.button.getAttribute("tabindex"), "0");
 });
 
+test("a new source restores the scoped catalogue and the all-pairs control remains explicit", async () => {
+  const { dom } = install(workbenchSession());
+  const primary = matrixRowByValue(dom, "--color-primary-text|--color-primary-surface|text");
+  const textRow = matrixRowByValue(dom, "--color-text|--color-bg|text");
+  dom.matrixAll.checked = true;
+  dom.matrixAll.dispatch("change");
+  assert.equal(textRow.row.hidden, false);
+  dom.swatchCanvas.dispatch("click");
+  await tick();
+  assert.equal(dom.source.value, "--palette-canvas");
+  assert.equal(dom.matrixAll.checked, false, "selecting a new source restores scoped mode");
+  assert.equal(textRow.row.hidden, false, "the canvas pair is in the canvas scope");
+  assert.equal(primary.row.hidden, true, "the brand pair leaves the canvas scope");
+  assert.match(flat(dom.matrixCount), /per Canvas/);
+  assert.match(flat(dom.overviewScope), /Canvas/);
+  // Clearing the source has nothing to scope; the catalogue is all-pairs again.
+  dom.source.value = "";
+  dom.source.dispatch("change");
+  assert.equal(dom.matrixAll.checked, true);
+  assert.equal(dom.matrixAll.disabled, true);
+  assert.equal(textRow.row.hidden, false);
+  assert.equal(primary.row.hidden, false);
+  assert.match(flat(dom.overviewScope), /Tutti gli abbinamenti/);
+});
+
 test("every matrix row takes its own pair measurement from each view, and running never keeps an old live result", () => {
   const { dom, controller } = install(workbenchSession());
+  // Measurement assertions span every row; widen the catalogue first.
+  dom.matrixAll.checked = true;
+  dom.matrixAll.dispatch("change");
   const selection = { pairId: "light|color|--color-primary-text|--color-primary-surface", theme: "light", comparison: "themes" };
   const primaryLight = { pairId: "light|color|--color-primary-text|--color-primary-surface", theme: "light", ratio: 3.1, minimum: 4.5, target: 4.6, status: "below-minimum" };
   const textLight = { pairId: "light|color|--color-text|--color-bg", theme: "light", ratio: 4.2, minimum: 4.5, target: 4.6, status: "below-minimum" };
@@ -2215,7 +2283,7 @@ test("manual L controls debounce one setLightness call, preserve focus and keep 
   assert.equal(range.value, "40", "the range follows the runtime draft when it is not focused");
 
   controller.publish({ phase: "complete", revision: 4, draft: {}, removed: [control], suggestion: null, error: null, views: [] });
-  assert.match(flat(dom.controlsBody), /Personalizzazione rimossa: verrà usato il fallback del token/);
+  assert.match(flat(dom.controlsBody), /Personalizzazione rimossa: si usa il fallback del token/);
   const remove = findAllIn(dom.controlsBody, '[data-smart-colors-workbench="remove-override"]')[0];
   const discard = findAllIn(dom.controlsBody, '[data-smart-colors-workbench="discard-draft"]')[0];
   assert.ok(remove && discard, "removal and draft discard are distinct controls");
@@ -2855,9 +2923,9 @@ test("narrow viewport keeps the proposal locally scrollable and the document nar
     assert.equal(wideLayout.overviewOpen, true, "the desktop overview is open by default");
     assert.ok(wideLayout.overviewTable, "the overview column carries the semantic matrix");
     assert.ok(wideLayout.overviewHeight > 200, "the overview column has real content: " + wideLayout.overviewHeight);
-    assert.ok(wideLayout.matrixScrollHeight > 0 && wideLayout.matrixScrollHeight <= 360, "the matrix stays bounded inside the overview column: " + wideLayout.matrixScrollHeight);
+    assert.ok(wideLayout.matrixScrollHeight > 0 && wideLayout.matrixScrollHeight <= 400, "the matrix stays bounded inside the overview column: " + wideLayout.matrixScrollHeight);
     assert.ok(wideLayout.overviewLeft < wideLayout.mainLeft, "the overview is the first column and the inspector the second: " + JSON.stringify(wideLayout));
-    assert.equal(wideLayout.specimenColumns, 1, "inside the narrower inspector column the two specimens stack: " + JSON.stringify(wideLayout));
+    assert.equal(wideLayout.specimenColumns, 2, "the broader inspector column fits the two specimens side by side: " + JSON.stringify(wideLayout));
     assert.equal(wideLayout.proposalColumns, 1, "the fixed proposal frames stack inside the narrower inspector column: " + JSON.stringify(wideLayout));
     assert.equal(wideLayout.proposalFrames.length, 2, "both proposal frames are mounted");
     for (const frame of wideLayout.proposalFrames) {
@@ -2865,10 +2933,11 @@ test("narrow viewport keeps the proposal locally scrollable and the document nar
       assert.equal(frame.width, 360, "the proposal viewport stays 360px wide");
       assert.equal(frame.height, 480, "the proposal viewport stays 480px tall");
     }
-    assert.equal(wideLayout.paletteDisplay, "flex", "the swatch strip is the desktop counterpart");
-    assert.equal(wideLayout.paletteOverflow, "auto", "the palette strip is bounded and scrolls locally");
+    assert.equal(wideLayout.paletteDisplay, "grid", "the wrapping swatch grid is the desktop counterpart");
+    assert.equal(wideLayout.paletteOverflow, "visible", "the palette never needs a local horizontal scroll");
+    assert.equal(wideLayout.paletteScroll, false, "every desktop source chip wraps inside the toolbar");
     assert.equal(wideLayout.sourceDisplay, "none", "the native select is removed on desktop, with no invisible focus stop: " + JSON.stringify(wideLayout));
-    assert.ok(wideLayout.specimenTop < 450, "the specimen starts above 450px at 1280: " + wideLayout.specimenTop);
+    assert.ok(wideLayout.specimenTop < 600, "the specimen stays high enough to be visible at 1280: " + wideLayout.specimenTop);
     assert.ok(wideLayout.toolbarWidth > 600, "the toolbar spans both desktop columns: " + wideLayout.toolbarWidth);
     assert.ok(Math.abs(wideLayout.toolbarLeft - wideLayout.overviewLeft) <= 1, "the toolbar starts at the overview edge and spans both columns");
     assert.ok(wideLayout.toolbarTop < wideLayout.overviewTop && wideLayout.toolbarTop < wideLayout.mainTop, "the toolbar precedes overview and inspector");
@@ -2940,7 +3009,7 @@ test("blocked source leaves the theme recovery control visible and a valid swatc
     assert.equal(blocked.correctionHidden, true, "the correction action is hidden while blocked");
     assert.ok(blocked.fieldsetVisible && blocked.fieldsetHeight > 0, "the theme recovery control stays visible: " + JSON.stringify(blocked));
     assert.equal(blocked.sourceDisplay, "none", "desktop uses the swatch strip, not a hidden focusable select");
-    assert.equal(blocked.paletteDisplay, "flex", "desktop swatches are visible");
+    assert.equal(blocked.paletteDisplay, "grid", "desktop swatches are visible");
 
     // The picker stays available as a recovery surface: it opens with an explicit empty state and
     // returns focus to its opener.

@@ -7,6 +7,7 @@ import { runDiagnosticWorkflow } from "./diagnostic-workflow.mjs";
 import { initSmartColors } from "./init.mjs";
 import { DEFAULT_CONFIG_FILE } from "./load-config.mjs";
 import { inspectTuningStatus } from "./report-data.mjs";
+import { REPORT_DOCUMENTS } from "./report-paths.mjs";
 
 // One shared, self-contained language instance for human usage names. The token-faithful fallback
 // for unknown cases lives in the helper, never as a copied table here.
@@ -42,11 +43,11 @@ const AUTOMATION_REQUIRED_LABEL = "verifica automatizzata richiesta";
 const USAGE = `Uso: smart-colors [build|check|init|audit|report] [opzioni]
 
 Comandi:
-  build   Genera i token colore semantici e i due artefatti HTML (predefinito)
+  build   Genera i token colore semantici e gli artefatti HTML (predefinito)
   check   Verifica che i token colore generati siano aggiornati
   init    Crea una palette iniziale e colors-tuning.css
   audit   Analizza in un browser i token generati e colors-tuning.css
-  report  Genera reports/smart-colors.html e reports/smart-colors-preview.html
+  report  Genera ${REPORT_DOCUMENTS.report} e ${REPORT_DOCUMENTS.preview}
 
 Opzioni:
   -c, --config <file>        File di configurazione relativo a --root (predefinito: ${DEFAULT_CONFIG_FILE})

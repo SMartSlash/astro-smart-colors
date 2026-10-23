@@ -11,8 +11,9 @@
 //   explicit/automatic dark blend, real `@property` declarations, full captured CSS and a manual
 //   download) follows it inside a closed native detail. The legacy resolved-color gallery stays
 //   elsewhere as a collapsed technical archive.
-// - `CONTRAST_WORKBENCH_CSS` is presentation-only CSS that reuses the preview
-//   tokens; it never paints an actual specimen. Specimens are real CSS consumer
+// - `CONTRAST_WORKBENCH_CSS` is the presentation-only stylesheet in
+//   `report-styles/workbench.css`, read once at import. It reuses the preview
+//   tokens and never paints an actual specimen; specimens are real CSS consumer
 //   frames rendered by the browser runtime with `var(--token)`.
 //
 // Browser responsibility:
@@ -24,10 +25,12 @@
 // not editable). Overrides are temporary public CSS tuning, not a rebuilt
 // generator. Suggestions only come from the runtime; this module never invents a
 // ratio, a pair or a colour distance.
+import { readFileSync } from "node:fs";
 import { createDesignerLanguage } from "./designer-language.mjs";
 import { createDesignTools } from "./design-recipes.mjs";
 import { colorCss, escape, list, record } from "./format-report-html.mjs";
 
+const WORKBENCH_STYLESHEET = new URL("./report-styles/workbench.css", import.meta.url);
 const HOOK = "data-smart-colors-workbench";
 const HOST_ID = "smart-colors-workbench";
 // Primary use choices are paginated inside one native dialog. The category list is derived from the
@@ -46,308 +49,10 @@ const PICKER_CATEGORIES = Object.freeze([
 const finite = (value) => typeof value === "number" && Number.isFinite(value);
 const text = (value) => typeof value === "string" && value.trim() ? value.trim() : null;
 
-// Presentation-only chrome for the guided flow. It reuses the preview tokens, adds
-// no paint of its own to the specimens and keeps native control chrome readable in
-// forced-colors mode. The ordinary layout is driven by named container queries
-// (`preview-section` for the bounded swatch strip, `wb-main` for the specimen pair),
-// never by a viewport media query.
-export const CONTRAST_WORKBENCH_CSS = `
-@layer components {
-  /* Quiet warm neutral chrome, black primary actions, no nested decorative boxes. */
-  .wb-visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
-
-  /* The toolbar is the only selection surface: palette, pair, comparison and theme stay together. */
-  .wb-workspace { min-width: 0; }
-  .wb-toolbar { min-width: 0; padding: var(--space-2); border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper-soft); }
-  .wb-toolbar-line { display: flex; flex-wrap: wrap; align-items: end; gap: var(--space-2) var(--space-3); min-width: 0; }
-  .wb-toolbar-line > * { min-width: 0; max-width: 100%; }
-  .wb-toolbar-line + .wb-toolbar-line { margin-block-start: var(--space-2); padding-block-start: var(--space-2); border-block-start: 1px solid var(--line); }
-  .wb-palette-line { align-items: center; }
-  .wb-control-line { align-items: end; }
-  .wb-source-select { flex: 1 1 13rem; min-width: 0; }
-  .wb-pair-field { flex: 1 1 20rem; min-width: 0; }
-  .wb-current-use { flex: 1 1 16rem; min-width: 0; display: grid; gap: .15rem; align-content: center; }
-  .wb-current-use-label { font-size: var(--text-xs); font-weight: 750; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-soft); }
-  .wb-current-use-value { margin: 0; font-size: var(--text-base); overflow-wrap: anywhere; }
-  .wb-current-use-kind { margin-inline-start: var(--space-2); font-size: var(--text-xs); font-weight: 650; color: var(--ink-soft); }
-  .wb-current-use-tech { display: block; font-size: var(--text-xs); overflow-wrap: anywhere; }
-  .wb-open-picker { flex: 0 0 auto; min-height: 2.75rem; font: inherit; color: var(--paper); background: var(--ink); border: 1px solid var(--ink); border-radius: var(--radius-sm); padding: var(--space-1) var(--space-3); cursor: pointer; }
-  .wb-open-picker:hover { background: var(--ink-soft); }
-  .wb-open-picker:disabled { cursor: not-allowed; opacity: .65; }
-
-  /* Source swatches: compact horizontal chips with a 44px target and a bounded scroll strip. */
-  .wb-swatch { display: grid; grid-template-columns: .9rem minmax(0, 1fr); grid-template-areas: "bar name"; align-items: center; gap: .4rem; width: auto; min-width: 8.5rem; max-width: 13rem; height: 44px; min-height: 44px; padding: 0 var(--space-2); font: inherit; text-align: start; color: var(--ink); background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius-sm); cursor: pointer; }
-  .wb-swatch-block { grid-area: bar; width: .9rem; height: 1.5rem; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--sample-color, var(--soft)); }
-  .wb-swatch-name { grid-area: name; display: block; min-width: 0; font-size: var(--text-sm); font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .wb-swatch-mark { display: none; margin-inline-end: .35em; color: var(--ink); font-weight: 750; }
-  .wb-swatch:hover { border-color: var(--ink-soft); }
-  .wb-swatch:disabled { cursor: default; }
-  .wb-swatch[aria-pressed="true"] { border-color: var(--ink); background: var(--soft); box-shadow: inset 0 0 0 1px var(--ink); }
-  .wb-swatch[aria-pressed="true"] .wb-swatch-mark { display: inline; }
-
-  /* Generated pairs: readable rows in the paginated picker. */
-  .wb-use { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "main mark" "kind mark"; align-items: center; gap: 0 var(--space-2); width: 100%; min-height: 44px; padding: var(--space-1) var(--space-2); font: inherit; font-size: var(--text-sm); text-align: start; color: var(--ink); background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius-sm); cursor: pointer; }
-  .wb-use-main { grid-area: main; display: grid; gap: 1px; min-width: 0; }
-  .wb-use-label { overflow-wrap: anywhere; }
-  .wb-use-tech { font-size: var(--text-xs); color: var(--ink-muted); overflow-wrap: anywhere; }
-  .wb-use-tech code { padding: 0; background: none; }
-  .wb-use-kind { grid-area: kind; font-size: var(--text-xs); color: var(--ink-muted); }
-  .wb-use:hover { border-color: var(--ink-soft); }
-  .wb-use:disabled { cursor: default; }
-  .wb-use[aria-pressed="true"] { border-color: var(--ink); background: var(--soft); font-weight: 650; }
-  .wb-use-mark { grid-area: mark; display: none; color: var(--ink); }
-  .wb-use[aria-pressed="true"] .wb-use-mark { display: inline; }
-  .wb-uses-empty, .wb-uses-note { margin: 0; font-size: var(--text-sm); color: var(--ink-soft); }
-
-  /* Native picker dialog: human search, category and paginated real uses. */
-  .wb-picker-dialog { width: min(40rem, calc(100vw - 2rem)); max-width: 40rem; max-block-size: 90dvh; padding: 0; border: 1px solid var(--ink); border-radius: var(--radius); background: var(--paper); color: var(--ink); box-shadow: 0 1.5rem 3rem rgb(0 0 0 / .22); }
-  .wb-picker-dialog::backdrop { background: color-mix(in oklab, var(--ink) 35%, transparent); }
-  .wb-picker-panel { display: grid; grid-template-rows: auto auto auto minmax(0, 1fr) auto; gap: var(--space-2); max-block-size: 90dvh; padding: var(--space-3); overflow: hidden; }
-  .wb-picker-header { display: grid; gap: var(--space-1); }
-  .wb-picker-header h2 { margin: 0; font-size: var(--text-md); }
-  .wb-picker-filters { display: flex; flex-wrap: wrap; align-items: end; gap: var(--space-2); }
-  .wb-picker-filters .wb-field { flex: 1 1 12rem; }
-  .wb-picker-filters .wb-ghost { flex: 0 0 auto; }
-  .wb-picker-count { margin: 0; font-size: var(--text-xs); color: var(--ink-soft); }
-  .wb-picker-results { min-height: 0; overflow: auto; overscroll-behavior: contain; }
-  .wb-picker-footer { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; justify-content: space-between; padding-block-start: var(--space-2); border-block-start: 1px solid var(--line); }
-  .wb-picker-footer button { min-height: 2.75rem; font: inherit; color: var(--ink); background: var(--paper-soft); border: 1px solid var(--ink); border-radius: var(--radius-sm); padding: var(--space-1) var(--space-3); cursor: pointer; }
-  .wb-picker-footer button:hover { background: var(--soft); }
-  .wb-picker-footer button[aria-disabled="true"] { opacity: .55; cursor: not-allowed; }
-  .wb-picker-footer button:disabled { cursor: not-allowed; opacity: .65; }
-
-  /* Comparison: identity first, then the full-width specimens and their compact results. */
-  .wb-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-2); }
-  .wb-current { margin: 0; font-size: var(--text-md); }
-  .wb-identity { margin: 0; font-size: var(--text-sm); color: var(--ink-soft); overflow-wrap: anywhere; }
-  .wb-identity code { overflow-wrap: anywhere; }
-  .wb-purpose { flex-basis: 100%; margin: 0; font-size: var(--text-sm); color: var(--ink-soft); }
-  .wb-status { margin: 0; font-size: var(--text-sm); color: var(--ink-soft); }
-  .wb-scope-note { margin: 0; font-size: var(--text-xs); color: var(--ink-muted); }
-  .wb-view-title { font-size: var(--text-base); }
-  .wb-ratio { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2); margin: 0; }
-  .wb-ratio-value { font-size: var(--text-lg); font-weight: 750; font-variant-numeric: tabular-nums; }
-  .wb-verdict { font-size: var(--text-sm); font-weight: 750; }
-  .wb-verdict[data-status="pass"], .wb-verdict[data-status="below-target"] { color: var(--ink); }
-  .wb-verdict[data-status="below-minimum"] { color: var(--ink); }
-  .wb-verdict[data-status="unmeasured"] { color: var(--ink-muted); }
-  .wb-coverage { display: block; margin-block-start: var(--space-1); font-size: var(--text-xs); color: var(--ink-muted); }
-  .wb-ghost { font: inherit; font-size: var(--text-sm); color: var(--ink-soft); background: none; border: 1px solid var(--line); border-radius: var(--radius-sm); padding: var(--space-2) var(--space-3); min-height: 2.25rem; cursor: pointer; }
-  .wb-ghost:hover { color: var(--ink); border-color: var(--ink-soft); }
-
-  /* Source palette archive (read-only details) */
-  .wb-source-list { display: grid; gap: var(--space-3); list-style: none; padding: 0; margin-block: var(--space-3); }
-  .wb-source-item { padding-block: var(--space-3); border-block-start: 1px solid var(--line); min-width: 0; }
-  .wb-source-item:first-child { border-block-start: 0; padding-block-start: 0; }
-  .wb-source-head { font-size: var(--text-sm); font-weight: 700; margin-block-end: var(--space-2); }
-  .wb-source-value { display: block; font-size: var(--text-sm); margin-block-end: var(--space-2); }
-  .wb-declaration { display: block; overflow-x: auto; padding: var(--space-2); border: 1px dashed var(--ink-muted); border-radius: var(--radius-sm); background: var(--paper-soft); font-size: var(--text-xs); white-space: pre-wrap; overflow-wrap: anywhere; }
-  .wb-source-copy { margin-block-start: var(--space-3); }
-  .wb-source-copy textarea, .wb-suggestions textarea { width: 100%; min-height: 8rem; font: inherit; font-size: var(--text-sm); color: var(--ink); background: var(--paper); border: 1px solid var(--ink-muted); border-radius: var(--radius); padding: var(--space-2); }
-
-  .wb-compare { display: flex; flex-wrap: wrap; align-items: end; gap: var(--space-2) var(--space-4); flex: 1 1 auto; min-width: 0; max-width: 100%; margin: 0; padding: 0; border: 0; }
-  .wb-compare .wb-fieldset { flex: 1 1 12rem; min-width: 0; max-width: 100%; padding: 0; gap: var(--space-1) var(--space-3); border: 0; }
-  .wb-compare .wb-theme-fieldset { flex: 0 1 auto; }
-  .wb-compare .wb-fieldset legend { font-size: var(--text-xs); font-weight: 750; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-soft); }
-  .wb-compare .wb-fieldset label { min-height: 1.75rem; }
-  /* The theme control stays form-associated with the selection form via the form attribute. */
-  .wb-theme-fieldset { flex: 0 1 auto; min-width: 0; max-width: 100%; display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); margin: 0; padding: 0; border: 0; }
-  .wb-field { display: grid; gap: .3rem; min-width: 0; }
-  .wb-field > label { font-size: var(--text-sm); font-weight: 650; }
-  .wb-field input, .wb-field select { width: 100%; min-width: 0; max-width: 100%; min-height: 2.75rem; font: inherit; color: var(--ink); background: var(--paper); border: 1px solid var(--ink-muted); border-radius: var(--radius-sm); padding: var(--space-1) var(--space-2); }
-  .wb-fieldset { flex: 1 1 12rem; display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); margin: 0; padding: var(--space-2) 0; border: 0; border-block-start: 1px solid var(--line); }
-  .wb-fieldset legend { padding: 0; font-size: var(--text-sm); font-weight: 650; }
-  .wb-fieldset label { display: inline-flex; align-items: center; gap: .35rem; min-height: 2rem; font-size: var(--text-sm); }
-  .wb-details { padding-block: var(--space-2); }
-  .wb-thresholds { display: grid; gap: var(--space-1); font-size: var(--text-sm); margin-block: var(--space-2); }
-  .wb-thresholds div { display: grid; grid-template-columns: minmax(8rem, auto) minmax(0, 1fr); gap: var(--space-2); }
-  .wb-thresholds dt { font-weight: 650; }
-  .wb-controls, .wb-suggestions { padding-block: var(--space-2); }
-  .wb-control-grid { display: grid; gap: var(--space-3); }
-  .wb-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-block: var(--space-2); }
-  .wb-actions button { min-height: 2.75rem; font: inherit; color: var(--ink); background: var(--paper-soft); border: 1px solid var(--ink); border-radius: var(--radius-sm); padding: var(--space-1) var(--space-3); cursor: pointer; }
-  .wb-actions button:hover { background: var(--soft); }
-  .wb-actions button:disabled { cursor: not-allowed; opacity: .65; }
-  /* Black primary: the three contextual actions that change or accept a correction. */
-  .wb-actions button[data-smart-colors-workbench="suggest-foreground"],
-  .wb-actions button[data-smart-colors-workbench="suggest-background"],
-  .wb-actions button[data-smart-colors-workbench="apply"] { color: var(--paper); background: var(--ink); }
-  .wb-actions button[data-smart-colors-workbench="suggest-foreground"]:hover,
-  .wb-actions button[data-smart-colors-workbench="suggest-background"]:hover,
-  .wb-actions button[data-smart-colors-workbench="apply"]:hover { background: var(--ink-soft); }
-  .wb-actions .wb-download { display: inline-flex; align-items: center; min-height: 2.75rem; padding: var(--space-1) var(--space-3); border: 1px solid var(--ink); border-radius: var(--radius-sm); font-weight: 650; }
-
-  /* One contextual action strip below the specimens: state, actions, proposal and frames. */
-  .wb-action-strip { padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); }
-  .wb-strip-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--space-1) var(--space-3); }
-  .wb-strip-head h3 { margin: 0; }
-  .wb-strip-head .wb-action-theme { margin: 0; }
-  .wb-proposal[hidden] { display: none; }
-  .wb-proposal { margin-block: var(--space-2) 0; padding-inline-start: var(--space-3); border-inline-start: .3rem solid var(--line); font-size: var(--text-sm); }
-  .wb-proposal-title { font-weight: 750; }
-  .wb-proposal-value { display: block; margin-block: var(--space-2); padding: var(--space-2); border: 1px dashed var(--ink-muted); border-radius: var(--radius-sm); background: var(--paper-soft); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-  .wb-proposal-frames { padding-block-start: var(--space-3); border-block-start: 1px solid var(--line); }
-  .wb-proposal-frames > h4 { grid-column: 1 / -1; margin-block-end: var(--space-2); }
-  /* The proposal frames are the exact fixed verification viewport (360x480). On a narrow host the
-     frame is intentionally wider than its column: scroll locally instead of clipping it or resizing
-     the measured viewport. Scoped to the proposal containers only; the main views keep clipping. */
-  .wb-proposal-frames .wb-frame { overflow: auto; overscroll-behavior: contain; background: var(--soft); }
-  .wb-proposal-frames .wb-frame iframe { margin-inline: auto; box-shadow: 0 0 0 1px var(--line); }
-  .wb-catalogue { padding-inline-start: 1.2rem; font-size: var(--text-sm); color: var(--ink-soft); }
-  .wb-catalogue li { margin-block: var(--space-1); max-width: none; }
-  /* Criterion reference: a closed native detail, never a banner of universal compliance. */
-  .wb-criteria-list { display: grid; gap: var(--space-1); margin: var(--space-2) 0 0; font-size: var(--text-sm); }
-  .wb-criteria-list > div { display: grid; grid-template-columns: minmax(9rem, auto) minmax(0, 1fr); gap: var(--space-2); }
-  .wb-criteria-list dt { font-weight: 650; }
-  .wb-criteria-list dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
-  .wb-action-theme { margin: 0; font-size: var(--text-sm); color: var(--ink-soft); }
-
-  /* Compact per-frame results: ratio, criterion and target stay scannable. */
-  .wb-measure { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr)); gap: 0 var(--space-4); margin-block: var(--space-1) 0; font-size: var(--text-xs); align-self: start; }
-  .wb-measure > .wb-measure-row { grid-column: 1 / -1; }
-  .wb-measure > .wb-threshold { grid-column: auto; display: block; }
-  .wb-measure-row { display: grid; grid-template-columns: minmax(6rem, auto) minmax(0, 1fr); gap: var(--space-1) var(--space-2); max-width: none; padding-block: 1px; }
-  .wb-measure-row dt { font-weight: 650; }
-  .wb-measure-row dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
-  .wb-threshold { max-width: none; }
-  .wb-nojs { font-size: var(--text-sm); color: var(--ink-soft); }
-  .wb-frame { min-height: 7rem; border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); overflow: hidden; }
-  .wb-frame iframe { display: block; width: 100%; min-height: 7rem; border: 0; }
-
-  /* Overview: a bounded, scannable matrix of real pairs. On narrow containers the native disclosure
-     stays collapsed by default; on desktop the body is always visible. */
-  .wb-overview { min-width: 0; }
-  .wb-overview-summary { display: block; min-height: 2.75rem; padding: var(--space-2); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--paper-soft); font-size: var(--text-sm); font-weight: 650; color: var(--ink); cursor: pointer; }
-  .wb-overview-summary:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
-  .wb-overview-summary::marker { color: var(--ink-soft); }
-  .wb-overview[open] > .wb-overview-body { display: grid; gap: var(--space-2); align-content: start; }
-  .wb-overview-body { min-width: 0; }
-  .wb-snapshot-note { margin: 0; font-size: var(--text-xs); color: var(--ink-muted); }
-  .wb-overview-filters { display: flex; flex-wrap: wrap; align-items: end; gap: var(--space-2); }
-  .wb-overview-filters .wb-field { flex: 1 1 11rem; }
-  .wb-overview-filters .wb-ghost { flex: 0 0 auto; min-height: 2.75rem; }
-  /* The sticky header inside the bounded scroll region makes Chromium report the clipped table as
-     document scroll overflow. Paint containment keeps the region scrollable without leaking height
-     to the page, so the preview has no trailing blank canvas. */
-  .wb-matrix-scroll { max-block-size: 22rem; min-width: 0; overflow: auto; contain: paint; overscroll-behavior: contain; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--paper); }
-  .wb-matrix-scroll:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
-  .wb-matrix { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: var(--text-sm); }
-  .wb-matrix caption { padding: var(--space-2); text-align: start; font-size: var(--text-xs); color: var(--ink-muted); }
-  .wb-matrix col.wb-matrix-col-uso { inline-size: 46%; }
-  .wb-matrix col.wb-matrix-col-view { inline-size: 27%; }
-  .wb-matrix th, .wb-matrix td { padding: var(--space-1) var(--space-2); border-block-end: 1px solid var(--line); text-align: start; vertical-align: top; overflow-wrap: anywhere; }
-  .wb-matrix thead th { position: sticky; inset-block-start: 0; z-index: 1; background: var(--paper); font-size: var(--text-xs); font-weight: 750; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-soft); }
-  .wb-matrix tbody th { font-weight: 650; }
-  .wb-matrix tbody tr[aria-current="true"] { background: var(--soft); }
-  .wb-matrix-label { display: block; overflow-wrap: anywhere; }
-  .wb-matrix-tokens { display: block; margin-block-start: .1rem; font-size: var(--text-xs); color: var(--ink-muted); overflow-wrap: anywhere; }
-  .wb-matrix-ratio { display: block; font-variant-numeric: tabular-nums; font-weight: 650; }
-  .wb-matrix-status { display: block; font-size: var(--text-xs); }
-  .wb-matrix-thresholds { display: block; font-size: var(--text-xs); color: var(--ink-muted); }
-  .wb-matrix-source { display: block; margin-block-start: .15rem; font-size: var(--text-xs); font-weight: 650; color: var(--ink-muted); }
-  .wb-matrix-type { display: block; margin-block-start: .15rem; font-size: var(--text-xs); color: var(--ink-soft); }
-  .wb-matrix-view { min-inline-size: 0; }
-  .wb-matrix-inspect { min-height: 2.5rem; margin-block-start: .35rem; font: inherit; font-size: var(--text-sm); color: var(--ink); background: var(--paper-soft); border: 1px solid var(--ink); border-radius: var(--radius-sm); padding: var(--space-1) var(--space-2); cursor: pointer; }
-  .wb-matrix-inspect:hover { background: var(--soft); }
-  .wb-matrix-inspect:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
-  .wb-matrix-inspect:disabled { cursor: default; opacity: .65; }
-
-  /* The live "Aa" sample is chrome, not a token label: the label text stays outside the sample. */
-  .wb-view-chrome { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; }
-  .wb-aa { display: inline-grid; place-items: center; min-inline-size: 3rem; min-block-size: 3rem; padding: var(--space-1) var(--space-2); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--paper); color: var(--ink); font-size: 1.6rem; font-weight: 750; line-height: 1; letter-spacing: .02em; }
-  .wb-aa.is-unmeasured { color: var(--ink-muted); background: var(--paper-soft); }
-  .wb-view-meta { min-width: 0; font-size: var(--text-xs); color: var(--ink-muted); overflow-wrap: anywhere; }
-
-  /* Manual lightness: one range plus one exact number, always for a single public control. */
-  .wb-l-control { display: grid; gap: .3rem; margin-block-start: var(--space-2); padding-block-start: var(--space-2); border-block-start: 1px dashed var(--line); }
-  .wb-l-control legend { padding: 0; font-size: var(--text-sm); font-weight: 650; }
-  .wb-l-inputs { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
-  .wb-l-inputs input[type="range"] { flex: 1 1 9rem; min-width: 6rem; min-height: 2.5rem; }
-  .wb-l-inputs input[type="number"] { inline-size: 5.5rem; min-height: 2.5rem; }
-  .wb-l-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
-  .wb-l-actions button { min-height: 2.25rem; }
-
-  /* Exploration is advisory and read-only: no selection affordance, no coverage claim. */
-  .wb-exploration-table { width: 100%; border-collapse: collapse; font-size: var(--text-xs); }
-  .wb-exploration-table caption { padding: var(--space-2); text-align: start; color: var(--ink-muted); }
-  .wb-exploration-table th, .wb-exploration-table td { padding: var(--space-1) var(--space-2); border-block-end: 1px solid var(--line); text-align: start; vertical-align: top; }
-  .wb-exploration-table thead th { font-weight: 750; color: var(--ink-soft); }
-}
-@layer layout {
-  /* A single full-width workspace: toolbar above, specimens and action strip below. */
-  .wb-workspace { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); align-items: start; }
-  .wb-main { display: grid; gap: var(--space-2); align-content: start; min-width: 0; container-name: wb-main; container-type: inline-size; }
-  /* The shell's generic header rule must not paint the nested workbench identity as a page header. */
-  .wb-head { padding-block-end: var(--space-1); border-block-end: 1px solid var(--line); }
-  /* Narrow: one native source select. Desktop: the compact horizontal swatch strip. */
-  .wb-palette { display: none; flex: 1 1 28rem; gap: var(--space-1); margin: 0; padding: 0 0 var(--space-1); list-style: none; overflow-x: auto; overscroll-behavior-inline: contain; scrollbar-width: thin; }
-  .wb-palette > li { flex: none; }
-  .wb-source-select { min-width: 0; }
-  .wb-palette-label { display: none; flex: 0 0 auto; font-size: var(--text-sm); font-weight: 650; color: var(--ink-soft); }
-  .wb-control-line .wb-compare { flex: 1 1 26rem; }
-  .wb-uses { display: grid; gap: var(--space-1); margin: 0; padding: 0; list-style: none; }
-  /* Two full-width specimens when the workbench itself is wide enough; stacked on mobile. */
-  .wb-frames { display: grid; gap: var(--space-2); grid-template-columns: minmax(0, 1fr); align-items: stretch; margin-block-start: var(--space-1); }
-  .wb-frames[hidden] { display: none; }
-  .wb-proposal-frames[hidden] { display: none; }
-  .wb-action-strip [hidden] { display: none; }
-  .wb-view { display: grid; grid-template-rows: auto auto 1fr; align-content: start; gap: var(--space-1); min-width: 0; }
-  .wb-frames:not(.wb-proposal-frames) .wb-frame iframe { block-size: 18rem; }
-  @container wb-main (min-width: 40rem) {
-    .wb-frames:not(.wb-proposal-frames) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .wb-frames:not(.wb-proposal-frames) .wb-frame iframe { block-size: 15rem; }
-  }
-  /* The fixed 360x480 proposal frames sit side by side only when the workbench itself can hold two
-     of them. Below that width they stay stacked and each container scrolls locally. */
-  @container wb-main (min-width: 48rem) {
-    .wb-proposal-frames { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  }
-  @container preview-section (min-width: 45rem) {
-    .wb-palette-label { display: block; }
-    .wb-palette { display: flex; }
-    /* Desktop uses the visible swatch strip as the source control. The native select is removed
-       from layout and the tab order entirely; it is not an invisible focus stop. */
-    .wb-source-select { display: none; }
-  }
-  /* Desktop overview + inspector when the workbench container has room; mobile keeps one column. */
-  .wb-shell { min-width: 0; container-name: wb-shell; container-type: inline-size; }
-  @container wb-shell (min-width: 64rem) {
-    .wb-workspace { grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); }
-    .wb-toolbar { grid-column: 1 / -1; }
-    .wb-overview { grid-column: 1; }
-    .wb-main { grid-column: 2; }
-  }
-  /* No 38rem table on a 390px screen: the same three columns wrap inside the available width. */
-  @container wb-shell (max-width: 48rem) {
-    .wb-matrix { font-size: var(--text-xs); }
-    .wb-matrix col.wb-matrix-col-uso { inline-size: 48%; }
-    .wb-matrix col.wb-matrix-col-view { inline-size: 26%; }
-    /* A narrow column cannot afford uppercase tracking: the dynamic view label wraps per word.
-       Keep the same text, drop the decorative casing so the header stays two or three lines. */
-    .wb-matrix thead th { text-transform: none; letter-spacing: 0; font-weight: 650; }
-    .wb-matrix th, .wb-matrix td { padding: .35rem .4rem; }
-    .wb-matrix-inspect { inline-size: 100%; padding: .3rem .35rem; font-size: var(--text-xs); }
-  }
-}
-@layer preferences {
-  @media (forced-colors: active) {
-    .wb-toolbar, .wb-swatch, .wb-use, .wb-details, .wb-controls, .wb-suggestions, .wb-action-strip, .wb-frame, .wb-field input, .wb-field select, .wb-fieldset, .wb-source-copy textarea, .wb-suggestions textarea, .wb-picker-dialog { border: 1px solid CanvasText; }
-    .wb-actions button, .wb-ghost, .wb-open-picker, .wb-picker-footer button, .wb-matrix-inspect { border: 1px solid ButtonText; color: ButtonText; background: ButtonFace; }
-    .wb-swatch[aria-pressed="true"], .wb-use[aria-pressed="true"] { border-color: Highlight; background: HighlightText; color: Highlight; }
-    .wb-swatch-mark, .wb-use-mark { color: Highlight; }
-    .wb-matrix tbody tr[aria-current="true"] { background: Highlight; color: HighlightText; }
-    .wb-aa { border: 1px solid CanvasText; }
-    .wb-matrix-scroll, .wb-aa, .wb-exploration-table, .wb-l-control { border-color: CanvasText; }
-  }
-  @media print {
-    .wb-workspace { display: block; }
-    .wb-actions, .wb-controls, .wb-suggestions { break-inside: avoid; }
-    .wb-frame { min-height: 4rem; }
-    .wb-picker-dialog { display: none; }
-    .wb-matrix-scroll { max-block-size: none; overflow: visible; }
-  }
-}
-`;
+// Presentation-only chrome, shared by every renderer. It reuses the preview tokens,
+// adds no paint of its own to the specimens and keeps native control chrome readable
+// in forced-colors mode. Loaded once at module import; the browser factory never needs it.
+export const CONTRAST_WORKBENCH_CSS = readFileSync(WORKBENCH_STYLESHEET, "utf8");
 
 // A source value may reach a scoped `--sample-color` custom property. Keep it to a
 // colour-like literal: no semicolon, brace, quote, resource reference or function
@@ -779,12 +484,12 @@ function pairIdentityHtml(pair) {
 function pairPurposeText(pair) {
   if (!pair) return "Scegli una coppia dal catalogo generato per leggere il criterio applicato.";
   if (pair.kind === "non-text") {
-    return "Componente non testuale · soglia 3:1 (SC 1.4.11) per le informazioni necessarie a identificare componenti e stati; un bordo decorativo non è automaticamente soggetto. Il campione statico non verifica focus, comportamento, visibilità o oscuramento.";
+    return "Componente non testuale · 3:1 (SC 1.4.11). Il campione statico non verifica focus, comportamento o oscuramento.";
   }
   if (pair.catalogueKind === "on-color") {
-    return "Testo su riempimento · soglia AA 4,5:1 (SC 1.4.3). L'etichetta del campione è da 16 px.";
+    return "Testo su riempimento · AA 4,5:1 (SC 1.4.3) · etichetta a 16 px.";
   }
-  return "Testo normale · soglia AA 4,5:1 (SC 1.4.3). Il corpo del campione è da 16 px.";
+  return "Testo normale · AA 4,5:1 (SC 1.4.3) · campione a 16 px.";
 }
 
 // Source/recipe/control metadata for one token of the selected pair. The declared role stays the
@@ -923,7 +628,7 @@ function controlRowsHtml(pair, theme, design) {
     for (const control of controlsFor(design, token, theme)) {
       const id = `smart-colors-workbench-control-${control.control.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
       if (control.kind === "override") {
-        rows.push(`<div class="wb-field"><label for="${escape(id)}"><code>${escape(token)}</code> · override completo</label><input id="${escape(id)}" type="text" data-control="${escape(control.control)}" data-kind="override" placeholder="es. oklch(0.5 0.1 250)" autocomplete="off" spellcheck="false">${lightRowsHtml(token, control.control)}<span class="margin-note">La rimozione di una personalizzazione salvata è distinta dallo scarto della bozza e richiede il runtime aggiornato.</span></div>`);
+        rows.push(`<div class="wb-field"><details class="wb-raw"><summary>CSS testuale (avanzato) · ${escape(token)}</summary><label for="${escape(id)}"><code>${escape(token)}</code> · override completo</label><input id="${escape(id)}" type="text" data-control="${escape(control.control)}" data-kind="override" placeholder="es. oklch(0.5 0.1 250)" autocomplete="off" spellcheck="false"></details>${lightRowsHtml(token, control.control)}<span class="margin-note">La rimozione di una personalizzazione salvata è distinta dallo scarto della bozza.</span></div>`);
       } else {
         const percent = control.defaultMix == null ? "" : String(Math.round(control.defaultMix * 100 * 100) / 100).replace(".", ",");
         // The default is a PLACEHOLDER, never an active value: an untouched mix is not submitted and
@@ -1192,7 +897,7 @@ function matrixStaticRowsHtml(pairs) {
   // The static HTML stays bounded. With JavaScript the view rebuilds the full matrix from the real
   // pair options before any filter can run, so the static rows carry only what the no-JS surface
   // shows: the search index and the row index belong to the rebuilt rows, not to this fallback.
-  return pairs.slice(0, 4).map((pair) => {
+  const rows = pairs.slice(0, 4).map((pair) => {
     const value = pickerValue(pair);
     const label = pairHasPickerLabel(pair) ? pairPickerDisplay(pair) : pairFallbackLabel(pair);
     const status = worstStatus(pair);
@@ -1200,25 +905,27 @@ function matrixStaticRowsHtml(pairs) {
     const darkStatus = text(pair.themes.dark && pair.themes.dark.status) || "unmeasured";
     return `<tr data-smart-colors-workbench="matrix-row" data-pair-value="${escape(value)}" data-status="${escape(status)}" data-all-pass="${lightStatus === "pass" && darkStatus === "pass" ? "true" : "false"}" data-unmeasured="${lightStatus === "unmeasured" || darkStatus === "unmeasured" ? "true" : "false"}" data-live-status="false"><th scope="row" class="wb-matrix-uso"><span class="wb-matrix-label">${escape(label)}</span><code class="wb-matrix-tokens">${escape(pair.foreground)} su ${escape(pair.background)}</code><span class="wb-matrix-type">${escape(matrixCriterionLabel(pair))}</span><button type="button" class="wb-matrix-inspect" data-smart-colors-workbench="matrix-inspect" data-pair-value="${escape(value)}" tabindex="-1" disabled>Ispeziona<span class="wb-visually-hidden"> ${escape(label)}</span></button></th><td class="wb-matrix-view" data-smart-colors-workbench="matrix-cell" data-slot="left">${matrixSnapshotHtml(pair.themes.light, "stima build")}</td><td class="wb-matrix-view" data-smart-colors-workbench="matrix-cell" data-slot="right">${matrixSnapshotHtml(pair.themes.dark, "stima build")}</td></tr>`;
   }).join("");
+  return `${rows}<tr data-smart-colors-workbench="matrix-empty" hidden><td colspan="3">Nessun abbinamento corrisponde alla selezione corrente.</td></tr>`;
 }
 
 function matrixHtml(pairs) {
   const total = pairs.length;
   const count = total === 1 ? "1 abbinamento" : `${total} abbinamenti`;
-  const visible = Math.min(total, 4);
-  const staticNote = total
-    ? `Senza JavaScript la panoramica mostra i primi ${visible} abbinamenti con stime di build; con JavaScript si popola dall'intero catalogo e mostra le misure live disponibili per ogni vista.`
-    : "Nessun abbinamento diagnostico disponibile: la matrice resta vuota e non inventa coppie.";
   return `<details class="wb-overview" data-smart-colors-workbench="overview" aria-labelledby="smart-colors-workbench-overview-title">
-<summary id="smart-colors-workbench-overview-title" class="wb-overview-summary">Abbinamenti e filtri</summary>
+<summary id="smart-colors-workbench-overview-title" class="wb-overview-summary">Abbinamenti e filtri <span id="smart-colors-workbench-overview-scope" class="wb-overview-scope">Tutti gli abbinamenti</span></summary>
 <div class="wb-overview-body">
-<p id="smart-colors-workbench-matrix-note" class="wb-snapshot-note">Ogni cella mostra la misura live quando il runtime ne ha una per quella coppia e quella vista; altrimenti una stima dello snapshot di build, sempre etichettata. Le due viste seguono tema e variante del confronto attivo. ${staticNote}</p>
+<p id="smart-colors-workbench-matrix-note" class="wb-snapshot-note">Misure live quando disponibili; altrimenti stime di build etichettate.</p>
+<noscript><p class="wb-snapshot-note">Senza JavaScript la matrice mostra solo le prime stime di build, non le misure live.</p></noscript>
 <div class="wb-overview-filters" role="search" aria-label="Cerca e filtra gli abbinamenti">
 <div class="wb-field"><label for="smart-colors-workbench-matrix-search">Cerca un abbinamento</label><input id="smart-colors-workbench-matrix-search" data-smart-colors-workbench="matrix-search" type="search" placeholder="es. testo card" autocomplete="off" spellcheck="false" disabled></div>
-<div class="wb-field"><label for="smart-colors-workbench-matrix-filter">Filtra per esito</label><select id="smart-colors-workbench-matrix-filter" data-smart-colors-workbench="matrix-filter" disabled><option value="">Tutti gli abbinamenti</option><option value="issues">Solo problemi (sotto soglia)</option><option value="below-minimum">Sotto il minimo</option><option value="below-target">Sotto il target</option><option value="pass">Minimo raggiunto</option><option value="unmeasured">Non misurati</option><option value="live">Con misura live</option></select></div>
-<button type="button" id="smart-colors-workbench-matrix-clear" data-smart-colors-workbench="matrix-clear" class="wb-ghost" disabled>Mostra tutti</button>
+<div class="wb-field"><label for="smart-colors-workbench-matrix-filter">Filtra per esito</label><select id="smart-colors-workbench-matrix-filter" data-smart-colors-workbench="matrix-filter" disabled><option value="">Tutti gli esiti</option><option value="issues">Solo problemi (sotto soglia)</option><option value="below-minimum">Sotto il minimo</option><option value="below-target">Sotto il target</option><option value="pass">Minimo raggiunto</option><option value="unmeasured">Non misurati</option><option value="live">Con misura live</option></select></div>
+<button type="button" id="smart-colors-workbench-matrix-clear" data-smart-colors-workbench="matrix-clear" class="wb-ghost" disabled>Azzera filtri</button>
+<label class="wb-scope-toggle"><input id="smart-colors-workbench-matrix-all" data-smart-colors-workbench="matrix-all" type="checkbox" checked disabled> Tutti gli abbinamenti</label>
 </div>
-<p id="smart-colors-workbench-matrix-count" data-smart-colors-workbench="matrix-count" role="status" aria-live="polite" class="wb-picker-count">${escape(count)} · live dove misurato, altrimenti stima build</p>
+<p id="smart-colors-workbench-matrix-count" data-smart-colors-workbench="matrix-count" role="status" aria-live="polite" class="wb-picker-count">${escape(count)}</p>
+<details class="is-detail wb-matrix-help"><summary>Come leggere la matrice</summary>
+<p class="margin-note">La matrice segue il colore sorgente; «Tutti gli abbinamenti» mostra il catalogo completo. Ogni cella usa la misura live quando esiste per quella coppia e quella vista, altrimenti una stima di build etichettata. Le misure valgono per la coppia e il tema mostrati: non sono un verdetto globale.</p>
+</details>
 <div class="wb-matrix-scroll" role="region" aria-labelledby="smart-colors-workbench-matrix-caption" aria-describedby="smart-colors-workbench-matrix-note" tabindex="0">
 <table class="wb-matrix">
 <caption id="smart-colors-workbench-matrix-caption">Abbinamenti tra token: uso e criterio, poi le due viste del confronto con la misura di ciascuna coppia.</caption>
@@ -1284,10 +991,10 @@ ${sourceSwatchesHtml(sources.entries, defaultSource)}
 <span class="wb-current-use-label">Uso attuale</span>
 <p id="smart-colors-workbench-current-use" ${HOOK}="current-use" class="wb-current-use-value"><strong>${escape(currentHuman)}</strong>${currentKind ? `<span class="wb-current-use-kind">${escape(currentKind)}</span>` : ""}${currentTech ? `<code class="wb-current-use-tech">${escape(currentTech)}</code>` : ""}</p>
 </div>
-<button type="button" id="smart-colors-workbench-open-picker" ${HOOK}="open-picker" class="wb-open-picker" disabled>Cambia uso</button>
+<button type="button" id="smart-colors-workbench-open-picker" ${HOOK}="open-picker" class="wb-open-picker" aria-haspopup="dialog" disabled>Cambia uso</button>
 <form id="smart-colors-workbench-selection" class="wb-compare" data-smart-colors-workbench="selection">
-<fieldset class="wb-fieldset"><legend>Confronta</legend><label><input id="smart-colors-workbench-comparison-themes" type="radio" name="smart-colors-workbench-comparison" value="themes" checked> Chiaro / scuro</label><label><input id="smart-colors-workbench-comparison-tuning" type="radio" name="smart-colors-workbench-comparison" value="tuning"${tuning.available ? "" : " disabled"}> Generato / personalizzato</label><label><input id="smart-colors-workbench-comparison-draft" type="radio" name="smart-colors-workbench-comparison" value="draft"${tuning.available ? "" : " disabled"}> Prima / dopo</label>${tuning.available ? "" : `<span class="margin-note">Confronti personalizzati non disponibili: ${escape(tuning.reason)}.</span>`}</fieldset>
-<fieldset class="wb-fieldset wb-theme-fieldset"><legend>Tema da modificare</legend><label><input id="smart-colors-workbench-theme-light" type="radio" name="smart-colors-workbench-theme" value="light" form="smart-colors-workbench-selection" checked> chiaro</label><label><input id="smart-colors-workbench-theme-dark" type="radio" name="smart-colors-workbench-theme" value="dark" form="smart-colors-workbench-selection"> scuro</label></fieldset>
+<fieldset class="wb-fieldset"><legend>Confronta</legend><label><input id="smart-colors-workbench-comparison-themes" type="radio" name="smart-colors-workbench-comparison" value="themes" checked> Chiaro/scuro</label><label><input id="smart-colors-workbench-comparison-tuning" type="radio" name="smart-colors-workbench-comparison" value="tuning"${tuning.available ? "" : " disabled"}> Generato/tuning</label><label><input id="smart-colors-workbench-comparison-draft" type="radio" name="smart-colors-workbench-comparison" value="draft"${tuning.available ? "" : " disabled"}> Prima/dopo</label>${tuning.available ? "" : `<span class="margin-note">Confronti personalizzati non disponibili: ${escape(tuning.reason)}.</span>`}</fieldset>
+<fieldset class="wb-fieldset wb-theme-fieldset"><legend>Tema</legend><label><input id="smart-colors-workbench-theme-light" type="radio" name="smart-colors-workbench-theme" value="light" form="smart-colors-workbench-selection" checked> chiaro</label><label><input id="smart-colors-workbench-theme-dark" type="radio" name="smart-colors-workbench-theme" value="dark" form="smart-colors-workbench-selection"> scuro</label></fieldset>
 </form>
 </div>
 </section>
@@ -1300,11 +1007,20 @@ ${matrixHtml(pairs)}
 </header>
 <p id="smart-colors-workbench-status" ${HOOK}="status" role="status" aria-live="polite" class="wb-status">Misura non disponibile senza JavaScript.</p>
 <div id="smart-colors-workbench-result" ${HOOK}="result" class="wb-frames" role="group" aria-label="Campioni CSS del consumatore">
-<section class="wb-view" aria-labelledby="smart-colors-workbench-left-title"><h3 id="smart-colors-workbench-left-title" class="wb-view-title">Tema chiaro</h3><div class="wb-view-chrome"><span class="wb-aa is-unmeasured" data-smart-colors-workbench="left-sample" aria-hidden="true">Aa</span><span id="smart-colors-workbench-left-meta" data-smart-colors-workbench="left-meta" class="wb-view-meta">Campione live non disponibile senza JavaScript.</span></div><div id="smart-colors-workbench-left" ${HOOK}="left" class="wb-frame" role="group" aria-label="Vista CSS sinistra"></div><dl id="smart-colors-workbench-left-measure" ${HOOK}="left-measure" class="wb-measure"><div class="wb-measure-row"><dt>Rapporto</dt><dd><span class="wb-verdict" data-status="unmeasured">Non misurato</span> · serve JavaScript</dd></div></dl></section>
-<section class="wb-view" aria-labelledby="smart-colors-workbench-right-title"><h3 id="smart-colors-workbench-right-title" class="wb-view-title">Tema scuro</h3><div class="wb-view-chrome"><span class="wb-aa is-unmeasured" data-smart-colors-workbench="right-sample" aria-hidden="true">Aa</span><span id="smart-colors-workbench-right-meta" data-smart-colors-workbench="right-meta" class="wb-view-meta">Campione live non disponibile senza JavaScript.</span></div><div id="smart-colors-workbench-right" ${HOOK}="right" class="wb-frame" role="group" aria-label="Vista CSS destra"></div><dl id="smart-colors-workbench-right-measure" ${HOOK}="right-measure" class="wb-measure"><div class="wb-measure-row"><dt>Rapporto</dt><dd><span class="wb-verdict" data-status="unmeasured">Non misurato</span> · serve JavaScript</dd></div></dl></section>
+<section class="wb-view" aria-labelledby="smart-colors-workbench-left-title"><div class="wb-view-head"><span data-smart-colors-workbench="left-sample" class="wb-aa is-unmeasured" aria-hidden="true">Aa</span><h3 id="smart-colors-workbench-left-title" class="wb-view-title">Tema chiaro</h3></div><span id="smart-colors-workbench-left-meta" data-smart-colors-workbench="left-meta" class="wb-view-meta wb-visually-hidden"></span><div id="smart-colors-workbench-left" ${HOOK}="left" class="wb-frame" role="group" aria-label="Vista CSS sinistra"></div><dl id="smart-colors-workbench-left-measure" ${HOOK}="left-measure" class="wb-measure"><div class="wb-measure-row wb-measure-ratio"><dt class="wb-visually-hidden">Rapporto</dt><dd><span class="wb-verdict" data-status="unmeasured">Non misurato</span> · serve JavaScript</dd></div></dl></section>
+<section class="wb-view" aria-labelledby="smart-colors-workbench-right-title"><div class="wb-view-head"><span data-smart-colors-workbench="right-sample" class="wb-aa is-unmeasured" aria-hidden="true">Aa</span><h3 id="smart-colors-workbench-right-title" class="wb-view-title">Tema scuro</h3></div><span id="smart-colors-workbench-right-meta" data-smart-colors-workbench="right-meta" class="wb-view-meta wb-visually-hidden"></span><div id="smart-colors-workbench-right" ${HOOK}="right" class="wb-frame" role="group" aria-label="Vista CSS destra"></div><dl id="smart-colors-workbench-right-measure" ${HOOK}="right-measure" class="wb-measure"><div class="wb-measure-row wb-measure-ratio"><dt class="wb-visually-hidden">Rapporto</dt><dd><span class="wb-verdict" data-status="unmeasured">Non misurato</span> · serve JavaScript</dd></div></dl></section>
 </div>
 <p id="smart-colors-workbench-empty" ${HOOK}="empty" class="wb-uses-empty" hidden>Nessuna coppia diagnostica per questa sorgente. Scegli un altro colore.</p>
 <p class="wb-scope-note">Le misure valgono per la coppia e il tema mostrati: non sono un verdetto di conformità globale.</p>
+<details class="is-detail wb-advanced" data-smart-colors-workbench="manual" open><summary>Regola la coppia (L)</summary>
+<form class="wb-controls" data-smart-colors-workbench="controls">
+<p class="margin-note">L e mix agiscono sulla bozza temporanea della coppia e del tema attivo; la palette sorgente resta di sola lettura. Il CSS testuale è un'alternativa avanzata.</p>
+<div id="smart-colors-workbench-controls" ${HOOK}="controls-body">${controlRowsHtml(selected, "light", design)}</div>
+<div class="wb-actions"><button type="submit" id="smart-colors-workbench-controls-submit">Applica override</button><button type="button" id="smart-colors-workbench-reset-pair" ${HOOK}="reset-pair">Scarta la bozza della coppia</button><button type="button" id="smart-colors-workbench-reset-all" ${HOOK}="reset-all">Scarta la bozza di tuning</button></div>
+<p class="margin-note">«Scarta la bozza…» non rimuove gli override già salvati: per quelli usa «Rimuovi personalizzazione» sul singolo controllo.</p>
+<p class="margin-note">Un override completo ha precedenza sul mix della superficie; il mix resta un valore pubblico separato.</p>
+</form>
+</details>
 <section class="wb-action-strip wb-suggestions" data-smart-colors-workbench="correction" aria-labelledby="smart-colors-workbench-suggestions-title">
 <div class="wb-strip-head"><h3 id="smart-colors-workbench-suggestions-title">Cerca una correzione</h3><p id="smart-colors-workbench-action-theme" ${HOOK}="action-theme" class="wb-action-theme">Tema per proposta e override: chiaro.</p></div>
 <div class="wb-actions"><button type="button" id="smart-colors-workbench-suggest-foreground" ${HOOK}="suggest-foreground">Correggi testo</button><button type="button" id="smart-colors-workbench-suggest-background" ${HOOK}="suggest-background">Correggi sfondo</button><button type="button" id="smart-colors-workbench-discard-suggestion" ${HOOK}="discard-suggestion" hidden disabled>Scarta proposta</button><button type="button" id="smart-colors-workbench-apply" ${HOOK}="apply" hidden disabled>Prova proposta</button></div>
@@ -1344,15 +1060,6 @@ ${tokenCatalogueHtml(design, pairs, sources)}
 <div class="wb-actions"><button type="button" id="smart-colors-workbench-exploration-run" data-smart-colors-workbench="exploration-run" disabled>Misura le combinazioni dei colori base</button></div>
 <p id="smart-colors-workbench-exploration-status" data-smart-colors-workbench="exploration-status" role="status" aria-live="polite" class="margin-note">Non misurato. Nessun dato vecchio viene mostrato.</p>
 <div id="smart-colors-workbench-exploration-results" data-smart-colors-workbench="exploration-results" class="wb-matrix-scroll"></div>
-</details>
-<details class="is-detail wb-advanced" data-smart-colors-workbench="manual"><summary>Modifica manualmente (avanzato)</summary>
-<form class="wb-controls" data-smart-colors-workbench="controls">
-<p class="margin-note">Ambito: solo i controlli pubblici dichiarati per i due token della coppia selezionata e per il tema attivo; i knob macro del generatore non sono esposti qui. Si inviano solo i campi che modifichi: i default dichiarati sono segnaposto e un mix non toccato non viene esportato. La L si applica subito alla bozza; «Applica override» invia solo i campi CSS testuali modificati. Un override completo ha precedenza sul mix della superficie; il mix resta un valore pubblico separato. Queste modifiche sono temporanee: non rigenerano il generatore e non modificano <code>palette.css</code>.</p>
-<div id="smart-colors-workbench-controls" ${HOOK}="controls-body">${controlRowsHtml(selected, "light", design)}</div>
-<div class="wb-actions"><button type="submit" id="smart-colors-workbench-controls-submit">Applica override</button><button type="button" id="smart-colors-workbench-reset-pair" ${HOOK}="reset-pair">Scarta la bozza della coppia</button><button type="button" id="smart-colors-workbench-reset-all" ${HOOK}="reset-all">Scarta la bozza di tuning</button></div>
-<p class="margin-note">«Scarta la bozza…» non rimuove gli override già salvati. Per quelli usa «Rimuovi personalizzazione» sul singolo controllo.</p>
-<p class="margin-note">Gli override sono applicati all'API del runtime; la palette sorgente resta di sola lettura.</p>
-</form>
 </details>
 <details class="is-detail wb-export" data-smart-colors-workbench="export"><summary>Esporta modifiche</summary>
 <p class="margin-note">Il comando di esportazione è nell'intestazione della pagina. Qui restano il CSS generato e il download manuale.</p>
@@ -1486,6 +1193,8 @@ export function createContrastWorkbenchView(deps) {
   var matrixSearch = byId("smart-colors-workbench-matrix-search");
   var matrixFilter = byId("smart-colors-workbench-matrix-filter");
   var matrixClear = byId("smart-colors-workbench-matrix-clear");
+  var matrixAll = byId("smart-colors-workbench-matrix-all");
+  var overviewScope = byId("smart-colors-workbench-overview-scope");
   var matrixCount = byId("smart-colors-workbench-matrix-count");
   var matrixViewA = byId("smart-colors-workbench-matrix-a");
   var matrixViewB = byId("smart-colors-workbench-matrix-b");
@@ -1503,6 +1212,7 @@ export function createContrastWorkbenchView(deps) {
   for (var swatchIndex = 0; swatchIndex < swatchNodes.length; swatchIndex += 1) swatchButtons.push(swatchNodes[swatchIndex]);
   var matrixBody = host.querySelector("[" + HOOK + '="matrix-body"]');
   var matrixEntries = [];
+  var matrixEmptyRow = null;
   var lastState = null;
   var lastAnnouncement = "";
   var lastControlsKey = "";
@@ -1673,12 +1383,12 @@ export function createContrastWorkbenchView(deps) {
     var kind = declaredKindOf(option);
     if (!kind) return "Tipo di coppia non riconosciuto: nessun criterio WCAG viene applicato.";
     if (kind === "non-text") {
-      return "Componente non testuale · soglia 3:1 (SC 1.4.11) per le informazioni necessarie a identificare componenti e stati; un bordo decorativo non è automaticamente soggetto. Il campione statico non verifica focus, comportamento, visibilità o oscuramento.";
+      return "Componente non testuale · 3:1 (SC 1.4.11). Il campione statico non verifica focus, comportamento o oscuramento.";
     }
     if (catalogueKindOf(option) === "on-color") {
-      return "Testo su riempimento · soglia AA 4,5:1 (SC 1.4.3). L'etichetta del campione è da 16 px.";
+      return "Testo su riempimento · AA 4,5:1 (SC 1.4.3) · etichetta a 16 px.";
     }
-    return "Testo normale · soglia AA 4,5:1 (SC 1.4.3). Il corpo del campione è da 16 px.";
+    return "Testo normale · AA 4,5:1 (SC 1.4.3) · campione a 16 px.";
   }
   function ratioText(value, thresholds) {
     if (!finite(value)) return "non misurata";
@@ -1917,11 +1627,11 @@ export function createContrastWorkbenchView(deps) {
     matrixEntries = [];
     var list = options();
     if (!list.length) {
-      var emptyRow = make("tr");
-      var emptyCell = make("td", null, "Nessun abbinamento diagnostico disponibile.");
-      setAttribute(emptyCell, "colspan", "3");
-      emptyRow.appendChild(emptyCell);
-      matrixBody.appendChild(emptyRow);
+      var missingRow = make("tr");
+      var missingCell = make("td", null, "Nessun abbinamento diagnostico disponibile.");
+      setAttribute(missingCell, "colspan", "3");
+      missingRow.appendChild(missingCell);
+      matrixBody.appendChild(missingRow);
       return;
     }
     for (var index = 0; index < list.length; index += 1) {
@@ -1978,6 +1688,14 @@ export function createContrastWorkbenchView(deps) {
       matrixEntries.push(entry);
       bindMatrixButton(entry);
     }
+    var emptyRow = make("tr");
+    setAttribute(emptyRow, "data-smart-colors-workbench", "matrix-empty");
+    emptyRow.hidden = true;
+    var emptyCell = make("td", null, "Nessun abbinamento corrisponde alla selezione corrente.");
+    setAttribute(emptyCell, "colspan", "3");
+    emptyRow.appendChild(emptyCell);
+    matrixBody.appendChild(emptyRow);
+    matrixEmptyRow = emptyRow;
     syncMatrixFocus();
     applyMatrixFilter();
   }
@@ -2010,6 +1728,15 @@ export function createContrastWorkbenchView(deps) {
     if (!matrixEntries.length) return;
     var query = matrixSearch ? foldLocal(matrixSearch.value) : "";
     var filter = matrixFilter ? matrixFilter.value : "";
+    var sourceToken = sourceSelect ? sourceSelect.value : "";
+    var scoped = Boolean(sourceToken) && !(matrixAll && matrixAll.checked);
+    var scopeValues = null;
+    if (scoped) {
+      var preferred = preferredUses(sourceToken);
+      scopeValues = {};
+      for (var p = 0; p < preferred.options.length; p += 1) scopeValues[preferred.options[p].value] = true;
+    }
+    var scopeName = scoped ? pickerSourceName(sourceToken) : "";
     var visible = 0;
     for (var index = 0; index < matrixEntries.length; index += 1) {
       var entry = matrixEntries[index];
@@ -2017,6 +1744,7 @@ export function createContrastWorkbenchView(deps) {
       var status = attribute(row, "data-status-effective") || attribute(row, "data-status") || "unmeasured";
       var live = attribute(row, "data-live-status") === "true";
       var haystack = attribute(row, "data-search") || "";
+      var matchScope = !scopeValues || scopeValues[entry.option.value] === true;
       var matchQuery = !query || haystack.indexOf(query) !== -1;
       var matchFilter = true;
       if (filter === "issues") matchFilter = status === "below-minimum" || status === "below-target";
@@ -2024,10 +1752,16 @@ export function createContrastWorkbenchView(deps) {
       else if (filter === "unmeasured") matchFilter = attribute(row, "data-unmeasured") === "true";
       else if (filter === "live") matchFilter = live;
       else if (filter) matchFilter = status === filter;
-      var show = matchQuery && matchFilter;
+      var show = matchScope && matchQuery && matchFilter;
       row.hidden = !show;
       if (show) visible += 1;
     }
+    if (matrixAll) {
+      matrixAll.disabled = !sourceToken;
+      matrixAll.checked = !scoped;
+    }
+    if (overviewScope) setIfChanged(overviewScope, scoped ? scopeName + " · " + visible : "Tutti gli abbinamenti");
+    if (matrixEmptyRow) matrixEmptyRow.hidden = visible !== 0;
     syncMatrixFocus();
     var active = doc.activeElement;
     for (var focusIndex = 0; focusIndex < matrixEntries.length; focusIndex += 1) {
@@ -2039,9 +1773,10 @@ export function createContrastWorkbenchView(deps) {
     }
     if (matrixCount) {
       var total = matrixEntries.length;
-      var message = String(visible) + (visible === 1 ? " abbinamento visibile" : " abbinamenti visibili") + " su " + String(total) + " · live dove misurato, altrimenti stima build";
-      var suffix = query || filter ? " · filtro attivo" : "";
-      if (matrixCount.textContent !== message + suffix) matrixCount.textContent = message + suffix;
+      var message = (scoped
+        ? String(visible) + (visible === 1 ? " abbinamento" : " abbinamenti") + " per " + scopeName + " · " + String(total) + " nel catalogo"
+        : String(visible) + (visible === 1 ? " abbinamento visibile" : " abbinamenti visibili") + " su " + String(total)) + (query || filter ? " · filtro attivo" : "");
+      if (matrixCount.textContent !== message) matrixCount.textContent = message;
     }
   }
   function moveMatrixFocus(button, direction) {
@@ -2297,8 +2032,11 @@ export function createContrastWorkbenchView(deps) {
         setAttribute(overrideInput, "autocomplete", "off");
         setAttribute(overrideInput, "spellcheck", "false");
         overrideInput.placeholder = "es. oklch(0.5 0.1 250)";
-        overrideRow.appendChild(overrideLabel);
-        overrideRow.appendChild(overrideInput);
+        var raw = make("details", "wb-raw");
+        raw.appendChild(make("summary", null, "CSS testuale (avanzato) · " + tokens[t]));
+        raw.appendChild(overrideLabel);
+        raw.appendChild(overrideInput);
+        overrideRow.appendChild(raw);
         appendLightnessControls(overrideRow, tokens[t], controls.override, state);
         appendPersonalizationActions(overrideRow, tokens[t], controls.override);
         controlsBody.appendChild(overrideRow);
@@ -2418,10 +2156,10 @@ export function createContrastWorkbenchView(deps) {
       setAttribute(entry.range, "aria-valuetext", "non disponibile");
     }
     if (!entry.supported) entry.note.textContent = "Il runtime non espone setLightness: il controllo L resta disabilitato e nessun valore viene inviato.";
-    else if (removed.indexOf(entry.control) !== -1) entry.note.textContent = "Personalizzazione rimossa: verrà usato il fallback del token. Imposta L per aggiungere un nuovo override oppure usa il controllo testuale.";
-    else if (!available) entry.note.textContent = "L non disponibile: il runtime non ha restituito una L leggibile (colore calcolato non serializzato in OKLCH). Nessun valore viene inventato; usa il controllo testuale o attendi la misura.";
-    else if (fromDraft) entry.note.textContent = "L dalla bozza corrente, mostrata arrotondata a 0,1; C e H sono quelli del colore calcolato. Gli altri knob (mix/macro) restano attivi e possono contribuire al risultato.";
-    else entry.note.textContent = "L letta dal colore CSS calcolato dal runtime, mostrata arrotondata a 0,1; C e H sono quelli del colore. Gli altri knob (mix/macro) restano attivi e possono contribuire al risultato.";
+    else if (removed.indexOf(entry.control) !== -1) entry.note.textContent = "Personalizzazione rimossa: si usa il fallback del token. Imposta L o il CSS testuale per aggiungerne una.";
+    else if (!available) entry.note.textContent = "L non disponibile: il runtime non ha restituito una L leggibile in OKLCH. Nessun valore viene inventato; usa il controllo testuale o attendi la misura.";
+    else if (fromDraft) entry.note.textContent = "L dalla bozza, arrotondata a 0,1; altri knob (mix/macro) restano attivi.";
+    else entry.note.textContent = "L letta dal colore CSS calcolato, arrotondata a 0,1; altri knob (mix/macro) restano attivi.";
   }
   function syncLightness(state) {
     for (var index = 0; index < lightnessInputs.length; index += 1) syncLightnessEntry(lightnessInputs[index], state);
@@ -2578,17 +2316,17 @@ export function createContrastWorkbenchView(deps) {
     }
     syncLightness(state);
   }
-  function measureRow(label, content) {
+  // Supplementary rows inside a <details> are not dl groups: they use spans so the dl stays valid.
+  function detailValueRow(label, content) {
     var row = make("div", "wb-measure-row");
-    row.appendChild(make("dt", null, label));
-    var value = make("dd");
-    if (content !== null && content !== undefined) value.appendChild(content);
+    row.appendChild(make("span", "wb-measure-label", label));
+    var value = make("span");
+    value.appendChild(content);
     row.appendChild(value);
     return row;
   }
-  // Per-specimen result: specimen first, then a scoped ratio, the exact criterion and threshold derived
-  // from the measurement, the contextual applicability, and the project target with its own state.
-  // Any runtime error stays listed and is never hidden.
+  // Per-specimen result: one visible ratio/status; criterion, target and provenance live in the
+  // native detail. Runtime errors stay visible.
   function renderMeasure(node, view, slot, complete, option, state) {
     if (!node) return;
     clear(node);
@@ -2610,10 +2348,12 @@ export function createContrastWorkbenchView(deps) {
     var ratioDd = make("dd");
     ratioDd.appendChild(ratio);
     if (!complete) ratioDd.appendChild(make("span", "wb-coverage", "Copertura incompleta: questo esito è locale e non un verdetto globale."));
-    var ratioRow = make("div", "wb-measure-row");
-    ratioRow.appendChild(make("dt", null, "Rapporto"));
+    var ratioRow = make("div", "wb-measure-row wb-measure-ratio");
+    ratioRow.appendChild(make("dt", "wb-visually-hidden", "Rapporto"));
     ratioRow.appendChild(ratioDd);
     node.appendChild(ratioRow);
+    var detail = make("details", "wb-measure-more");
+    detail.appendChild(make("summary", null, "Dettagli della misura"));
     // Computed colours are shown verbatim from the runtime measurement. This module never converts or
     // recalculates them; a missing value fails soft with an explicit sentence instead of a paint.
     var computedForeground = measurement ? safeComputedColor(measurement.foreground) : null;
@@ -2628,25 +2368,25 @@ export function createContrastWorkbenchView(deps) {
     } else {
       computed.textContent = "Non misurati.";
     }
-    node.appendChild(measureRow("Colori CSS calcolati (runtime)", computed));
+    detail.appendChild(detailValueRow("Colori CSS calcolati (runtime)", computed));
     // One criterion+threshold row, one separate target row. Common applicability is stated once
     // above the frames, so each card never repeats the same paragraph.
-    var minimumRow = measureRow("Minimo richiesto e criterio", make("span", null, criterionValue(criterion)));
+    var minimumRow = detailValueRow("Minimo richiesto e criterio", make("span", null, criterionValue(criterion)));
     minimumRow.className += " wb-threshold";
-    node.appendChild(minimumRow);
-    var targetRow = measureRow("Obiettivo progetto (non WCAG)", make("span", null, targetText(criterion)));
+    detail.appendChild(minimumRow);
+    var targetRow = detailValueRow("Obiettivo progetto (non WCAG)", make("span", null, targetText(criterion)));
     targetRow.className += " wb-threshold";
-    node.appendChild(targetRow);
+    detail.appendChild(targetRow);
     var personalization = overrideSummary(state, view.theme, option);
-    if (personalization) node.appendChild(measureRow("Stato personalizzazioni", make("span", null, personalization)));
-    var provenance = make("details", "is-detail");
-    provenance.appendChild(make("summary", null, "Provenienza della misura"));
-    provenance.appendChild(make("p", null, slot + " · tema " + themeName(view.theme) + " · " + variantName(view.variant) + " · " + bytesText(view.variant)));
+    if (personalization) detail.appendChild(detailValueRow("Stato personalizzazioni", make("span", null, personalization)));
     var count = Array.isArray(view.measurements) ? view.measurements.length : 0;
-    if (count > 1) provenance.appendChild(make("p", null, "Misure: " + String(count)));
-    var provenanceRow = measureRow("Dettagli", provenance);
-    provenanceRow.firstChild.className = "wb-visually-hidden";
-    node.appendChild(provenanceRow);
+    detail.appendChild(make("p", "margin-note", "Provenienza: " + slot + " · tema " + themeName(view.theme) + " · " + variantName(view.variant) + " · " + bytesText(view.variant) + (count > 1 ? " · " + String(count) + " misure" : "") + "."));
+    var detailRow = make("div", "wb-measure-row wb-measure-more-row");
+    detailRow.appendChild(make("dt", "wb-visually-hidden", "Dettagli della misura"));
+    var detailValue = make("dd");
+    detailValue.appendChild(detail);
+    detailRow.appendChild(detailValue);
+    node.appendChild(detailRow);
     var errors = Array.isArray(view.errors) ? view.errors : [];
     if (errors.length) {
       var errorRow = make("div", "wb-measure-row");
@@ -3569,11 +3309,13 @@ export function createContrastWorkbenchView(deps) {
     if (!sourceSelect) return;
     var next = token || "";
     if (sourceSelect.value !== next) sourceSelect.value = next;
+    if (matrixAll && next) matrixAll.checked = false;
     var theme = checkedTheme();
     var preferred = preferredUses(next);
     if (!preferred.options.length) {
       setSourceBlocked(next ? "Nessuna coppia diagnostica per questo colore: la misura precedente è stata rimossa." : "Scegli un colore per vedere le coppie generate che lo usano.", next);
       syncPalette();
+      applyMatrixFilter();
       announce(next ? "Nessuna coppia diagnostica per questo colore." : "Scegli un colore per vedere le coppie generate che lo usano.");
       return;
     }
@@ -3582,6 +3324,7 @@ export function createContrastWorkbenchView(deps) {
     if (!target) {
       setSourceBlocked("Nessuna coppia disponibile per questo colore nel tema " + themeName(theme) + ". Cambia tema per confrontarla.", next);
       syncPalette();
+      applyMatrixFilter();
       announce("Nessuna coppia disponibile per questo colore nel tema " + themeName(theme) + ". Cambia tema per confrontarla.");
       return;
     }
@@ -4056,7 +3799,7 @@ export function createContrastWorkbenchView(deps) {
   // A source or pair choice takes effect immediately: the runtime invalidates the old ratio while it
   // measures, so the panel never shows pending details beside a stale measurement.
   listen(sourceSelect, "change", function () {
-    if (sourceSelect.value === "") { clearSourceBlocked(); filterPairs(); syncPalette(); return; }
+    if (sourceSelect.value === "") { clearSourceBlocked(); filterPairs(); syncPalette(); applyMatrixFilter(); return; }
     applySourceSelection(sourceSelect.value);
   });
   listen(openPicker, "click", openPickerDialog);
@@ -4178,12 +3921,14 @@ export function createContrastWorkbenchView(deps) {
   // hands the tab stop to the first visible row without selecting it.
   listen(matrixSearch, "input", applyMatrixFilter);
   listen(matrixFilter, "change", applyMatrixFilter);
+  listen(matrixAll, "change", applyMatrixFilter);
   listen(matrixClear, "click", function () {
     if (matrixSearch) matrixSearch.value = "";
     if (matrixFilter) matrixFilter.value = "";
     applyMatrixFilter();
     if (matrixSearch && typeof matrixSearch.focus === "function") matrixSearch.focus();
   });
+  if (matrixAll) matrixAll.checked = !(sourceSelect && sourceSelect.value);
   buildMatrix();
   if (explorationRun) {
     listen(explorationRun, "click", function () {

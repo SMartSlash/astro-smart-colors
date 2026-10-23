@@ -16,6 +16,7 @@ import test from "node:test";
 import { createDiagnosticSession } from "../src/diagnostic-session.mjs";
 import { runDiagnosticWorkflow } from "../src/diagnostic-workflow.mjs";
 import { generateColorTokens } from "../src/generate-colors.mjs";
+import { REPORT_ASSETS, REPORT_DIRECTORY, REPORT_DOCUMENTS } from "../src/report-paths.mjs";
 import { createVerificationCore } from "../src/verification-core.mjs";
 
 const core = createVerificationCore();
@@ -176,8 +177,8 @@ test("report maps a complete run into scenarios, coverage and exit 0 without wri
     assert.ok(scenario.diagnostics.length > 0);
   }
   assert.equal(result.session.automation.status, "complete");
-  assert.equal(result.publication.previewPath, path.join(root, "reports/smart-colors-preview.html"));
-  assert.equal(result.publication.reportPath, path.join(root, "reports/smart-colors.html"));
+  assert.equal(result.publication.previewPath, path.join(root, REPORT_DOCUMENTS.preview));
+  assert.equal(result.publication.reportPath, path.join(root, REPORT_DOCUMENTS.report));
 
   // report never writes the generated CSS: the artifact is a declared diagnostic candidate instead.
   await assert.rejects(readFile(path.join(root, OUTPUT_PATH), "utf8"), { code: "ENOENT" });
@@ -240,7 +241,7 @@ test("automation off performs zero discovery and never touches the provider", as
   assert.equal(provider.record.closed, 0);
 });
 
-test("build publishes the two HTML artifacts and keeps the generator CSS bytes identical", async (t) => {
+test("build publishes the diagnostic folder and keeps the generator CSS bytes identical", async (t) => {
   const root = await fixture(t);
   const provider = createFakeProvider({ open: { ok: false, phase: "discovery", cause: "playwright-not-found", message: "assente" } });
   const result = await runDiagnosticWorkflow({ root, command: "build", automation: "auto", provider });
@@ -253,6 +254,39 @@ test("build publishes the two HTML artifacts and keeps the generator CSS bytes i
     const html = await readFile(artifact, "utf8");
     assert.ok(html.startsWith("<!-- smart-colors-report:v1 -->"));
   }
+  for (const asset of Object.values(REPORT_ASSETS)) {
+    const contents = await readFile(path.join(root, REPORT_DIRECTORY, asset), "utf8");
+    assert.ok(contents.length > 0, `build must write the local asset ${asset}`);
+  }
+  const previewHtml = await readFile(result.publication.previewPath, "utf8");
+  const reportHtml = await readFile(result.publication.reportPath, "utf8");
+  assert.ok(previewHtml.includes(`href="${REPORT_ASSETS.previewStyle}"`), "the preview links its same-folder stylesheet");
+  assert.ok(previewHtml.includes(`src="${REPORT_ASSETS.previewScript}"`), "the preview loads its same-folder runtime");
+  assert.match(previewHtml, /<script\b[^>]*\bdefer\b/, "the preview runtime is a classic deferred script");
+  assert.match(previewHtml, /<script\b[^>]*type="application\/json"/, "the preview payload is inert JSON");
+  assert.ok(reportHtml.includes(`href="${REPORT_ASSETS.reportStyle}"`), "the static report links its same-folder stylesheet");
+  assert.doesNotMatch(reportHtml, /<script\b/, "the static report stays script-free");
+});
+
+test("build writes the portable folder and leaves legacy reports/ bytes untouched", async (t) => {
+  const root = await fixture(t);
+  await mkdir(path.join(root, "reports"), { recursive: true });
+  const legacyPreview = "legacy preview bytes\n";
+  const legacyReport = "legacy report bytes\n";
+  await writeFile(path.join(root, "reports/smart-colors-preview.html"), legacyPreview);
+  await writeFile(path.join(root, "reports/smart-colors.html"), legacyReport);
+
+  const result = await runDiagnosticWorkflow({ root, command: "build", automation: "off", provider: createFakeProvider() });
+
+  assert.equal(result.exitCode, 0);
+  for (const document of Object.values(REPORT_DOCUMENTS)) {
+    assert.match(await readFile(path.join(root, document), "utf8"), /^<!-- smart-colors-report:v1 -->/);
+  }
+  for (const asset of Object.values(REPORT_ASSETS)) {
+    assert.ok((await readFile(path.join(root, REPORT_DIRECTORY, asset), "utf8")).length > 0, `build must bundle ${asset}`);
+  }
+  assert.equal(await readFile(path.join(root, "reports/smart-colors-preview.html"), "utf8"), legacyPreview);
+  assert.equal(await readFile(path.join(root, "reports/smart-colors.html"), "utf8"), legacyReport);
 });
 
 test("a resolved custom config and its tuning path are the effective ones passed to publication", async (t) => {

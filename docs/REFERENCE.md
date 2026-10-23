@@ -6,7 +6,7 @@ Portable Astro integration + CLI that turns a small editable OKLCH palette into 
 
 The package is build-time/dev-time only: it generates static CSS before Astro renders the site. No client JavaScript is required for the baseline color system.
 
-The `build` and `report` commands can also publish two diagnostic HTML pages. The preview page embeds an isolated local runtime that measures the embedded CSS bytes; the full report remains static (`script-src 'none'`). That diagnostic runtime is not part of the generated color CSS and is not an Astro island.
+In the **Unreleased** sources, the `build` and `report` commands can also publish a portable diagnostic folder (`smart-colors-reports/`). The preview page loads an isolated local runtime that measures the embedded CSS bytes; the full report remains static (`script-src 'none'`) and loads only its same-folder stylesheet. That diagnostic runtime is not part of the generated color CSS and is not an Astro island. Keep the folder together; a single HTML file is no longer self-contained.
 
 > **Release status.** The development sources (**Unreleased**) are no longer presentation-only: they add the designer provenance report, the public `--color-tune-<public-name>-light|dark` controls and the per-identity surface-mix knobs documented below. Existing tokens, macros and legacy dark knobs keep working. The current release tag is `v0.4.0`; that tag keeps the behavior documented in its [changelog](../CHANGELOG.md).
 
@@ -281,7 +281,7 @@ Suggestions reflect the generated model, not runtime overrides in `colors-tuning
 There are two browser-related command families, with different boundaries:
 
 - **`audit`** is the original strict, read-only command. It has no automation mode, defaults to Chromium when no browser is listed, measures the generated CSS and `colors-tuning.css`, writes nothing and exits non-zero on an unavailable/incomplete environment or a below-minimum pair. `below-target` remains advisory.
-- **`build` and `report`** use the diagnostic workflow described below. `build` writes CSS and then the two HTML artifacts; `report` writes only the two HTML artifacts. Both always attempt publication after a safe analysis, even when the color output is already current.
+- **`build` and `report`** use the diagnostic workflow described below. `build` writes CSS and then the diagnostic folder; `report` writes only the diagnostic folder. Both always attempt publication after a safe analysis, even when the color output is already current.
 
 `check` is not a browser command: it never regenerates HTML, never launches Playwright and never presents a previous report as current.
 
@@ -295,25 +295,30 @@ pnpm exec smart-colors report chromium webkit
 
 | Command | Writes | HTML | Default automation |
 |---|---|---|---|
-| `build` (also the default command) | Generated CSS/motion outputs and both HTML files | Always attempted after a safe analysis, including when CSS is unchanged | `auto` |
-| `report` | Both HTML files; never palette, config, tuning or CSS | Always attempted with safe paths | `auto` |
+| `build` (also the default command) | Generated CSS/motion outputs and the diagnostic folder (documents plus local assets) | Always attempted after a safe analysis, including when CSS is unchanged | `auto` |
+| `report` | The diagnostic folder; never palette, config, tuning or CSS | Always attempted with safe paths | `auto` |
 | `init` | Starter palette and `colors-tuning.css` (plus a config when needed) | No | No |
 | `check` | Nothing | No | No |
 | `audit` | Nothing | No | Strict; no mode flag |
 | Generator API / Astro integration | Only configured CSS/motion outputs | No implicit HTML | No |
 
-The two artifacts are:
+In the **Unreleased** sources, the diagnostic folder is:
 
-- **`reports/smart-colors-preview.html`** — the designer preview: a compact source/pair toolbar and full-width guided contrast workbench that measures real `var(--color-*)` consumer frames, followed by the raw source and extended local verification archives.
-- **`reports/smart-colors.html`** — the complete **static** report with model and automation data, designer provenance (sources → recipes → public tokens → controls), generated-vs-baseline CSS provenance and a separate exploratory-overlap channel. It keeps `script-src 'none'` and has no script.
+- **`smart-colors-reports/index.html`** — the designer preview: a compact source/pair toolbar and full-width guided contrast workbench that measures real `var(--color-*)` consumer frames, followed by the raw source and extended local verification archives. It loads `styles/preview.css` and the classic deferred `scripts/preview.js`, next to an inert JSON payload.
+- **`smart-colors-reports/report.html`** — the complete **static** full technical report with model and automation data, designer provenance (sources → recipes → public tokens → controls), generated-vs-baseline CSS provenance and a separate exploratory-overlap channel. It keeps `script-src 'none'`, has no script and loads only `styles/report.css`.
+- **`smart-colors-reports/styles/preview.css`, `styles/report.css`, `scripts/preview.js`** — local assets referenced by relative path; no remote assets are loaded.
+
+Open `index.html` for the preview and `report.html` for the static report. Neither needs a server or a network request. Move or archive the whole `smart-colors-reports/` folder: moving only one HTML file leaves its styles and runtime behind. The legacy `reports/smart-colors-preview.html` and `reports/smart-colors.html` are not deleted, moved or rewritten, and they are not migrated automatically. `docs/CODE-REVIEW.md` and `docs/PREVIEW-UX-ANALYSIS.md` are historical and refer to those pre-migration paths.
+
+The direct renderers keep their legacy standalone documents for backward compatibility: `formatContrastPreviewHtml()` and `formatContrastReportHtml()` still return a single inline HTML document. The CLI writer owns the folder bundle and the external local assets.
 
 A stale generated CSS file stays an actual captured baseline, not a relabeled candidate; `report` writes no CSS, and a generated candidate is never presented as an on-disk measurement.
 
 The preview reads designer-first: source/pair selection and the guided contrast workbench on real `var(--color-*)` frames lead, followed by the source palette archive (roles, exact `@property` declarations, full source and manual download), then the technical archive of resolved samples, then the extended local browser verification archive, then a **Correzioni e problemi** section only when there is something to correct or review (the verified corrections grouped by destination file, each a manual snippet), and finally the technical data and the automation evidence. In the archive samples the first family is open and the rest are native `<details>`; the model samples are an **estimate** — a browser-free forecast, never a verification — and no sample carries a verification badge. The raw technical data sits in a native `<details>` and the automation evidence stays a separate final section. Nothing in the preview is an editor and no change is applied or written from the page: the workbench drafts, the correction and the export are temporary and manual.
 
-Both are self-contained `file://` documents: no server and no external assets. They describe one captured snapshot. The preview includes an inert JSON payload with the exact embedded CSS bytes; the full report keeps `script-src 'none'` and never gains a script.
+The folder is portable rather than self-contained: there is no server and no remote asset, but the documents depend on their sibling `styles/` and `scripts/` files. It describes one captured snapshot. The preview includes an inert JSON payload with the exact embedded CSS bytes; the full report keeps `script-src 'none'` and never gains a script.
 
-A missing or stale generated CSS file stays a declared **diagnostic in-memory candidate**, not accepted production output. `report` does not rewrite it. An unloadable config or unsafe destination path can prevent HTML publication; the CLI never links an older file as if it were new. Both pages are published through one ownership-checked writer: the file must either be absent or start with the byte-zero Smart Colors marker; configured inputs/outputs are protected from collisions; symlink and hard-link targets are refused; each file is replaced atomically through a sibling temporary file. Both paths are reported as successful only after both renames. The pair is not a transaction: the second rename can still fail.
+A missing or stale generated CSS file stays a declared **diagnostic in-memory candidate**, not accepted production output. `report` does not rewrite it. An unloadable config or unsafe destination path can prevent publication; the CLI never links an older file as if it were new. The documents and their local assets are published through one ownership-checked writer: each file must either be absent or start with the Smart Colors marker; configured inputs/outputs are protected from collisions; symlink and hard-link targets are refused; each file is replaced atomically through a sibling temporary file. All files are reported as successful only after the last rename. The folder is not a filesystem transaction: a later rename can still fail. A legacy `reports/` directory is outside this write pass and is left untouched.
 
 #### Audit (strict, read-only)
 
@@ -323,7 +328,7 @@ Missing or invalid colors, alpha inside an audited pair, tuning `@import` rules,
 
 #### Native preview
 
-On load, the preview validates the inert payload and measures the **embedded bytes**, not the project files on disk. It uses fresh isolated `iframe srcdoc` documents with `sandbox="allow-same-origin"`, no scripts in the frame, and DOM `style.textContent` injection so the audited CSS bytes are preserved. It reads the active `prefers-color-scheme` preference and measures, with that preference:
+On load, the preview loads `scripts/preview.js` with a classic `defer` and reads its inert `<script type="application/json">` payload; the stylesheet is the same-folder `styles/preview.css`. It then measures the **embedded bytes**, not the project files on disk. It uses fresh isolated `iframe srcdoc` documents with `sandbox="allow-same-origin"`, no scripts in the frame, and DOM `style.textContent` injection so the audited CSS bytes are preserved. It reads the active `prefers-color-scheme` preference and measures, with that preference:
 
 - baseline CSS in light and dark;
 - when a non-empty tuning file is present, tuned CSS in light and dark.
@@ -334,9 +339,9 @@ The runtime emits a controller for the preview (`preference()`, `scenarios()`, `
 
 With JavaScript disabled, or when CSP/support blocks execution, the page keeps the snapshot, model samples and an explicit “local measurements not run” status. Missing, invalid, alpha, unsupported-resource or unmapped results are `unmeasured`/unsupported, never a pass.
 
-The preview CSP is built from the SHA-256 hash of the exact runtime bytes emitted in that page. It has no `unsafe-eval`, no generic inline-script allowance and no network access; the CSP keeps `frame-src 'none'`, while the local `srcdoc` measurement frames are sandboxed without scripts. The static report keeps its stricter CSP.
+The preview CSP starts from `default-src 'none'`. In the bundle it permits the runtime with `script-src 'sha256-<emitted bytes>' 'self'` and the stylesheet with `style-src 'unsafe-inline' 'self'`; there is no `file:` scheme. Those sources are broader than the emitted relative references: `'self'` is same-origin, not an exact folder or path, and the SHA-256 records the emitted `scripts/preview.js` bytes for traceability; it is not an SRI pin on external execution. The generated documents reference only `styles/preview.css` and `scripts/preview.js` and make no remote request. `form-action 'none'` blocks form submissions. The local `srcdoc` measurement frames use `sandbox="allow-same-origin"` without scripts, which blocks scripts, popups and top-level navigation inside those frames; ordinary Preview/Report links navigate intentionally. `frame-src 'none'` is retained but does not itself sandbox the `srcdoc` frames. Existing inline renderers keep their inline hash-pinned CSP. The static report keeps `script-src 'none'`, loads only `styles/report.css` and has no script.
 
-Both pages display the generation time and an abbreviated input SHA-256 fingerprint. They are snapshots: after editing the palette, config or tuning, regenerate them. The page cannot detect later disk edits on its own.
+Both documents display the generation time and an abbreviated input SHA-256 fingerprint. They are snapshots: after editing the palette, config or tuning, regenerate them. The page cannot detect later disk edits on its own. Keep the folder together so the relative assets stay resolved.
 
 #### Guided contrast workbench
 
@@ -362,7 +367,7 @@ Every visible sample and every measurement is a real consumer specimen that read
 `--automation=auto|off|required` is accepted only by `build` and `report` (both `--automation=value` and `--automation value`). `init`, `check` and `audit` reject it.
 
 - `auto`, without a browser list, discovers Playwright in the consumer and tries Chromium, Firefox and WebKit where available. It declares skipped engines; it never downloads anything.
-- `off` performs no discovery, no import and no launch. Both HTML artifacts and the native runtime are still produced.
+- `off` performs no discovery, no import and no launch. The diagnostic folder and the native runtime are still produced.
 - `required`, without a list, requests Chromium. An explicit `report chromium webkit` list implies `required`. An explicit list combined with `auto` or `off` is a usage error, not a reduced request.
 - `build` accepts no browser positionals. `report` and `audit` accept `chromium`, `firefox`, `webkit`.
 
@@ -393,7 +398,7 @@ Notes:
 
 - `build auto` does not add a CI gate merely because Playwright is present. Its warnings and incomplete coverage remain visible in stdout/stderr and in the artifacts. Use `--automation=required` or `audit` for strict CI.
 - `report auto` is non-blocking only while the environment never became available. Once a runner executed, an incomplete run or a below-minimum pair exits `1`.
-- `report off` exits `0` when the model is valid and both HTML files were published, and `1` for a strict model/contrast error. It declares that no automated measurement ran.
+- `report off` exits `0` when the model is valid and the diagnostic folder was published, and `1` for a strict model/contrast error. It declares that no automated measurement ran.
 - `check` exits `0` when the output is current; stale output or an error exits non-zero.
 - Model warnings remain warnings even when they are not generation errors. Missing or incomplete verification is never a pass.
 - Measurements made in an opened preview page cannot change the CLI exit code retrospectively.
@@ -474,7 +479,7 @@ The run may also include `automation.explorations` (measurement-shaped records) 
 #### Designer workflow
 
 1. Choose colors, roles and optional `dark-blend` in **`palette.css`**. `dark-blend` is accepted on every role; omit it to keep the role's automatic derivation. Do not edit generated `colors.css` or use `--_color-*` internals.
-2. Run `pnpm exec smart-colors build` to generate the CSS and the two artifacts, then `pnpm exec smart-colors report` when you want a fresh measurement with the automation modes you choose.
+2. Run `pnpm exec smart-colors build` to generate the CSS and the diagnostic folder, then `pnpm exec smart-colors report` when you want a fresh measurement with the automation modes you choose.
 3. Read the chain **source → recipe → use → control → check actual** in the static report: the palette source, the declared recipe and usage, the public token and its light/dark control, then the generated CSS plus tuning actually captured. A control is not a fix and the report writes nothing.
 4. Read the labelled console summary: **Palette** and **Output**, then **Generato**, then **Verifica** (`MISURATO` for any real measurement — a partial run keeps `MISURATO` and states its incomplete coverage on the same line — or `STIMA DEL MODELLO` when nothing was measured), then **Esito** and **Problemi** with human usage names — any measured problem, below minimum **or** below target, is `DA RIVEDERE` while the project target stays distinct from the reference minimum. More model warnings never certify a palette.
 5. Open the printed preview `file:` URL (the **Anteprima** link, shown first) and read it top-down: the **source palette and roles** first, then the **guided contrast workbench** (pick a source, pick a real pair, choose temi / baseline contro tuned / tuned contro draft, and read the real `var(--color-*)` frames), then the technical archive of resolved samples, then the extended local verification archive; a **Correzioni e problemi** section appears only when there is something to correct or review, and the technical data and automation evidence come last. The workbench controls, the minimum-lightness correction and the export are temporary and manual: nothing is written by the page. Use the static report for the complete captured detail. Local results are extra evidence, not a global verdict.
@@ -969,7 +974,7 @@ Before generation, Smart Colors rejects:
 
 An explicitly selected config file (`--config` or programmatic/integration `configFile`) must exist: a missing file fails loading, even if its name is `smart-colors.config.mjs`. Only the **implicit** default path is optional. Astro's watcher preserves this distinction when the config disappears and reports errors for a missing explicit selection instead of silently loading defaults.
 
-Before reading the palette or writing outputs, including in `check` mode, an output-path guard rejects collisions between an enabled output and the palette, selected config file or another enabled output. For `build`/`report`, the same guard runs against the two HTML destinations and the configured palette, CSS, motion and tuning paths; the report writer also refuses an existing file without the Smart Colors byte-zero marker, a symlink, a hard link or a non-regular file. Each artifact is replaced atomically, but the pair is not a filesystem transaction: the second rename may fail after the first succeeded. It compares normalized, symlink-resolved paths, including dangling symlinks and symlinked directory ancestors, without creating directories.
+Before reading the palette or writing outputs, including in `check` mode, an output-path guard rejects collisions between an enabled output and the palette, selected config file or another enabled output. For `build`/`report`, the same guard runs against the `smart-colors-reports/` documents and their local assets, plus the configured palette, CSS, motion and tuning paths; the report writer also refuses an existing file without the Smart Colors marker, a symlink, a hard link or a non-regular file. Each file is replaced atomically, but the folder is not a filesystem transaction: a later rename may fail after the earlier ones succeeded. It compares normalized, symlink-resolved paths, including dangling symlinks and symlinked directory ancestors, without creating directories.
 
 Canonically equivalent Unicode path spellings are conservatively rejected after NFC comparison, even on filesystems that can keep them separate; no path is silently renamed. Potential aliases that match after case folding are rejected unless both relevant existing ancestor directories are proven case-sensitive by a read-only probe bounded to 32 entries per directory. Unknown results are rejected conservatively; choose paths that differ beyond letter case. This guard is not a filesystem sandbox and does not protect against hard-link aliases or filesystem changes between validation and use (TOCTOU).
 
@@ -1010,24 +1015,24 @@ With a global install, `smart-colors` works directly. Options can be placed befo
 | Command | Writes | HTML | Automation |
 |---|---|---|---|
 | `init` | Starter palette and `colors-tuning.css`; a config when `--dir` changes the layout | No; it points to `build` as the next step | No |
-| `build` (also the default command) | Generated CSS/motion outputs and both HTML files | Always attempted after a safe analysis, even when CSS is current | `auto` by default |
+| `build` (also the default command) | Generated CSS/motion outputs and the diagnostic folder (documents plus local assets) | Always attempted after a safe analysis, even when CSS is current | `auto` by default |
 | `check` | Nothing | Does not regenerate or present old HTML as current | No |
-| `report` | Both HTML files only | Always attempted with safe paths | `auto` by default |
+| `report` | The diagnostic folder only (documents plus local assets) | Always attempted with safe paths | `auto` by default |
 | `audit` | Nothing | No | Strict; Chromium default; no mode flag |
 | Generator API and Astro integration | Only configured CSS/motion outputs | No implicit HTML | No |
 
-`build` and `report` publish `reports/smart-colors-preview.html` and `reports/smart-colors.html`. `build` performs normal CSS generation first; `report` never writes palette, config, tuning or CSS. `init`, `check` and `audit` reject `--automation`. `build` accepts no browser list. An explicit `report` browser list implies `required`; combining a list with `auto` or `off` is a usage error. An empty argument (for example an empty positional) is a usage error that exits `1` and writes nothing.
+`build` and `report` publish `smart-colors-reports/index.html`, `smart-colors-reports/report.html` and their local `styles/` and `scripts/` assets. `build` performs normal CSS generation first; `report` never writes palette, config, tuning or CSS. Neither deletes, moves or rewrites a legacy `reports/` directory. `init`, `check` and `audit` reject `--automation`. `build` accepts no browser list. An explicit `report` browser list implies `required`; combining a list with `auto` or `off` is a usage error. An empty argument (for example an empty positional) is a usage error that exits `1` and writes nothing.
 
 ### Console output and next steps
 
 The console summary is Italian and single-purpose. `check` prints an immediate stale verdict (`non è aggiornato`) without a success line and without repeating the whole error list; the actionable detail stays a single structured error on stderr, and its model line reads **Contrasti non misurati (stima del modello)**. `build`/`report` stream plain progress lines as each real phase starts (`smart-colors · analisi palette`, `generazione token`, `controllo automazione opzionale` — `verifica automatizzata richiesta` under `required` — and `anteprima e report`), never a spinner or an invented percentage, and only started phases reach stdout. The summary that follows is one compact labelled line per fact: **Palette** (colors and roles), **Output**, **Generato**, **Verifica**, **Esito**, **Problemi**, the two clickable `file://` lines (`Anteprima:` before `Report:`) and **Fai ora**. Generation is a fact separate from verification. Provenance and completeness stay separate: the **Verifica** line says `MISURATO` for any real browser measurement — including a partial run, whose incomplete coverage is stated on the same line — and `STIMA DEL MODELLO` only when no pair was measured; a partial measured run keeps its measured problems instead of falling back to the model list. The single **Esito** verdict is `DA RIVEDERE` for any measured problem (below minimum or below target), `OK` only for a complete, clean measurement, `NON VERIFICATO` for a measured-but-partial clean run or when no engine started, and `ERRORE` for a strict-invalid model. **Fai ora** opens the preview first; regenerating the CSS is a separate, conditional secondary step shown only when the output actually needs a build. Problems use human usage names and are capped at five, with the raw warning/suggestion strings and the token-level detail on stderr only. A usage error keeps stdout empty.
 
-`build` and `report` no longer print a success/failure heading: the heading is a plain `build` or `report` badge and the outcome lives in the **Esito** line. A strict-invalid model shows `ERRORE` with the model error count in **Esito**, `Generato · non eseguito` and the model error list on stderr, while the two diagnostic HTML files are still published. When `report` finds the CSS output absent or stale, it names it on the console as a diagnostic candidate, not accepted production. Under `auto`, an expected absence (Playwright simply not installed) is a brief note and is not echoed as a raw stderr detail, while other environment/measurement failures stay detailed; under `required` (and `audit`) the CLI states the explicit action. Raw engine/run detail is deduplicated on stderr and never printed as a wall on stdout; stdout lines are length-capped and terminal control characters are escaped.
+`build` and `report` no longer print a success/failure heading: the heading is a plain `build` or `report` badge and the outcome lives in the **Esito** line. A strict-invalid model shows `ERRORE` with the model error count in **Esito**, `Generato · non eseguito` and the model error list on stderr, while the diagnostic folder is still published. When `report` finds the CSS output absent or stale, it names it on the console as a diagnostic candidate, not accepted production. Under `auto`, an expected absence (Playwright simply not installed) is a brief note and is not echoed as a raw stderr detail, while other environment/measurement failures stay detailed; under `required` (and `audit`) the CLI states the explicit action. Raw engine/run detail is deduplicated on stderr and never printed as a wall on stdout; stdout lines are length-capped and terminal control characters are escaped.
 
 ### `--automation=auto|off|required`
 
 - `auto`, without a list, tries the Chromium, Firefox and WebKit engines available to the consumer and declares skipped ones. It never downloads browsers and, when Playwright is simply not installed, prints only a brief optional-automation note (no install instruction by default) and no raw stderr detail.
-- `off` does not resolve, import or launch Playwright. Both HTML artifacts and the runtime are still produced.
+- `off` does not resolve, import or launch Playwright. The diagnostic folder and the runtime are still produced.
 - `required`, without a list, requests Chromium. With a report list, requires exactly the listed engines, and an unavailable environment states the explicit install action and exits non-zero.
 
 Playwright is not a dependency or peer. The consumer installs `playwright` or `@playwright/test` itself and its binary with `pnpm exec playwright install <engine>`; the CLI checks the existing binary and never installs or downloads it. Discovery is anchored at the consumer root and has no global fallback. Automation is optional: one shared budget of 60 seconds covers the whole run, including proposal trials, so the optional work is bounded rather than mandatory. `audit` remains strict and does not take an automation mode.
@@ -1037,7 +1042,7 @@ Playwright is not a dependency or peer. The consumer installs `playwright` or `@
 Diagnostic warnings are not silently converted into passes or failures:
 
 - `build auto`: `0` for a successful build, an unavailable environment, an incomplete runner or measured below-minimum pairs; the reasons and problems are printed and included in the HTML. `build off`: `0` when the strict model is valid and publication succeeds, without checking Playwright. `build required`: non-zero for an unavailable/incomplete/partial run or below-minimum.
-- `report auto`: `0` when the environment never became available; non-zero once a launched run is incomplete or a measured pair is below minimum. `report off`: `0` when the model is valid and both HTML files are published; non-zero for a strict model/contrast error. `report required`: non-zero for an unavailable/incomplete/partial run or below-minimum.
+- `report auto`: `0` when the environment never became available; non-zero once a launched run is incomplete or a measured pair is below minimum. `report off`: `0` when the model is valid and the diagnostic folder is published; non-zero for a strict model/contrast error. `report required`: non-zero for an unavailable/incomplete/partial run or below-minimum.
 - `audit`: non-zero for unavailable/incomplete or below-minimum; `below-target` alone is advisory.
 - `check`: `0` when current; stale output or an error is non-zero.
 - Below-target-only results are advisory in every mode. Usage, input/I/O, strict-contract and publication failures are non-zero everywhere.
@@ -1053,7 +1058,7 @@ On an interactive terminal and with no path options, `init` asks for the token d
 
 ### Advice and writes
 
-`build`, `check` and `report` print warnings and read-only contrast suggestions when their path provides them; `audit` prints its strict audit shortfalls and does not run the suggestion search. Advice uses the effective `--config` path, and its fragments are meant to be merged into existing settings rather than used as replacement files. There is no autofix and no recommendation to edit generated `colors.css`. `check` writes nothing; `build` writes only its configured outputs plus the two artifacts; `report` writes only the two artifacts; `audit` writes nothing. See [Browser verification](#browser-verification-audit-build-and-report) for the preview, static report, coverage and publication guarantees.
+`build`, `check` and `report` print warnings and read-only contrast suggestions when their path provides them; `audit` prints its strict audit shortfalls and does not run the suggestion search. Advice uses the effective `--config` path, and its fragments are meant to be merged into existing settings rather than used as replacement files. There is no autofix and no recommendation to edit generated `colors.css`. `check` writes nothing; `build` writes only its configured outputs plus the diagnostic folder; `report` writes only the diagnostic folder; `audit` writes nothing. See [Browser verification](#browser-verification-audit-build-and-report) for the preview, static report, coverage and publication guarantees.
 
 ## Browser regression checks
 
@@ -1071,7 +1076,7 @@ The model harness checks independent mix oracles, generated light/dark pairs wit
 
 - On `astro dev`, the integration generates all enabled CSS/motion outputs and watches the palette and config files across `add`, `change`, and `unlink` events. Rapid atomic-save events are debounced into one regeneration.
 - On `astro build`, it generates all enabled CSS/motion outputs before the build starts.
-- The integration never creates `reports/smart-colors-preview.html`, `reports/smart-colors.html` or any implicit HTML, and never launches a browser. Those artifacts belong to the `build`/`report` CLI workflow.
+- The integration never creates `smart-colors-reports/`, its documents or assets, or any implicit HTML, and never launches a browser. Those artifacts belong to the `build`/`report` CLI workflow.
 - The integration uses `suggest: false` to keep the exhaustive four-decimal lightness search out of the dev watcher. Generated CSS, contrast validation and warnings are unchanged; use the CLI or a default programmatic call to inspect suggestions.
 - If generated output is out of date, `smart-colors check` exits with a non-zero status.
 

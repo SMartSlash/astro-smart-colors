@@ -1,4 +1,4 @@
-// Compact companion artifact of reports/smart-colors.html. It reads the same frozen
+// Compact companion artifact of the technical report (report.html). It reads the same frozen
 // snapshot through the same internal helpers, keeps the same fail-closed contract and
 // never measures, recalculates or invents anything: an unverified snapshot gets no
 // positive verdict and no color is labeled as suggested.
@@ -8,9 +8,11 @@
 // from this module) and an inert JSON payload of the exact CSS bytes, so the page can add
 // local measurements from `file://`. The workbench runtime is a mandatory dependency: a
 // missing module fails at import time, never silently. The CSP hash is computed over the
-// final emitted script bytes; the static report never gains a script. Local measurements
-// only touch the in-memory DOM: they never rewrite this file or the report.
+// final emitted script bytes: it enforces the inline runtime and is recorded for traceability in
+// bundle mode; the external asset is authorized by `'self'`. The static report never gains a script.
+// Local measurements only touch the in-memory DOM: they never rewrite this file or the report.
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { createContrastAdvice } from "./contrast-advice.mjs";
 import { createContrastWorkbench, WORKBENCH_RUNTIME_GLOBAL } from "./contrast-workbench-runtime.mjs";
 import { CONTRAST_WORKBENCH_CSS, createContrastWorkbenchView, renderContrastWorkbench } from "./contrast-workbench-view.mjs";
@@ -24,6 +26,7 @@ import {
   deltaSummary, entriesFor, escape, familyAtlasData, fileRole, isDiagnosticSession, it, list, overlapList, prepareContrastReport,
   proposalSentence, prepareDiagnosticReport, record, sampleVisual, sessionIdentityHtml, sideEffectsHtml, status,
 } from "./format-report-html.mjs";
+import { REPORT_ASSET_MARKER, REPORT_ASSETS } from "./report-paths.mjs";
 
 // Designer vocabulary is owned by the single internal factory (`designer-language.mjs`), used here at
 // build time AND re-serialized verbatim into the browser presenter, so the algorithm and its labels
@@ -35,238 +38,11 @@ const FILE_TITLES = {
   tuning: "Modifiche in colors-tuning.css",
   config: "Modifiche in smart-colors.config.mjs",
 };
-
-const PREVIEW_CSS = `
-@layer reset, tokens, base, components, pages, animations, layout, utilities, capabilities, preferences, overrides;
-@layer reset {
-  *, *::before, *::after { box-sizing: border-box; }
-  body, h1, h2, h3, h4, p, ul, ol, dl, dd, figure { margin: 0; }
-}
-@layer tokens {
-  :root {
-    color-scheme: light;
-    --ink: #14161a;
-    --ink-soft: #4a4f57;
-    --ink-muted: #6b7280;
-    --paper: #ffffff;
-    --paper-soft: #f7f7f5;
-    --soft: #f2f2ef;
-    --line: #d6d7d2;
-    --accent: #1f3a5f;
-    --warn-soft: #fdf6e8;
-    --space-1: .25rem; --space-2: .5rem; --space-3: .75rem; --space-4: 1rem; --space-5: 1.5rem; --space-6: 2rem; --space-7: 3rem;
-    --radius-sm: 4px; --radius: 8px; --radius-lg: 14px;
-    --shadow-1: 0 1px 2px rgba(16, 18, 22, .06), 0 1px 3px rgba(16, 18, 22, .04);
-    --shadow-2: 0 2px 4px rgba(16, 18, 22, .06), 0 8px 24px rgba(16, 18, 22, .06);
-    --text-xs: .8125rem; --text-sm: .875rem; --text-base: 1rem; --text-md: 1.0625rem;
-    --text-lg: 1.25rem; --text-xl: 1.5rem;
-    --measure: 72ch;
-  }
-}
-@layer base {
-  html { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; line-height: 1.6; color: var(--ink); background: var(--paper-soft); -webkit-text-size-adjust: 100%; }
-  body { overflow-wrap: anywhere; }
-  h1, h2, h3, h4 { line-height: 1.2; text-wrap: balance; }
-  h1 { font-size: var(--text-xl); letter-spacing: -.015em; }
-  h2 { font-size: var(--text-xl); letter-spacing: -.01em; }
-  h3 { font-size: var(--text-md); }
-  h4 { font-size: var(--text-base); }
-  p, li, dd { max-width: var(--measure); }
-  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: .18em; }
-  a:hover { text-decoration-thickness: 2px; }
-  :focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; border-radius: var(--radius-sm); }
-  code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; user-select: text; }
-  code { padding: .1em .35em; border-radius: var(--radius-sm); background: var(--soft); font-size: .92em; }
-  pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: var(--space-4); border: 1px solid var(--ink-muted); border-radius: var(--radius); background: var(--paper); }
-  pre code { padding: 0; background: none; }
-  time { font-variant-numeric: tabular-nums; }
-}
-@layer components {
-  .card, .notice { border: 1px solid var(--ink-muted); border-radius: var(--radius); padding: var(--space-4); background: var(--paper); box-shadow: var(--shadow-1); }
-  .notice { border-inline-start: .35rem solid var(--accent); background: var(--warn-soft); }
-  .card > :first-child, .notice > :first-child { margin-block-start: 0; }
-  .card > * + * { margin-block-start: var(--space-3); }
-  .eyebrow { font-size: var(--text-xs); font-weight: 750; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-soft); }
-  .verdict { font-size: clamp(1.75rem, 1.2rem + 2vw, 2.5rem); font-weight: 700; line-height: 1.15; margin-block: var(--space-2) var(--space-3); }
-  .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 9.5rem), 1fr)); gap: var(--space-2); list-style: none; padding: 0; margin-block: var(--space-4); }
-  .facts li { border: 1px solid var(--ink-muted); border-radius: var(--radius); padding: var(--space-2) var(--space-3); background: var(--paper); font-size: var(--text-xs); color: var(--ink-soft); max-width: none; }
-  .facts strong { display: block; font-size: var(--text-lg); color: var(--ink); font-variant-numeric: tabular-nums; }
-  .badge, .tier { display: inline-block; padding: .15rem .6rem; border-radius: 999px; font-size: var(--text-xs); font-weight: 750; letter-spacing: .02em; }
-  .badge--solid { border: 1px solid var(--ink); background: var(--ink); color: var(--paper); }
-  .badge--outline { border: 1px solid var(--ink); background: var(--paper); color: var(--ink); }
-  .badge--dashed { border: 1px dashed var(--ink-soft); background: var(--paper); color: var(--ink-soft); }
-  .tier { border: 1px solid var(--ink-soft); background: var(--paper); color: var(--ink-soft); }
-  .contrast-value, .count { font-variant-numeric: tabular-nums; }
-  .contrast-value { font-weight: 750; }
-  .pair-visual { display: grid; gap: .45rem; align-content: center; min-height: 7rem; padding: var(--space-4); border: 1px solid var(--ink-soft); border-radius: var(--radius); background: var(--sample-bg, var(--soft)); color: var(--sample-fg, var(--ink)); }
-  .pair-title { font-size: 1.4rem; font-weight: 700; line-height: 1.25; }
-  .pair-text { font-size: 1.0625rem; }
-  .pair-label { font-size: var(--text-sm); }
-  .pair-visual--sample { display: flex; flex-direction: column; justify-content: center; gap: .45rem; font-size: 1.0625rem; }
-  .pair-visual--sample::before { content: "Titolo grande"; font-size: 1.4rem; font-weight: 700; line-height: 1.25; }
-  .pair-visual--sample::after { content: "Etichetta piccola"; font-size: var(--text-sm); }
-  .pair-border { display: block; width: 6rem; height: 1.5rem; border: 1px solid var(--sample-fg, var(--ink)); border-radius: 2px; }
-  .pair-border--2 { border-width: 2px; }
-  .pair-border--3 { border-width: 3px; }
-  .color-choice { padding: var(--space-3); border: 1px solid var(--ink-muted); border-radius: var(--radius); background: var(--paper); }
-  .color-choice--suggested { border: 2px solid var(--accent); box-shadow: var(--shadow-1); }
-  .change-label { margin-block-end: var(--space-2); font-size: var(--text-sm); font-weight: 750; color: var(--ink); overflow-wrap: anywhere; }
-  .swatch { height: 7.5rem; border: 1px solid var(--ink-soft); border-radius: var(--radius-sm); background: var(--sample-color, var(--soft)); }
-  .color-choice figcaption strong { display: block; margin-block-end: var(--space-1); }
-  .destination dt, .destination dd { display: inline; }
-  .destination dd { margin-inline-start: var(--space-2); }
-  .destination div + div { margin-block-start: var(--space-1); }
-  .margin-note { font-size: var(--text-sm); color: var(--ink-soft); }
-  .baseline-note { border-inline-start: .3rem solid var(--ink-muted); padding-inline-start: var(--space-3); color: var(--ink-soft); font-size: var(--text-sm); }
-  .side-effect { padding: var(--space-3); border: 1px dashed var(--ink-muted); border-radius: var(--radius); background: var(--paper-soft); }
-  .side-effect ul { padding-inline-start: 1.2rem; }
-  .side-effect .contrast-value { font-size: var(--text-base); }
-  .sample-list { display: grid; gap: var(--space-3); list-style: none; padding: 0; }
-  .sample-list li { max-width: none; }
-  .family-sample { border: 1px solid var(--ink-muted); border-radius: var(--radius); background: var(--paper); overflow: hidden; }
-  .family-visual { display: grid; gap: .35rem; padding: var(--space-3); border-block-end: 1px solid var(--line); background: var(--sample-bg, var(--soft)); color: var(--sample-fg, var(--ink)); }
-  .sample-title { padding: var(--space-2) var(--space-3) 0; font-weight: 700; font-size: var(--text-sm); }
-  .sample-note { padding: var(--space-2) var(--space-3) var(--space-3); font-size: var(--text-xs); color: var(--ink-soft); }
-  .family-sample details > p { margin: 0; font-size: var(--text-sm); color: var(--ink-soft); }
-  .variant-swatch { display: inline-block; width: 1.4rem; height: 1.4rem; vertical-align: -.4rem; margin-inline-end: var(--space-2); border: 1px solid var(--ink-soft); border-radius: var(--radius-sm); background: var(--sample-color, var(--soft)); }
-  .variant-list { padding-inline-start: 1.2rem; font-size: var(--text-sm); }
-  .variant-list li { margin-block: var(--space-2); }
-  .pair-list { padding-inline-start: 1.2rem; font-size: var(--text-sm); }
-  .pair-list li { margin-block: var(--space-1); }
-  .pair-list .contrast-value { font-size: var(--text-base); }
-  .pair-chip { display: inline-block; margin-inline-end: var(--space-2); padding: 0 .5rem; border: 1px solid var(--ink-soft); border-radius: var(--radius-sm); background: var(--sample-bg, var(--soft)); color: var(--sample-fg, var(--ink)); }
-  .lede { font-size: var(--text-md); color: var(--ink-soft); max-width: var(--measure); margin-block-start: var(--space-2); }
-  .channels { display: grid; gap: var(--space-1); margin-block: var(--space-3); padding: 0; list-style: none; font-size: var(--text-sm); color: var(--ink-soft); }
-  .channels li { max-width: var(--measure); }
-  .channels strong { color: var(--ink); }
-  .role-list { display: grid; gap: var(--space-1); padding: 0; list-style: none; font-size: var(--text-sm); }
-  .role-list li { max-width: var(--measure); }
-  details.is-detail { margin-block-start: var(--space-1); }
-  details.is-detail > summary { cursor: pointer; font-size: var(--text-sm); color: var(--ink-soft); }
-  .family-list { display: grid; gap: var(--space-3); }
-  details.family-strip > summary { cursor: pointer; font-weight: 750; font-size: var(--text-md); }
-  details.family-strip[open] > summary { margin-block-end: var(--space-3); }
-  .design-list, .dark-blend-list { padding-inline-start: 1.2rem; font-size: var(--text-sm); color: var(--ink-soft); }
-  .design-list li, .dark-blend-list li { max-width: none; margin-block: var(--space-1); }
-}
-@layer layout {
-  .shell { max-width: 76rem; margin-inline: auto; padding: var(--space-4) var(--space-4) var(--space-6); }
-  header { border-block-end: 1px solid var(--ink-muted); padding-block-end: var(--space-2); }
-  main > section, footer { margin-block: var(--space-6); }
-  main > section { container-name: preview-section; container-type: inline-size; scroll-margin-top: 5rem; }
-  section > h2 { margin-block-end: var(--space-2); }
-  section > h2 + p { color: var(--ink-soft); }
-  .grid-2 { display: grid; gap: var(--space-3); grid-template-columns: minmax(0, 1fr); }
-  .card-grid { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr)); }
-  .card-grid--wide { grid-template-columns: repeat(auto-fit, minmax(min(100%, 26rem), 1fr)); }
-  .grid-2 > *, .card-grid > *, .card, .family-theme { min-width: 0; }
-  @container preview-section (min-width: 40rem) {
-    .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  }
-  nav { position: sticky; top: 0; z-index: 2; margin-block-start: var(--space-3); }
-    body:not(.preview-studio) nav { border-block: 1px solid var(--ink-muted); background: color-mix(in oklab, var(--paper) 90%, transparent); backdrop-filter: blur(6px); }
-  nav ul { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); margin: 0; padding: var(--space-2) var(--space-3); list-style: none; }
-  nav a { font-size: var(--text-sm); font-weight: 650; text-decoration: none; }
-  nav a:hover { text-decoration: underline; }
-  :target { scroll-margin-top: 5rem; }
-  .skip { display: inline-block; padding: var(--space-2) var(--space-3); }
-  .file-group + .file-group { margin-block-start: var(--space-4); }
-  .file-group > h3 { margin-block-end: var(--space-1); }
-  .change + .change { margin-block-start: var(--space-4); }
-  footer { border-block-start: 1px solid var(--ink-muted); padding-block-start: var(--space-4); color: var(--ink-soft); font-size: var(--text-sm); }
-  footer .cta { font-size: var(--text-md); font-weight: 700; }
-  footer p + p { margin-block-start: var(--space-2); }
-}
-@layer preferences {
-  @media (forced-colors: active) {
-    :root { --ink: CanvasText; --paper: Canvas; --paper-soft: Canvas; --soft: Canvas; --line: CanvasText; --accent: LinkText; --warn-soft: Canvas; }
-    .card, .notice, .tier, .badge, .color-choice, .pair-visual, .family-sample, .side-effect { border: 1px solid CanvasText; box-shadow: none; }
-    .badge--solid { background: CanvasText; color: Canvas; }
-  }
-  @media (prefers-reduced-motion: no-preference) {
-    a, .card { transition: box-shadow 120ms ease; }
-  }
-  @media print {
-    :root { --shadow-1: none; --shadow-2: none; }
-    body { background: #fff; }
-    nav, .skip { display: none; }
-    .card, .notice, .family-sample { break-inside: avoid; }
-    main > section { margin-block: 1.5rem; }
-  }
-}
-`;
-
-// Presentation-only CSS for the diagnostic session preview: the local panel, its
-// result table and the isolated measurement frames. Kept separate from PREVIEW_CSS so
-// the legacy static preview output stays byte-identical.
-const LOCAL_CSS = `
-@layer pages {
-  .preview-studio { background: var(--paper-soft); }
-  .preview-studio h1 { font-size: var(--text-base); letter-spacing: -.025em; }
-  .preview-studio .studio-header { border-color: var(--line); }
-  .studio-session { color: var(--ink-soft); background: var(--soft); border-radius: var(--radius-sm); padding: .2rem .5rem; font-size: var(--text-xs); }
-  .studio-export { min-height: 44px; padding: .5rem 1rem; border: 1px solid var(--ink); border-radius: var(--radius-sm); font: inherit; font-size: var(--text-sm); font-weight: 650; color: var(--paper); background: var(--ink); cursor: pointer; }
-  .studio-export:hover { background: var(--ink-soft); }
-  .studio-export:disabled { cursor: not-allowed; opacity: .65; }
-  .studio-report-link { font-size: var(--text-sm); }
-  .preview-studio nav { border: 0; background: none; backdrop-filter: none; }
-  .preview-studio .skip:not(:focus) { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-  .preview-studio .preview-technical { border-block-start: 1px solid var(--line); padding-block: var(--space-4); }
-  .preview-studio summary { cursor: pointer; padding-block: var(--space-2); }
-  .preview-technical > summary { font-weight: 650; }
-  .preview-technical section { container: preview-section / inline-size; margin-block: var(--space-5); }
-  .preview-studio footer { border-color: var(--line); }
-}
-@layer layout {
-  .preview-studio .shell { max-width: 96rem; padding-block-start: 0; container: studio-shell / inline-size; }
-  .preview-studio .studio-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2); padding-block: var(--space-2); }
-  .studio-brand { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; }
-  .studio-session { max-width: 100%; }
-  @container studio-shell (max-width: 30rem) {
-    .studio-brand { flex: 1 1 9rem; }
-    .studio-session { flex-basis: 100%; }
-  }
-  .preview-studio main > section { margin-block: var(--space-4); }
-  .preview-studio nav { position: static; }
-  .preview-studio nav ul { padding-inline: 0; }
-}
-@layer components {
-  .local-frames { display: grid; gap: var(--space-3); margin-block-start: var(--space-3); }
-  .local-frames iframe { width: 100%; min-height: 4rem; border: 1px solid var(--ink-muted); border-radius: var(--radius); background: var(--paper); }
-  .local-rows { margin-block-start: var(--space-4); }
-  .local-rows h3 { margin-block-end: var(--space-2); }
-  .local-state { font-weight: 650; }
-  .local-scope, .local-empty, .local-errors, .local-summary, .local-synthesis { font-size: var(--text-sm); color: var(--ink-soft); }
-  .local-combos, .local-problem-list { padding-inline-start: 1.2rem; font-size: var(--text-sm); color: var(--ink-soft); }
-  .local-combos li, .local-problem-list li { margin-block: var(--space-1); }
-  .local-errors, .local-unsupported, .automation-engines, .automation-errors, .automation-unsupported { padding-inline-start: 1.2rem; font-size: var(--text-sm); }
-  .local-problems { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); list-style: none; padding: 0; margin-block-start: var(--space-3); }
-  .local-problem { border: 1px solid var(--ink-muted); border-radius: var(--radius); padding: var(--space-3); background: var(--paper); }
-  .local-problem .pair-visual { min-height: 3.5rem; padding: var(--space-3); margin-block: var(--space-2); }
-  .local-details { margin-block-start: var(--space-4); }
-  .local-details > summary { cursor: pointer; font-weight: 650; font-size: var(--text-sm); }
-  .local-catalog, .local-explorations { margin-block-start: var(--space-3); }
-  .local-catalog > summary, .local-explorations > summary { cursor: pointer; font-weight: 650; font-size: var(--text-sm); }
-  .local-catalog-list, .local-exploration-list { list-style: none; padding: 0; font-size: var(--text-sm); }
-  .local-catalog-item { display: flex; align-items: center; gap: var(--space-2); margin-block: var(--space-1); }
-  .local-catalog .pair-chip { flex: 0 0 auto; }
-  .table-scroll { overflow-x: auto; max-width: 100%; border: 1px solid var(--ink-muted); border-radius: var(--radius); }
-  .table-scroll table { border-collapse: collapse; width: 100%; min-width: 40rem; font-size: var(--text-sm); }
-  .table-scroll caption { text-align: start; font-weight: 650; padding: var(--space-2) var(--space-3); }
-  .table-scroll th, .table-scroll td { border-block-end: 1px solid var(--line); padding: var(--space-2) var(--space-3); text-align: start; vertical-align: top; }
-  .table-scroll thead th { background: var(--soft); border-block-end: 1px solid var(--ink-muted); }
-  .local-table-scroll { overflow-x: auto; max-width: 100%; margin-block-start: var(--space-3); border: 1px solid var(--ink-muted); border-radius: var(--radius); }
-  .local-table { border-collapse: collapse; width: 100%; min-width: 40rem; font-size: var(--text-sm); }
-  .local-table caption { text-align: start; font-weight: 650; padding: var(--space-2) var(--space-3); }
-  .local-table th, .local-table td { border-block-end: 1px solid var(--line); padding: var(--space-2) var(--space-3); text-align: start; vertical-align: top; }
-  .local-table thead th { background: var(--soft); border-block-end: 1px solid var(--ink-muted); }
-}
-@layer preferences {
-  @media (forced-colors: active) {
-    .local-frames iframe, .local-table-scroll, .local-table th, .local-table td, .table-scroll, .table-scroll th, .table-scroll td, .local-problem { border: 1px solid CanvasText; }
-  }
-}
-`;
+// Authored CSS lives in a real stylesheet and is read once at module load: render calls do no I/O.
+// The workbench keeps owning its own component sheet; the preview composes the two at build time.
+const PREVIEW_CSS = readFileSync(new URL("./report-styles/preview.css", import.meta.url), "utf8");
+const PREVIEW_STYLES = `${PREVIEW_CSS}${CONTRAST_WORKBENCH_CSS}`;
+const IDLE_CSP = "default-src 'none'; script-src 'none'; style-src 'unsafe-inline' 'self'; connect-src 'none'; img-src 'none'; font-src 'none'; media-src 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'";
 
 const badge = (shape, label) => `<span class="badge badge--${shape}">${escape(label)}</span>`;
 const count = (value) => `<strong class="count">${value}</strong>`;
@@ -445,7 +221,7 @@ function variantsHtml(shifts) {
     if (!source || !variant) return "";
     return `<li><span class="variant-swatch" aria-hidden="true" style="--sample-color:${source}"></span>da <code>${escape(shift.sourceToken)}</code> a <span class="variant-swatch" aria-hidden="true" style="--sample-color:${variant}"></span><code>${escape(shift.token)}</code> (tema ${shift.scheme === "light" ? "chiaro" : "scuro"}): ΔL ${it(shift.deltaL, 3)} · ΔC ${it(shift.deltaC, 3)}</li>`;
   }).join("")}</ul>
-${shifts.length > shown.length ? `<p class="margin-note">Altre ${shifts.length - shown.length} varianti oltre soglia nel <a href="smart-colors.html#usi">report completo</a>.</p>` : ""}`;
+${shifts.length > shown.length ? `<p class="margin-note">Altre ${shifts.length - shown.length} varianti oltre soglia nel <a href="report.html#usi">report tecnico</a>.</p>` : ""}`;
 }
 
 function pairingsHtml(overlaps) {
@@ -1133,14 +909,16 @@ function previewScriptSource() {
   ].join("\n");
 }
 
-// Same isolation shape validated in SC-01/SC-04: one script hash, inline styles only,
-// `frame-src 'none'` for the srcdoc measurement frames and no network.
-function previewCsp(source) {
+// Same isolation shape validated in SC-01/SC-04: one script hash recorded for traceability,
+// inline styles in inline mode and a linked stylesheet in asset mode, `frame-src 'none'` for the
+// srcdoc measurement frames and no network. In asset mode `'self'` authorizes the linked assets
+// over file:// and same-origin HTTP; without SRI metadata the hash does not pin external execution.
+function previewCsp(source, assetMode = false) {
   const hash = createHash("sha256").update(source, "utf8").digest("base64");
   return [
     "default-src 'none'",
-    `script-src 'sha256-${hash}'`,
-    "style-src 'unsafe-inline'",
+    assetMode ? `script-src 'sha256-${hash}' 'self'` : `script-src 'sha256-${hash}'`,
+    assetMode ? "style-src 'unsafe-inline' 'self'" : "style-src 'unsafe-inline'",
     "img-src 'none'",
     "font-src 'none'",
     "media-src 'none'",
@@ -1164,6 +942,63 @@ function scanUnsupportedCss(css) {
 // Inert payload for the runtime: only the verifiable config subset, the exact CSS bytes,
 // the captured palette bytes/provenance and the declared identity. The model, the samples
 // and the automation stay in the static HTML and are never merged with the browser-local run.
+// The payload carries only the parts the runtime genuinely reads: token usages that repeat the
+// recipe, recipe fields the browser never reads, unused dark-mix modes or mixes with no displayable
+// percentages, and role-map values already represented by `design.sources` are omitted. Build-time
+// HTML and the original session keep every declared value.
+function compactRecipePayload(recipe) {
+  if (!record(recipe)) return recipe;
+  const { basis, mix, whiteCap, ...rest } = recipe;
+  return rest;
+}
+
+function compactSourcePayload(source) {
+  if (!record(source)) return source;
+  const { darkBlend, darkMix, ...rest } = source;
+  const compact = { ...rest };
+  // `null` is the declared default (automatic); the view treats an absent value identically.
+  if (darkBlend !== null && darkBlend !== undefined) compact.darkBlend = darkBlend;
+  // The view only reads the displayed percentages; the mode and empty automatic mix are redundant.
+  if (record(darkMix) && Number.isFinite(darkMix.sourcePercent) && Number.isFinite(darkMix.whitePercent)) {
+    compact.darkMix = { sourcePercent: darkMix.sourcePercent, whitePercent: darkMix.whitePercent };
+  }
+  return compact;
+}
+
+function compactDesignPayload(design) {
+  if (!record(design) || !record(design.tokens) || !record(design.recipes)) return design;
+  const tokens = {};
+  for (const [token, binding] of Object.entries(design.tokens)) {
+    const recipe = record(binding) && record(design.recipes[binding.recipe]) ? design.recipes[binding.recipe] : null;
+    if (recipe && typeof recipe.usage === "string" && binding.usage === recipe.usage) {
+      const { usage, ...rest } = binding;
+      tokens[token] = rest;
+    } else {
+      tokens[token] = binding;
+    }
+  }
+  const recipes = {};
+  for (const [key, recipe] of Object.entries(design.recipes)) recipes[key] = compactRecipePayload(recipe);
+  const compact = { ...design, recipes, tokens };
+  if (Array.isArray(design.sources)) compact.sources = design.sources.map(compactSourcePayload);
+  return compact;
+}
+
+function compactRolePayload(roles) {
+  if (!record(roles)) return {};
+  const compact = { ...roles };
+  if (record(roles.identities)) {
+    compact.identities = Object.fromEntries(Object.entries(roles.identities).map(([name, definition]) => [
+      name,
+      record(definition) && typeof definition.token === "string" ? { token: definition.token } : true,
+    ]));
+  }
+  if (record(roles.decoratives)) {
+    compact.decoratives = Object.fromEntries(Object.keys(roles.decoratives).map((name) => [name, true]));
+  }
+  return compact;
+}
+
 function diagnosticPayload(session) {
   const config = record(session.config) ? session.config : {};
   const css = record(session.css) ? session.css : {};
@@ -1184,7 +1019,7 @@ function diagnosticPayload(session) {
     paletteSource: record(session.paletteSource)
       ? session.paletteSource
       : (record(session.palette) ? session.palette : null),
-    config: { contrast: record(config.contrast) ? config.contrast : {}, roles: record(config.roles) ? config.roles : {} },
+    config: { contrast: record(config.contrast) ? config.contrast : {}, roles: compactRolePayload(config.roles) },
     css: {
       baseline,
       tuning: typeof css.tuning === "string" ? css.tuning : null,
@@ -1200,7 +1035,7 @@ function diagnosticPayload(session) {
         : null,
     },
     // Pure design metadata, injected as data only; the executable config is never widened by it.
-    design: record(session.design) ? session.design : null,
+    design: record(session.design) ? compactDesignPayload(session.design) : null,
   };
 }
 
@@ -1429,7 +1264,8 @@ function channelScopesHtml(prepared) {
   return `<ul class="channels"><li><strong>Modello</strong> ${escape(model)}</li><li><strong>Questo browser</strong> ${escape(local)}</li><li><strong>Automazione</strong> ${escape(automation)}</li></ul>`;
 }
 
-function renderDiagnosticPreview(value) {
+function renderDiagnosticPreview(value, mode, runtimeSource) {
+  const assetMode = mode === "assets";
   const prepared = prepareDiagnosticReport(value);
   const { report, scenarios, entries, iso, digest, issues, errors, verified, proposals, complete, groups, rejectedSources } = prepared;
   const language = createDesignerLanguage();
@@ -1443,12 +1279,9 @@ function renderDiagnosticPreview(value) {
     : cssMeta.source === "generated-candidate"
       ? `<p class="margin-note">La ricetta è il rationale iniziale del generatore; le misure provengono dai byte CSS catturati, non da un file di output.</p>`
       : "";
-  const generated = iso
-    ? `<time datetime="${escape(report.generatedAt)}">${escape(report.generatedAt)}</time>`
-    : escape(report.generatedAt);
-  const fingerprint = digest ? `<code>${escape(String(report.inputDigest).slice(0, 8))}</code>` : "<strong>non disponibile</strong>";
-  const script = previewScriptSource();
-  const csp = previewCsp(script);
+  const script = runtimeSource ?? previewScriptSource();
+  const publishedScript = `${REPORT_ASSET_MARKER}\n${script}`;
+  const csp = assetMode ? previewCsp(publishedScript, true) : previewCsp(script);
   const payload = inertJson(diagnosticPayload(value));
   // Compact automation: the preview keeps every scope/coverage/engine/error/unsupported summary and
   // accurate measurement counts, and defers the wide measurement/exploration tables to the full
@@ -1466,6 +1299,7 @@ function renderDiagnosticPreview(value) {
   // problems come from `sessionVerification`, which excludes the empty-scenario-matrix noise.
   const identityProblems = verification ? verification.identityProblems : [];
   const severe = [...identityProblems, ...errors];
+  const cssNotice = cssSourceHtml(value);
   const severeNotice = severe.length
     ? `<div class="notice"><p class="status">Problemi di integrità o errori dello snapshot: la verifica non può concludere.</p><ul>${severe.map((item) => `<li>${escape(item)}</li>`).join("")}</ul></div>`
     : "";
@@ -1484,7 +1318,6 @@ ${notesHtml}</details>`;
   const stateDetails = `<details class="is-detail"><summary>Stato e provenienza dell'anteprima</summary>
 ${channelScopesHtml(prepared)}
 <ul class="facts"><li><strong>${groups.length}</strong> ${agree(groups.length, "problema distinto", "problemi distinti")}</li><li><strong>${complete.length}</strong> ${agree(complete.length, "correzione verificata", "correzioni verificate")}</li><li><strong>${entries.length}</strong> ${agree(entries.length, "coppia misurata", "coppie misurate")}</li><li><strong>${scenarios.length}</strong> ${agree(scenarios.length, "scenario", "scenari")}</li></ul>
-<p>Snapshot del ${generated} · SHA-256 abbreviato: ${fingerprint}</p>
 ${sessionIdentityHtml(value)}</details>`;
   const hasCorrections = groups.length > 0 || complete.length > 0 || rejectedSources.length > 0;
   const order = ["banco", "palette", "diagnostica"];
@@ -1501,17 +1334,18 @@ ${problemsHtml(groups, proposals, verified, language)}</section>`
 <meta http-equiv="Content-Security-Policy" content="${escape(csp)}">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Palette e contrasti — anteprima diagnostica ${escape(report.generatedAt)}</title>
-<style>${PREVIEW_CSS}${LOCAL_CSS}${CONTRAST_WORKBENCH_CSS}</style></head><body class="preview-studio"><div class="shell">
+${assetMode ? `<link rel="stylesheet" href="${REPORT_ASSETS.previewStyle}">` : `<style>${PREVIEW_STYLES}</style>`}</head><body class="preview-studio"><div class="shell">
 <a class="skip" href="#contenuto">Vai al contenuto</a>
 <header class="studio-header">
-<div class="studio-brand"><h1>Smart Colors</h1><span id="smart-colors-workbench-session-status" class="studio-session">Anteprima locale</span></div>
-<button type="button" id="smart-colors-workbench-export" data-smart-colors-workbench="export" class="studio-export" disabled>Esporta CSS</button>
+<div class="studio-brand"><h1>Smart Colors</h1><nav class="doc-nav" aria-label="Documenti"><a href="index.html" aria-current="page">Preview</a><a href="report.html">Report tecnico</a></nav></div>
+<div class="studio-actions"><span id="smart-colors-workbench-session-status" class="studio-session">Anteprima locale</span>
+<button type="button" id="smart-colors-workbench-export" data-smart-colors-workbench="export" class="studio-export" disabled>Esporta tuning</button></div>
 </header>
 <main id="contenuto">
 ${severeNotice}
-${cssMeta.status !== "current" ? `<div class="notice">${cssSourceHtml(value)}</div>` : ""}
+${cssMeta.status !== "current" && cssNotice ? `<div class="notice">${cssNotice}</div>` : ""}
 ${renderContrastWorkbench(value)}
-<details id="diagnostica" class="preview-technical"><summary>Diagnostica e archivio completo</summary>
+<details id="diagnostica" class="preview-technical"><summary>Archivio tecnico e diagnostica</summary>
 ${badgeLine}
 ${stateDetails}
 ${cssMeta.status === "current" ? cssSourceHtml(value) : ""}
@@ -1536,18 +1370,19 @@ ${automationDetails}</section>
 </main>
 <footer>
 ${nav}
-<p><a class="studio-report-link" href="smart-colors.html">Report completo ↗</a> · Le prove restano in questa pagina. Nessun file viene modificato automaticamente.</p>
+<p><a class="studio-report-link" href="report.html">Apri il report completo</a> · Le prove restano in questa pagina. Nessun file viene modificato automaticamente.</p>
 <details><summary>Ambito e limiti della verifica</summary><p>Anteprima dello stesso snapshot del report completo. Le misure usano i CSS incorporati, senza leggere il progetto o contattare la rete. Riferimento WCAG 2.x clipped-sRGB sui colori opachi risolti dal browser; trasparenze, foto, gradienti e stati non misurati restano fuori. Un contrasto sufficiente non garantisce che due colori siano distinguibili per ogni persona e non sostituisce un audit completo di accessibilità.</p></details>
 </footer>
 </div>
 <script type="application/json" id="smart-colors-payload">${payload}</script>
-<script id="smart-colors-runtime">${script}</script>
+${assetMode ? `<script id="smart-colors-runtime" src="${REPORT_ASSETS.previewScript}" defer></script>` : `<script id="smart-colors-runtime">${script}</script>`}
 </body></html>\n`;
 }
 
 /** Render the compact preview of a supplied snapshot only: no I/O, no new measurements. */
-export function formatContrastPreviewHtml(value) {
-  if (isDiagnosticSession(value)) return renderDiagnosticPreview(value);
+function renderPreview(value, mode, runtimeSource = null) {
+  if (isDiagnosticSession(value)) return renderDiagnosticPreview(value, mode, runtimeSource);
+  const assetMode = mode === "assets";
   const { report, scenarios, entries, problems, iso, digest, issues, errors, verified, proposals,
     complete, groups, overlaps, variantShifts, rejectedSources, outcome } = prepareContrastReport(value);
   const generated = iso
@@ -1557,18 +1392,18 @@ export function formatContrastPreviewHtml(value) {
   return `${MARKER}
 <!doctype html>
 <html lang="it"><head><meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="${escape(CSP)}">
+<meta http-equiv="Content-Security-Policy" content="${escape(assetMode ? IDLE_CSP : CSP)}">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Contrasto colori — anteprima dello snapshot ${escape(report.generatedAt)}</title>
-<style>${PREVIEW_CSS}</style></head><body><div class="shell">
+${assetMode ? `<link rel="stylesheet" href="${REPORT_ASSETS.previewStyle}">` : `<style>${PREVIEW_CSS}</style>`}</head><body><div class="shell">
 <a class="skip" href="#contenuto">Vai al contenuto</a>
 <header>
-<p class="eyebrow">Smart Colors · anteprima</p>
+<div class="doc-bar"><p class="doc-product">Smart Colors</p><nav class="doc-nav" aria-label="Documenti"><a href="index.html" aria-current="page">Preview</a><a href="report.html">Report tecnico</a></nav></div>
 <h1>Contrasto colori — anteprima</h1>
 <p class="verdict">${outcome}</p>
 <p>${verified ? badge("outline", "Snapshot verificato") : badge("dashed", "Snapshot non verificato")}</p>
 <ul class="facts"><li><strong>${groups.length}</strong> ${agree(groups.length, "problema distinto", "problemi distinti")}</li><li><strong>${complete.length}</strong> ${agree(complete.length, "correzione verificata", "correzioni verificate")}</li><li><strong>${entries.length}</strong> ${agree(entries.length, "coppia misurata", "coppie misurate")}</li><li><strong>${scenarios.length}</strong> ${agree(scenarios.length, "scenario", "scenari")}</li></ul>
-<p>Snapshot del ${generated} · SHA-256 abbreviato: ${fingerprint} · <a href="smart-colors.html">Apri il report completo</a></p>
+<p>Snapshot del ${generated} · SHA-256 abbreviato: ${fingerprint} · <a href="report.html">Apri il report tecnico</a></p>
 <nav aria-label="Sezioni dell’anteprima"><ul><li><a href="#azione">Cosa fare adesso</a></li><li><a href="#problemi">Problemi</a></li><li><a href="#palette">Palette</a></li><li><a href="#varianti">Varianti</a></li><li><a href="#abbinamenti">Abbinamenti</a></li></ul></nav>
 </header>
 <main id="contenuto">
@@ -1585,9 +1420,31 @@ ${variantsHtml(variantShifts)}</section>
 ${pairingsHtml(overlaps)}</section>
 </main>
 <footer>
-<p class="cta"><a href="smart-colors.html">Apri il report completo (smart-colors.html)</a></p>
+<p class="cta"><a href="report.html">Apri il report completo</a></p>
 <p>Anteprima statica dello stesso snapshot del report completo: non misura, non ricalcola e non legge i file del progetto. Riferimento WCAG 2.x clipped-sRGB sui colori opachi risolti dal browser; trasparenze, foto, gradienti e stati non misurati restano fuori, e nessun contrasto sufficiente garantisce che due colori siano distinguibili per ogni persona.</p>
 <p>Questa anteprima non sostituisce un audit completo di accessibilità.</p>
 </footer>
 </div></body></html>\n`;
+}
+
+/** Render the compact preview of a supplied snapshot only: no I/O, no new measurements. */
+export function formatContrastPreviewHtml(value) {
+  return renderPreview(value, "inline");
+}
+
+/**
+ * Asset bundle variant: the same document, stylesheet and optional classic script published as
+ * separate files. The preview script is deferred and authorized by `'self'`; a hash is recorded
+ * for traceability but does not pin external execution without SRI. The inert JSON payload stays
+ * inline so no fetch, module loader or localhost origin is required.
+ */
+export function formatContrastPreviewBundle(value) {
+  const diagnostic = isDiagnosticSession(value);
+  const script = diagnostic ? previewScriptSource() : null;
+  const html = renderPreview(value, "assets", script);
+  const assets = [
+    { relativePath: REPORT_ASSETS.previewStyle, content: `${REPORT_ASSET_MARKER}\n${PREVIEW_STYLES}` },
+  ];
+  if (script !== null) assets.push({ relativePath: REPORT_ASSETS.previewScript, content: `${REPORT_ASSET_MARKER}\n${script}` });
+  return { html, assets };
 }

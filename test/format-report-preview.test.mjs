@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { defaultSmartColorsConfig } from "../src/defaults.mjs";
-import { formatContrastReportHtml, prepareContrastReport } from "../src/format-report-html.mjs";
-import { createLocalPresenter, formatContrastPreviewHtml, localPresenterSource } from "../src/format-report-preview.mjs";
+import { formatContrastReportBundle, formatContrastReportHtml, prepareContrastReport } from "../src/format-report-html.mjs";
+import { createLocalPresenter, formatContrastPreviewBundle, formatContrastPreviewHtml, localPresenterSource } from "../src/format-report-preview.mjs";
+import { REPORT_ASSET_MARKER, REPORT_ASSETS, REPORT_DIRECTORY, REPORT_DOCUMENTS } from "../src/report-paths.mjs";
 import { writeContrastReport } from "../src/report-artifact.mjs";
 
 const MARKER = "<!-- smart-colors-report:v1 -->";
@@ -87,17 +88,17 @@ test("renders a standalone static Italian preview with the report marker, CSP an
   assert.match(html, /<a class="skip" href="#contenuto">/);
   assert.match(html, /<time datetime="2026-07-01T12:34:56\.789Z">2026-07-01T12:34:56\.789Z<\/time>/);
   assert.match(html, /SHA-256 abbreviato: <code>aaaaaaaa<\/code>/);
-  assert.match(html, /href="smart-colors.html"/);
-  assert.match(html, /Apri il report completo \(smart-colors.html\)/);
+  assert.match(html, /href="report\.html"/);
+  assert.match(html, /Apri il report completo/);
   const anchors = [...html.match(/<nav aria-label="Sezioni dell’anteprima">([\s\S]*?)<\/nav>/)[1].matchAll(/href="#([a-z]+)"/g)].map((match) => match[1]);
   assert.deepEqual(anchors, ["azione", "problemi", "palette", "varianti", "abbinamenti"]);
   assert.deepEqual([...html.matchAll(/<section id="([a-z]+)"/g)].map((match) => match[1]), anchors);
   assert.match(html, /main > section \{ container-name: preview-section; container-type: inline-size; scroll-margin-top: 5rem; \}/);
   assert.match(html, /@container preview-section \(min-width: 40rem\)/);
-  assert.match(html, /\.verdict \{ font-size: clamp\(1\.75rem, 1\.2rem \+ 2vw, 2\.5rem\); font-weight: 700;/);
+  assert.match(html, /\.verdict \{ font-size: var\(--text-xl\); font-weight: 700;/);
   assert.match(html, /<li><strong>0<\/strong> problemi distinti<\/li><li><strong>0<\/strong> correzioni verificate<\/li><li><strong>1<\/strong> coppia misurata<\/li><li><strong>1<\/strong> scenario<\/li>/);
   for (const feature of [/@media \(forced-colors: active\)/, /@media print/, /@media \(prefers-reduced-motion: no-preference\)/]) assert.match(html, feature);
-  assert.ok([...html.matchAll(/href="([^"]+)"/g)].every((match) => /^(#|smart-colors\.html(#\w+)?$)/.test(match[1])), "Only in-document anchors or the full report may be linked");
+  assert.ok([...html.matchAll(/href="([^"]+)"/g)].every((match) => /^(?:#[\w-]+|index\.html|report\.html)$/.test(match[1])), "Only in-document anchors or the paired document may be linked");
 });
 
 test("static previews carry no script, no external resource and no inline handler", () => {
@@ -460,7 +461,7 @@ test("a realistic snapshot stays inside the 120 KB budget and keeps every sectio
   assert.match(html, /Senza i tuning di progetto questa coppia rispettava le soglie/);
   assert.match(html, /Coperta da <a href="#proposal-1">Correzione di prova sul primo abbinamento<\/a>/);
   assert.equal((html.match(/<li><span class="variant-swatch"/g) ?? []).length, 5);
-  assert.match(section(html, "varianti"), /Altre \d+ varianti oltre soglia nel <a href="smart-colors\.html#usi">report completo<\/a>/);
+  assert.match(section(html, "varianti"), /Altre \d+ varianti oltre soglia nel <a href="report\.html#usi">report tecnico<\/a>/);
   assert.match(section(html, "abbinamenti"), /<strong class="count">3<\/strong> usabili per testo normale · <strong class="count">1<\/strong> solo per titoli grandi, bordi e icone · <strong class="count">1<\/strong> da evitare/);
   assert.equal((section(html, "abbinamenti").match(/<li><span class="pair-chip"/g) ?? []).length, 6);
   assert.match(section(html, "palette"), /<p class="sample-note"><span class="tier">AA<\/span>/);
@@ -474,11 +475,15 @@ test("one writer call publishes both marked artifacts and never overwrites an un
   t.after(() => rm(root, { recursive: true, force: true }));
   const input = report({ scenarios: [scenario({ diagnostics: [diagnostic({ ratio: 4.2 })] })], proposals: [proposal()] });
   const result = await writeContrastReport({ root, config: structuredClone(defaultSmartColorsConfig), report: input, preview: true });
-  assert.equal(result.reportPath, path.join(root, "reports/smart-colors.html"));
-  assert.equal(result.previewPath, path.join(root, "reports/smart-colors-preview.html"));
-  assert.deepEqual((await readdir(path.join(root, "reports"))).sort(), ["smart-colors-preview.html", "smart-colors.html"]);
-  assert.equal(await readFile(result.reportPath, "utf8"), formatContrastReportHtml(input));
-  assert.equal(await readFile(result.previewPath, "utf8"), formatContrastPreviewHtml(input));
+  const previewBundle = formatContrastPreviewBundle(input);
+  const reportBundle = formatContrastReportBundle(input);
+  assert.equal(result.reportPath, path.join(root, REPORT_DOCUMENTS.report));
+  assert.equal(result.previewPath, path.join(root, REPORT_DOCUMENTS.preview));
+  assert.equal(await readFile(result.reportPath, "utf8"), reportBundle.html);
+  assert.equal(await readFile(result.previewPath, "utf8"), previewBundle.html);
+  for (const asset of [...previewBundle.assets, ...reportBundle.assets]) {
+    assert.equal(await readFile(path.join(root, REPORT_DIRECTORY, asset.relativePath), "utf8"), asset.content, asset.relativePath);
+  }
   assert.ok((await readFile(result.previewPath, "utf8")).startsWith(`${MARKER}\n`));
   await writeFile(result.previewPath, "hand written note\n");
   await assert.rejects(
@@ -486,13 +491,13 @@ test("one writer call publishes both marked artifacts and never overwrites an un
     /refuses to overwrite an unowned file/,
   );
   assert.equal(await readFile(result.previewPath, "utf8"), "hand written note\n");
-  assert.equal(await readFile(result.reportPath, "utf8"), formatContrastReportHtml(input));
+  assert.equal(await readFile(result.reportPath, "utf8"), reportBundle.html);
 
   const single = await mkdtemp(path.join(tmpdir(), "smart-colors-preview-"));
   t.after(() => rm(single, { recursive: true, force: true }));
   const onlyReport = await writeContrastReport({ root: single, config: structuredClone(defaultSmartColorsConfig), report: input });
-  assert.equal(onlyReport, path.join(single, "reports/smart-colors.html"));
-  assert.deepEqual(await readdir(path.join(single, "reports")), ["smart-colors.html"]);
+  assert.equal(onlyReport, path.join(single, REPORT_DOCUMENTS.report));
+  assert.equal(await readFile(onlyReport, "utf8"), reportBundle.html);
 });
 
 // ---------------------------------------------------------------------------
@@ -654,7 +659,7 @@ test("the session preview leads with the workbench, keeps the raw source archive
   assert.match(html, /id="smart-colors-workbench"/);
   // The raw source metadata stays in a closed native detail, not on the primary surface.
   assert.match(html, /<details class="is-detail wb-palette-details"><summary>Dettagli tecnici della palette sorgente<\/summary>/);
-  assert.match(html, /<details id="diagnostica" class="preview-technical"><summary>Diagnostica e archivio completo<\/summary>/);
+  assert.match(html, /<details id="diagnostica" class="preview-technical"><summary>Archivio tecnico e diagnostica<\/summary>/);
   assert.match(html, /<details class="is-detail archive-gallery"><summary>Apri l'archivio dei campioni risolti \(stime, non verifiche\)<\/summary>/);
   // The archive gallery must not dominate: the summary line precedes the model samples.
   assert.ok(html.indexOf("archive-gallery") < html.indexOf("Famiglia <code>--color-primary</code>"), "the resolved gallery sits inside the archive detail");
@@ -677,7 +682,7 @@ test("the session preview leads with the workbench, keeps the raw source archive
   assert.doesNotMatch(html, /Azzera tutto il tuning<\/button>/, "the old reset label is gone");
   assert.equal((html.match(/Scarta la bozza di tuning<\/button>/g) ?? []).length, 1);
   assert.match(html, /«Scarta la bozza…» non rimuove gli override già salvati/);
-  assert.match(html, /Ambito: solo i controlli pubblici dichiarati per i due token della coppia selezionata/);
+  assert.match(html, /data-smart-colors-workbench="manual"/);
 });
 
 test("the hashed session script always integrates the mandatory workbench runtime and view factory", () => {
@@ -790,11 +795,13 @@ test("a session preview stays useful without JavaScript and keeps the model out 
   assert.match(html, /<h1>Smart Colors<\/h1>/);
   const header = html.match(/<header class="studio-header">([\s\S]*?)<\/header>/)[1];
   assert.match(header, /id="smart-colors-workbench-session-status"[^>]*>Anteprima locale/);
-  assert.match(header, /id="smart-colors-workbench-export"[^>]*disabled>Esporta CSS/);
+  assert.match(header, /id="smart-colors-workbench-export"[^>]*disabled>Esporta tuning/);
   assert.equal((html.match(/id="smart-colors-workbench-export"/g) ?? []).length, 1);
-  assert.doesNotMatch(header, /class="lede"|<nav/);
+  assert.doesNotMatch(header, /class="lede"|Sezioni dell’anteprima/);
   assert.equal((html.match(/<h1>/g) ?? []).length, 1);
   assert.match(html, /<main id="contenuto">/);
+  assert.match(html, /@container studio-shell \(max-width: 32rem\) \{[\s\S]*\.studio-actions \{ flex: 1 1 100%; justify-content: space-between; \}/);
+  assert.doesNotMatch(html, /\.studio-session \{ flex-basis: 100%; \}/, "status and export stay in the same flex row on mobile");
   // Three explicit channels, never one global verdict: model forecast, this browser, automation.
   assert.match(html, /<strong>Modello<\/strong> Stima del modello/);
   assert.match(html, /<strong>Questo browser<\/strong>/);
@@ -811,7 +818,7 @@ test("a session preview stays useful without JavaScript and keeps the model out 
   assert.match(html, /Automazione disattivata/);
   assert.match(html, /Misure locali non eseguite: serve JavaScript nel browser/);
   assert.match(html, /Snapshot incorporato: <code>snap-123<\/code> · Versione tool: <code>0\.3\.0<\/code>/);
-  assert.match(html, /<a[^>]*href="smart-colors\.html">/);
+  assert.match(html, /<a[^>]*href="report\.html">/);
 });
 
 test("session markup follows the navigation, keeps a logical heading order and never moves focus", () => {
@@ -830,7 +837,7 @@ test("session markup follows the navigation, keeps a logical heading order and n
   assert.match(html, /data-smart-colors-diagnostic="status" role="status"/);
   assert.match(html, /<button type="button" data-smart-colors-diagnostic="retry" hidden>Ripeti verifica<\/button>/);
   const allowedLinks = html.replace(/href="https:\/\/www\.w3\.org\/TR\/WCAG22\/#[a-z-]+"/g, 'href=""');
-  assert.ok([...allowedLinks.matchAll(/href="([^"]+)"/g)].every((match) => /^(#|smart-colors\.html(#\w+)?$)/.test(match[1])), "only in-document anchors, the full report or static WCAG reference links may be linked");
+  assert.ok([...allowedLinks.matchAll(/href="([^"]+)"/g)].every((match) => /^(?:#[\w-]+|index\.html|report\.html)$/.test(match[1])), "only in-document anchors, the paired documents or static WCAG reference links may be linked");
 });
 
 test("a diagnostic session escapes hostile identity and automation metadata", () => {
@@ -886,6 +893,56 @@ test("a session preview stays inside the mandatory offline budget on the starter
   assert.ok(starter <= PREVIEW_BUDGET_BYTES, `starter preview is ${starter} bytes, over the budget`);
   assert.ok(extended <= PREVIEW_BUDGET_BYTES, `stress preview is ${extended} bytes, over the budget`);
   assert.ok(extended > starter, "the stress palette must be the heavier measurement");
+});
+
+// Asset mode publishes the same bytes instead of changing the document: the aggregate (HTML plus
+// every asset) is the budget, never the HTML alone. The preview script stays a classic deferred
+// script and the payload stays inline, so no fetch, module loader or localhost origin is needed.
+test("the preview bundle splits CSS and script, keeps the inert payload inline and stays under the same aggregate budget", () => {
+  const inline = preview(diagSession());
+  const starter = formatContrastPreviewBundle(diagSession());
+  const extended = formatContrastPreviewBundle(extendedSession());
+  assert.equal(starter.html.split("\n")[0], MARKER);
+  assert.match(starter.html, new RegExp(`<link rel="stylesheet" href="${REPORT_ASSETS.previewStyle.replace(".", "\\.")}">`));
+  assert.match(starter.html, new RegExp(`<script id="smart-colors-runtime" src="${REPORT_ASSETS.previewScript.replace(".", "\\.")}" defer><\\/script>`));
+  assert.match(starter.html, /<script type="application\/json" id="smart-colors-payload">/);
+  assert.doesNotMatch(starter.html, /<style>|<script id="smart-colors-runtime">/);
+  assert.doesNotMatch(starter.html, /type="module"|\bfetch\s*\(|XMLHttpRequest|WebSocket|\beval\s*\(|new Function\b/);
+  assert.match(starter.html, new RegExp(`href="${REPORT_DOCUMENTS.report.split("/").pop()}"`));
+  assert.deepEqual(starter.assets.map((asset) => asset.relativePath), [REPORT_ASSETS.previewStyle, REPORT_ASSETS.previewScript]);
+  for (const asset of starter.assets) assert.ok(asset.content.startsWith(REPORT_ASSET_MARKER), `${asset.relativePath} must carry the shared marker`);
+  const css = starter.assets.find((asset) => asset.relativePath === REPORT_ASSETS.previewStyle).content;
+  const script = starter.assets.find((asset) => asset.relativePath === REPORT_ASSETS.previewScript).content;
+  assert.doesNotMatch(css, /@import|url\(/i);
+  assert.doesNotThrow(() => new Function(script), "the classic script asset must parse");
+  assert.match(cspOf(starter.html), /script-src 'sha256-[A-Za-z0-9+/=]+' 'self'/);
+  assert.match(cspOf(starter.html), /style-src 'unsafe-inline' 'self'/);
+  assert.doesNotMatch(cspOf(starter.html), /\bfile:/, "the broad file: scheme source is removed");
+  assert.doesNotMatch(cspOf(starter.html), /unsafe-eval|unsafe-hashes/);
+  const hash = createHash("sha256").update(script, "utf8").digest("base64");
+  assert.ok(cspOf(starter.html).includes(`'sha256-${hash}'`), "the hash is recorded over the exact published bytes, marker included, for traceability");
+  const aggregate = (bundle) => Buffer.byteLength(bundle.html) + bundle.assets.reduce((total, asset) => total + Buffer.byteLength(asset.content, "utf8"), 0);
+  assert.ok(aggregate(starter) <= PREVIEW_BUDGET_BYTES, `bundle aggregate is ${aggregate(starter)} bytes, over the budget`);
+  assert.ok(aggregate(extended) <= PREVIEW_BUDGET_BYTES, `stress bundle aggregate is ${aggregate(extended)} bytes, over the budget`);
+  assert.ok(aggregate(starter) > Buffer.byteLength(starter.assets[1].content), "the aggregate is not an HTML-only measure");
+  assert.ok(aggregate(starter) <= Buffer.byteLength(inline) + 4096, "splitting must not duplicate the inline bytes");
+  // Same render internals: only the CSP and the asset delivery shape may differ.
+  const normalize = (html) => html
+    .replace(/<meta http-equiv="Content-Security-Policy"[^>]*>/, "<CSP>")
+    .replace(/<style>[\s\S]*?<\/style>|<link rel="stylesheet"[^>]*>/, "<ASSET>")
+    .replace(/<script id="smart-colors-runtime"[^>]*>[\s\S]*?<\/script>/, "<SCRIPT>");
+  assert.equal(normalize(starter.html), normalize(inline));
+});
+
+test("a static snapshot bundle links the shared stylesheet and never gains a script or a script asset", () => {
+  const bundle = formatContrastPreviewBundle(report());
+  assert.deepEqual(bundle.assets.map((asset) => asset.relativePath), [REPORT_ASSETS.previewStyle]);
+  assert.match(bundle.html, new RegExp(`<link rel="stylesheet" href="${REPORT_ASSETS.previewStyle.replace(".", "\\.")}">`));
+  assert.doesNotMatch(bundle.html, /<script|<style>|type="module"/);
+  assert.match(cspOf(bundle.html), /script-src 'none'/);
+  assert.match(cspOf(bundle.html), /style-src 'unsafe-inline' 'self'/);
+  assert.doesNotMatch(cspOf(bundle.html), /\bfile:/);
+  assert.match(bundle.html, /href="report\.html"/);
 });
 
 test("the session family catalog keeps technical tokens inside collapsed native details", () => {
@@ -1021,7 +1078,7 @@ test("automation engine and error details stay static, escaped and cause-complet
   assert.doesNotMatch(markup, /<caption>Misure automatizzate per coppia<\/caption>/);
   assert.match(markup, /<h4>Misure automatizzate \(1\)<\/h4>/);
   assert.match(markup, /<ul class="automation-counts"><li><strong>1<\/strong> sotto il minimo<\/li><li><strong>0<\/strong> sotto il target<\/li><li><strong>0<\/strong> non misurate<\/li><li><strong>0<\/strong> raggiungono minimo e target<\/li><\/ul>/);
-  assert.match(markup, /<a href="smart-colors.html">Apri misure complete nel report<\/a>/);
+  assert.match(markup, /<a href="report\.html">Apri misure complete nel report<\/a>/);
   assert.match(markup, /<h4>Errori dell'automazione \(2\)<\/h4>/);
   const withoutWcagLinks = markup.replace(/href="https:\/\/www\.w3\.org\/TR\/WCAG22\/#[a-z-]+"/g, "");
   assert.doesNotMatch(withoutWcagLinks, /\/opt\/foo\.svg|https?:\/\//);
@@ -1321,6 +1378,47 @@ test("the payload carries design as inert data without widening the executable c
   assert.equal(payload.design.version, 1);
   assert.deepEqual(Object.keys(payload.config).sort(), ["contrast", "roles"]);
   assert.ok(!payloadBlock(html).includes("<"), "the payload block stays tag-free inert JSON");
+});
+
+test("the payload omits only a token usage that exactly duplicates its recipe usage", () => {
+  const design = designFixture();
+  design.tokens["--color-primary-text"].usage = design.recipes.text.usage;
+  const input = diagSession({ design });
+  const html = preview(input);
+  const payload = JSON.parse(payloadBlock(html));
+  assert.equal(Object.hasOwn(payload.design.tokens["--color-primary-text"], "usage"), false, "the duplicated usage is not serialized twice");
+  assert.equal(payload.design.tokens["--color-primary-surface"].usage, "Sfondo tinto", "a distinct usage is preserved");
+  assert.equal(payload.design.recipes.text.usage, "family text", "the single source of the usage remains");
+  assert.equal(design.tokens["--color-primary-text"].usage, "family text", "the input design is not mutated");
+  assert.match(html, /family text/, "the rendered HTML keeps the declared usage");
+});
+
+test("the payload keeps only the role keys and mix percentages the runtime reads", () => {
+  const design = designFixture();
+  design.sources.push(
+    { token: "--palette-auto-null", name: "auto-null", role: "ui", darkBlend: null, darkMix: { mode: "automatic", sourcePercent: null, whitePercent: null } },
+    { token: "--palette-auto-mix", name: "auto-mix", role: "ui", darkBlend: null, darkMix: { mode: "automatic", sourcePercent: 77.5, whitePercent: 22.5 } },
+  );
+  const input = diagSession({ design });
+  const html = preview(input);
+  const payload = JSON.parse(payloadBlock(html));
+  const recipe = payload.design.recipes.text;
+  assert.deepEqual(recipe, { kind: "contrast", usage: "family text" }, "browser-irrelevant recipe fields are not duplicated");
+  const brand = payload.design.sources.find((source) => source.token === "--palette-brand");
+  assert.equal(brand.darkBlend, 80, "an explicit dark-blend survives");
+  assert.deepEqual(brand.darkMix, { sourcePercent: 77.6, whitePercent: 22.4 }, "the displayed percentages survive without the unused mode");
+  const autoNull = payload.design.sources.find((source) => source.token === "--palette-auto-null");
+  assert.equal(Object.hasOwn(autoNull, "darkBlend"), false, "the null automatic default is omitted, not lost");
+  assert.equal(autoNull.darkMix, undefined, "a mix with no displayable percentages is dropped");
+  const autoMix = payload.design.sources.find((source) => source.token === "--palette-auto-mix");
+  assert.equal(Object.hasOwn(autoMix, "darkBlend"), false);
+  assert.deepEqual(autoMix.darkMix, { sourcePercent: 77.5, whitePercent: 22.5 });
+  assert.equal(payload.config.roles.identities.primary.token, "primary", "the runtime contract keeps the identity token");
+  assert.equal(Object.hasOwn(payload.config.roles.identities.primary, "role"), false, "the duplicated identity role is not repeated in the payload");
+  assert.deepEqual(Object.keys(payload.config.roles.identities), ["primary"]);
+  assert.equal(design.recipes.text.basis, "contrast", "the input recipe is not mutated");
+  assert.equal(design.sources[0].darkMix.mode, "explicit", "the input source is not mutated");
+  assert.match(html, /dark-blend 80 → source 77\.6% \/ white 22\.4%/, "the rendered HTML keeps the human-readable mix");
 });
 
 test("design metadata is escaped in the drawn-color panel", () => {

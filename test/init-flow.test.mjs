@@ -12,6 +12,7 @@ import { generateColorTokens } from "../src/generate-colors.mjs";
 import { createDiagnosticSession } from "../src/diagnostic-session.mjs";
 import { initSmartColors } from "../src/init.mjs";
 import { loadSmartColorsConfig } from "../src/load-config.mjs";
+import { REPORT_ASSETS, REPORT_DIRECTORY, REPORT_DOCUMENTS } from "../src/report-paths.mjs";
 import { resolveTuningFile } from "../src/report-data.mjs";
 
 /**
@@ -26,8 +27,8 @@ const CONFIG_PATH = "smart-colors.config.mjs";
 const PALETTE_PATH = "src/styles/tokens/palette.css";
 const TUNING_PATH = "src/styles/tokens/colors-tuning.css";
 const OUTPUT_PATH = "src/styles/tokens/colors.css";
-const REPORT_PATH = "reports/smart-colors.html";
-const PREVIEW_PATH = "reports/smart-colors-preview.html";
+const REPORT_PATH = REPORT_DOCUMENTS.report;
+const PREVIEW_PATH = REPORT_DOCUMENTS.preview;
 
 async function emptyProject(t) {
   const root = await mkdtemp(path.join(tmpdir(), "smart-colors-init-flow-"));
@@ -89,8 +90,20 @@ async function assertRoundtrip(root, outputPath, extraArgs = []) {
   assert.ok((await readFile(path.join(root, outputPath), "utf8")).length > 0, "build must write the effective output");
   await runCli(root, "check", ...extraArgs);
   await runCli(root, "report", "--automation=off", ...extraArgs);
-  assert.ok(await exists(path.join(root, REPORT_PATH)));
-  assert.ok(await exists(path.join(root, PREVIEW_PATH)));
+  assert.ok(await exists(path.join(root, REPORT_PATH)), "report must write the static report");
+  assert.ok(await exists(path.join(root, PREVIEW_PATH)), "report must write the interactive preview");
+  for (const asset of Object.values(REPORT_ASSETS)) {
+    assert.ok(await exists(path.join(root, REPORT_DIRECTORY, asset)), `report must write the local asset ${asset}`);
+  }
+
+  const previewHtml = await readFile(path.join(root, PREVIEW_PATH), "utf8");
+  const reportHtml = await readFile(path.join(root, REPORT_PATH), "utf8");
+  assert.ok(previewHtml.includes(`href="${REPORT_ASSETS.previewStyle}"`), "the preview links its same-folder stylesheet");
+  assert.ok(previewHtml.includes(`src="${REPORT_ASSETS.previewScript}"`), "the preview loads its same-folder runtime");
+  assert.match(previewHtml, /<script\b[^>]*\bdefer\b/, "the preview runtime is a classic deferred script");
+  assert.match(previewHtml, /<script\b[^>]*type="application\/json"/, "the preview payload is inert JSON");
+  assert.ok(reportHtml.includes(`href="${REPORT_ASSETS.reportStyle}"`), "the static report links its same-folder stylesheet");
+  assert.doesNotMatch(reportHtml, /<script\b/, "the static report stays script-free");
 }
 
 test("init default needs no config, then build/check/report roundtrip without Playwright", async (t) => {

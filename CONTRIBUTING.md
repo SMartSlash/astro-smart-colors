@@ -35,11 +35,15 @@ network access, so it stays fast enough to run on every save.
   a suggestion is never applied automatically.
 - **No colour is "correct" in isolation.** A change to a threshold, a role or a
   derivation must show which measured pairs it moves.
-- **The full report stays static.** `reports/smart-colors.html` keeps
-  `script-src 'none'`, no external assets, and an unverified snapshot never
-  receives a positive verdict or a suggested colour. The preview may embed the
-  isolated diagnostic runtime behind its own SHA-256 CSP and sandboxed frames;
-  that runtime touches only the in-memory DOM and never the project files.
+- **The full report stays static.** `smart-colors-reports/report.html` keeps
+  `script-src 'none'` and has no script. It loads only its same-folder
+  `styles/report.css`: no remote assets or remote styles are permitted. An
+  unverified snapshot never receives a positive verdict or a suggested colour.
+  The preview loads only its same-folder `styles/preview.css` and the classic
+  deferred `scripts/preview.js`, next to an inert JSON payload; its runtime
+  touches only the in-memory DOM and never the project files. Keep the whole
+  `smart-colors-reports/` folder together. The writer never deletes, moves or
+  rewrites a legacy `reports/` directory.
 
 ## Optional peers and browser E2E
 
@@ -60,7 +64,9 @@ pre-installed binaries and must not be presented as package requirements.
 Keep consumer commands runnable with `pnpm exec smart-colors` and the effective
 `--root`/`--config` paths. The `scripts/*` harnesses in the site repository are
 not package files and must not be documented as shipped examples. Do not bump
-the version or create a tag as part of a documentation change.
+the version or create a tag as part of a documentation change. When documenting
+the diagnostic artifacts, name the whole `smart-colors-reports/` folder and its
+local assets; do not describe an HTML file as self-contained.
 
 ## Finding the owner of a change
 
@@ -73,12 +79,13 @@ the version or create a tag as part of a documentation change.
 | Captured inputs and orchestration | `diagnostic-session.mjs`, `diagnostic-workflow.mjs`, `report-data.mjs` | Preserve captured bytes and keep intentional build writes distinct from external changes. |
 | Browser verification | `browser-audit.mjs`, `verification-dom.mjs`, `diagnostic-runtime.mjs` | Separate orchestration, applied-style collection and browser lifecycle. |
 | Interactive tuning | `contrast-workbench-runtime.mjs` | Own selection, drafts, proposals and conservative export; never write project files. |
+| Report layout and bundle | `report-paths.mjs`, `report-artifact.mjs` | Own the shared folder/document/asset names and the writer bundle; renderers keep their standalone inline output and expose the asset bundle. |
 | Preview UI and reports | `contrast-workbench-view.mjs`, `format-report-preview.mjs`, `format-report-html.mjs` | Render controller state; do not recalculate contrast in presentation code. |
 | CLI and Astro | `cli.mjs`, `astro-integration.mjs` | Consume validated config and existing workflow results, rather than duplicating them. |
 
 Package entry points are declared in `package.json#exports`. Do not add an exported
 helper solely for a test; exercise the owning entry point instead.
-See [the October 2026 review](./docs/CODE-REVIEW.md) for fixes and remaining risks.
+See [the October 2026 review](./docs/CODE-REVIEW.md) for fixes and remaining risks. That review and [`PREVIEW-UX-ANALYSIS.md`](./docs/PREVIEW-UX-ANALYSIS.md) are historical: their `reports/*.html` paths describe the pre-migration layout.
 
 ## Keeping changes human-maintainable
 

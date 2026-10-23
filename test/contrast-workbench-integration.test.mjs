@@ -33,6 +33,7 @@ import { formatContrastPreviewHtml } from "../src/format-report-preview.mjs";
 import { generateColorTokens } from "../src/generate-colors.mjs";
 import { createVerificationCore } from "../src/verification-core.mjs";
 import { WORKBENCH_RUNTIME_GLOBAL } from "../src/contrast-workbench-runtime.mjs";
+import { REPORT_ASSETS } from "../src/report-paths.mjs";
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(TEST_DIR, "../../..");
@@ -772,7 +773,7 @@ test("the 16-source catalogue routes uses through a bounded picker with category
     assert.equal(catalog.countLive, "polite");
     assert.deepEqual(catalog.ids, Array(catalog.ids.length).fill(1), "each picker id exists exactly once");
 
-    // No new CSP escape hatches for the dialog: the runtime stays hash-pinned and offline.
+    // No new CSP escape hatches for the dialog: this inline preview stays hash-pinned and offline.
     const csp = await page.evaluate(() => document.querySelector('meta[http-equiv="Content-Security-Policy"]').content);
     assert.match(csp, /default-src 'none'/);
     assert.match(csp, /script-src 'sha256-[A-Za-z0-9+/=]+'/);
@@ -2190,6 +2191,14 @@ test("a real root-sized automation session keeps the preview within the 768 KiB 
     const previewBytes = Buffer.byteLength(previewHtml, "utf8");
     assert.ok(previewBytes <= PREVIEW_BUDGET_BYTES, "the root-sized automation preview must stay within " + PREVIEW_BUDGET_BYTES + " bytes: " + previewBytes);
     assert.ok(previewBytes > LEGACY_PREVIEW_BYTES, "the root-sized automation preview is provably above the legacy cap: " + previewBytes);
+    // The offline budget covers the published bundle, not the HTML alone.
+    const previewDir = path.dirname(workflow.publication.previewPath);
+    const previewAssetPaths = [REPORT_ASSETS.previewStyle, REPORT_ASSETS.previewScript];
+    const previewAssetBytes = (await Promise.all(previewAssetPaths.map((relativePath) => readFile(path.join(previewDir, relativePath)))))
+      .reduce((total, content) => total + content.length, 0);
+    const previewBundleBytes = previewBytes + previewAssetBytes;
+    const assetSizes = (await Promise.all(previewAssetPaths.map(async (relativePath) => relativePath + ":" + (await readFile(path.join(previewDir, relativePath))).length))).join(", ");
+    assert.ok(previewBundleBytes <= PREVIEW_BUDGET_BYTES, "the root-sized automation preview bundle (HTML + assets) must stay within " + PREVIEW_BUDGET_BYTES + " bytes: " + previewBundleBytes + " (html " + previewBytes + ", " + assetSizes + ")");
     // Compact preview vs full static report: the wide automation tables live only in the report.
     assert.match(previewHtml, /Apri misure complete nel report/, "the compact preview must link to the complete report");
     assert.doesNotMatch(previewHtml, /Misure automatizzate per coppia/, "the preview must not carry the wide automation table");

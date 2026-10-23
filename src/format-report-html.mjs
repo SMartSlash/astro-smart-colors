@@ -1,5 +1,7 @@
+import { readFileSync } from "node:fs";
 import { createDesignerLanguage } from "./designer-language.mjs";
 import { createDesignTools } from "./design-recipes.mjs";
+import { REPORT_ASSET_MARKER, REPORT_ASSETS } from "./report-paths.mjs";
 
 export const MARKER = "<!-- smart-colors-report:v1 -->";
 // The report and the preview must name the same pair identically, so the shared lexicon is
@@ -14,201 +16,12 @@ const STATUSES = {
 };
 export const CSP = "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; font-src 'none'; media-src 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'";
 
-const CSS = `
-@layer reset, tokens, base, components, pages, animations, layout, utilities, capabilities, preferences, overrides;
-@layer reset {
-  *, *::before, *::after { box-sizing: border-box; }
-  body, h1, h2, h3, h4, h5, p, ul, ol, dl, dd, figure { margin: 0; }
-}
-@layer tokens {
-  :root {
-    color-scheme: light;
-    --ink: #14161a;
-    --ink-soft: #4a4f57;
-    --ink-muted: #6b7280;
-    --paper: #ffffff;
-    --paper-soft: #f7f7f5;
-    --soft: #f2f2ef;
-    --line: #d6d7d2;
-    --line-strong: #9aa0a6;
-    --accent: #1f3a5f;
-    --accent-soft: #eef2f7;
-    --warn-soft: #fdf6e8;
-    --metric: 1.05;
-    --space-1: .25rem; --space-2: .5rem; --space-3: .75rem; --space-4: 1rem; --space-5: 1.5rem; --space-6: 2rem; --space-7: 3rem;
-    --radius-sm: 4px; --radius: 8px; --radius-lg: 14px;
-    --shadow-1: 0 1px 2px rgba(16, 18, 22, .06), 0 1px 3px rgba(16, 18, 22, .04);
-    --shadow-2: 0 2px 4px rgba(16, 18, 22, .06), 0 8px 24px rgba(16, 18, 22, .06);
-    --text-xs: .8125rem; --text-sm: .875rem; --text-base: 1rem; --text-md: 1.0625rem;
-    --text-lg: 1.25rem; --text-xl: 1.5rem; --text-2xl: clamp(1.75rem, 1.2rem + 2vw, 2.375rem);
-    --measure: 72ch;
-  }
-}
-@layer base {
-  html { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; line-height: 1.6; color: var(--ink); background: var(--paper-soft); -webkit-text-size-adjust: 100%; }
-  body { overflow-wrap: anywhere; }
-  h1, h2, h3, h4, h5 { line-height: 1.2; text-wrap: balance; }
-  h1 { font-size: var(--text-2xl); letter-spacing: -.015em; }
-  h2 { font-size: var(--text-xl); letter-spacing: -.01em; }
-  h3 { font-size: var(--text-md); }
-  h4 { font-size: var(--text-base); }
-  h5 { font-size: var(--text-sm); text-transform: uppercase; letter-spacing: .06em; color: var(--ink-soft); }
-  p, li, dd { max-width: var(--measure); }
-  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: .18em; }
-  a:hover { text-decoration-thickness: 2px; }
-  :focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; border-radius: var(--radius-sm); }
-  code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; user-select: text; }
-  code { padding: .1em .35em; border-radius: var(--radius-sm); background: var(--soft); font-size: .92em; }
-  pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: var(--space-4); border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); }
-  pre code { padding: 0; background: none; }
-  summary { cursor: pointer; padding: var(--space-3) var(--space-4); min-height: 44px; font-weight: 650; display: flex; gap: var(--space-3); align-items: baseline; }
-  summary::marker { content: ""; }
-  summary::before { content: "▸"; color: var(--ink-muted); font-weight: 400; }
-  details[open] > summary::before { content: "▾"; }
-  details { border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); }
-  details + details { margin-block-start: var(--space-3); }
-  details > :not(summary) { margin-inline: var(--space-4); }
-  details > :last-child:not(summary) { margin-block-end: var(--space-4); }
-  table { border-collapse: collapse; width: 100%; min-width: 48rem; font-size: var(--text-sm); }
-  caption { text-align: start; font-weight: 650; padding-block: var(--space-3); }
-  th, td { border-block-end: 1px solid var(--line); padding: var(--space-3); text-align: start; vertical-align: top; }
-  thead th { background: var(--soft); border-block-end: 1px solid var(--line-strong); position: sticky; top: 0; z-index: 1; }
-  tbody tr:nth-child(even) td, tbody tr:nth-child(even) th { background: color-mix(in oklab, var(--soft) 40%, var(--paper)); }
-  figure { margin: 0; }
-  figcaption { padding-block: var(--space-2); color: var(--ink-soft); }
-  dt { font-weight: 650; }
-  dd { margin-block-end: var(--space-3); color: var(--ink-soft); }
-}
-@layer components {
-  .notice, .card { border: 1px solid var(--line); border-radius: var(--radius); padding: var(--space-4); background: var(--paper); color: var(--ink); box-shadow: var(--shadow-1); }
-  .notice { border-inline-start: .35rem solid var(--line-strong); background: var(--warn-soft); }
-  .notice > :first-child, .card > :first-child { margin-block-start: 0; }
-  .recommendation { border-color: var(--accent); border-inline-start-width: .4rem; box-shadow: var(--shadow-2); }
-  .status { font-weight: 700; }
-  .overview { font-size: var(--text-lg); font-weight: 700; margin-block-end: var(--space-2); }
-  .eyebrow { font-size: var(--text-xs); font-weight: 750; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-muted); }
-  .badge { display: inline-block; padding: .15rem .6rem; border-radius: 999px; background: var(--ink); color: var(--paper); font-size: var(--text-xs); font-weight: 750; letter-spacing: .02em; }
-  .table-scroll { overflow-x: auto; max-width: 100%; border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); }
-  .table-scroll:focus-visible { outline-offset: 2px; }
-  .swatch { height: 4rem; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--sample-color, var(--soft)); }
-  .color-choice { padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); }
-  .color-choice--suggested { border: 2px solid var(--accent); box-shadow: var(--shadow-1); }
-  .color-choice .swatch { height: 7rem; }
-  .color-choice figcaption strong { display: block; margin-block-end: var(--space-2); }
-  .color-choice--suggested figcaption strong { font-size: var(--text-md); }
-  .contrast-value { display: block; margin-block: var(--space-2); font-size: var(--text-xl); font-weight: 750; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
-  .problem-card h3 { margin-block-end: var(--space-2); }
-  .snippet-label { font-weight: 750; margin-block-start: var(--space-4); }
-  .destination dt, .destination dd { display: inline; }
-  .destination dd { margin-inline-start: var(--space-2); color: var(--ink); }
-  .destination div + div { margin-block-start: var(--space-2); }
-  .pair-visual { display: grid; gap: .35rem; min-height: 6rem; padding: var(--space-4); border: 1px solid var(--line); border-radius: var(--radius); background: var(--sample-bg, var(--soft)); color: var(--sample-fg, var(--ink)); }
-  .pair-title { font-size: 1.2rem; font-weight: 700; line-height: 1.25; }
-  .pair-text { font-size: 1rem; font-weight: 400; }
-  .pair-label { font-size: var(--text-xs); }
-  .pair-border { display: block; width: 4rem; height: 1.25rem; border: 1px solid var(--sample-fg, var(--ink)); border-radius: 2px; }
-  .pair-border--2 { border-width: 2px; }
-  .pair-border--3 { border-width: 3px; }
-  .skip { display: inline-block; padding: var(--space-2) var(--space-3); }
-  .usage-card { padding: var(--space-4); }
-  .usage-card h3 { margin-block-end: var(--space-3); }
-  .usage-state { display: block; padding: .3rem .6rem; border: 1px solid var(--line); border-radius: var(--radius-sm); margin-block-start: var(--space-1); }
-  .usage-state--attention { border-inline-start: .3rem solid var(--ink); font-weight: 650; background: var(--warn-soft); }
-  .usage-state--avoid { background: var(--ink); color: var(--paper); font-weight: 750; }
-  .usage-state--pass { border-color: var(--line-strong); }
-  .usage-count { display: block; font-size: var(--text-xs); color: var(--ink-muted); }
-  .overlap-card .pair-visual { min-height: 4rem; }
-  .overlap-card .contrast-value { font-size: var(--text-lg); }
-  .overlap-card h5 { margin-block: var(--space-4) var(--space-2); }
-  .family-card { padding: var(--space-4); }
-  .family-card h4 { margin-block-end: var(--space-3); }
-  .model-atlas-title { margin-block: var(--space-4) var(--space-3); }
-  .family-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); gap: var(--space-3); }
-  .family-sample { border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); overflow: hidden; }
-  .family-visual { display: grid; gap: .35rem; padding: var(--space-3); border-block-end: 1px solid var(--line); background: var(--sample-bg, var(--soft)); color: var(--sample-fg, var(--ink)); box-shadow: inset 0 0 0 3px var(--sample-border, transparent); }
-  .family-visual .pair-border { width: 4rem; height: 1.25rem; }
-  .family-sample ul { padding: var(--space-3); padding-inline-start: 1.9rem; font-size: var(--text-xs); color: var(--ink-soft); }
-  .family-sample li + li { margin-block-start: var(--space-1); }
-  .family-title { padding: var(--space-3) var(--space-3) 0; font-weight: 700; font-size: var(--text-sm); }
-  .family-sample .contrast-value { display: inline; margin: 0; font-size: var(--text-base); }
-  .pair-list { padding-inline-start: 1.4rem; font-size: var(--text-sm); }
-  .pair-list li { margin-block: var(--space-1); }
-  .pair-list .contrast-value { display: inline; margin: 0; font-size: var(--text-base); }
-  .pair-chip { display: inline-block; margin-inline-end: var(--space-2); padding: 0 .45rem; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--sample-bg, var(--soft)); color: var(--sample-fg, var(--ink)); }
-  .scope-note { border-inline-start: .35rem solid var(--line-strong); padding-inline-start: var(--space-3); color: var(--ink-soft); }
-  .preview-cta { font-weight: 650; }
-  .session-evidence { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr)); margin-block: var(--space-3); }
-  .session-evidence dd { margin-block-end: 0; color: var(--ink); }
-  .baseline-note { border-inline-start: .3rem solid var(--line-strong); padding-inline-start: var(--space-3); color: var(--ink-soft); }
-  .margin-note { font-size: var(--text-sm); color: var(--ink-muted); }
-  .overlap-matrix { margin-block: var(--space-3); }
-  .overlap-matrix table { min-width: 0; font-size: var(--text-xs); }
-  .overlap-matrix th, .overlap-matrix td { padding: .35rem .45rem; }
-  .matrix-badge { display: inline-block; padding: 0 .35rem; border: 1px solid var(--line-strong); border-radius: 999px; font-weight: 700; font-size: .75rem; }
-  .matrix-badge--aa { background: var(--ink); color: var(--paper); border-color: var(--ink); }
-  .matrix-badge--no { border-style: dashed; color: var(--ink-soft); }
-  .matrix-ratio { font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .variant-swatch, .palette-swatch { display: inline-block; width: 1.2rem; height: 1.2rem; vertical-align: -.25rem; margin-inline-end: var(--space-2); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--sample-color, var(--soft)); }
-  .variant-list li { margin-block: var(--space-2); }
-  .side-effect { margin-block-start: var(--space-3); padding: var(--space-3); border: 1px dashed var(--line-strong); border-radius: var(--radius); background: var(--paper-soft); }
-  .side-effect ul { padding-inline-start: 1.2rem; }
-  .side-effect .contrast-value { display: inline; margin: 0; font-size: var(--text-base); }
-  .summary-facts { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-3); list-style: none; padding: 0; margin-block: var(--space-3) 0; }
-  .summary-facts li { border: 1px solid var(--line); border-radius: 999px; padding: .2rem .7rem; font-size: var(--text-sm); background: var(--paper); max-width: none; }
-  .summary-facts strong { font-variant-numeric: tabular-nums; }
-  .file-group { border-inline-start: .35rem solid var(--accent); }
-  .file-group > h3 { margin-block-end: var(--space-1); }
-  .palette-suggestions { padding-inline-start: 1.4rem; }
-  .palette-suggestions li { margin-block: var(--space-3); }
-  .palette-actions { margin-block-start: var(--space-1); color: var(--ink-soft); font-size: var(--text-sm); }
-  .sample-meta { margin-block-start: var(--space-2); color: var(--ink-soft); font-size: var(--text-xs); }
-  .design-note { border-inline-start: .35rem solid var(--accent); padding-inline-start: var(--space-3); }
-  .design-token { white-space: nowrap; }
-  .exploration-scope { border-inline-start: .35rem solid var(--line-strong); padding-inline-start: var(--space-3); color: var(--ink-soft); }
-}
-@layer layout {
-  .shell { max-width: 76rem; margin-inline: auto; padding: var(--space-4) var(--space-4) var(--space-6); }
-  main > section, footer { margin-block: var(--space-7); }
-  section > h2 { margin-block-end: var(--space-2); }
-  section > h2 + p { color: var(--ink-soft); }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); gap: var(--space-4); }
-  .comparison { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr)); gap: var(--space-4); }
-  .usage-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr)); gap: var(--space-4); }
-  .grid > *, .comparison > *, .usage-grid > *, .card { min-width: 0; }
-  .card > :first-child { margin-block-start: 0; }
-  .color-change + .color-change { margin-block-start: var(--space-5); }
-  main > section > h3 { margin-block: var(--space-6) var(--space-3); }
-  nav { position: sticky; top: 0; z-index: 2; background: color-mix(in oklab, var(--paper) 88%, transparent); backdrop-filter: blur(6px); border-block: 1px solid var(--line); margin-block: var(--space-4) 0; }
-  nav ul { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-5); padding: var(--space-2) var(--space-3) var(--space-2) 1.25rem; list-style: none; }
-  nav a { font-size: var(--text-sm); font-weight: 650; text-decoration: none; }
-  nav a:hover { text-decoration: underline; }
-  :target { scroll-margin-top: 5rem; }
-  article + article { margin-block-start: var(--space-5); }
-  .grid > article + article, .usage-grid > article + article, .family-card + .family-card, .overlap-card + .overlap-card { margin-block-start: 0; }
-  header { border-block-end: 1px solid var(--line); padding-block-end: var(--space-4); }
-  footer { border-block-start: 1px solid var(--line); padding-block-start: var(--space-4); color: var(--ink-muted); font-size: var(--text-sm); }
-  .file-group + .file-group { margin-block-start: var(--space-5); }
-}
-@layer preferences {
-  @media (forced-colors: active) {
-    :root { --ink: CanvasText; --paper: Canvas; --paper-soft: Canvas; --soft: Canvas; --line: CanvasText; --line-strong: CanvasText; --accent: LinkText; --accent-soft: Canvas; --warn-soft: Canvas; }
-    .card, .notice, .table-scroll, details, .color-choice, .usage-state, .matrix-badge { border: 1px solid CanvasText; box-shadow: none; }
-    .badge, .usage-state--avoid, .matrix-badge--aa { background: CanvasText; color: Canvas; }
-  }
-  @media (prefers-reduced-motion: no-preference) {
-    summary::before { transition: none; }
-    a, .card { transition: box-shadow 120ms ease; }
-  }
-  @media print {
-    :root { --shadow-1: none; --shadow-2: none; }
-    body { background: #fff; }
-    nav, .skip { display: none; }
-    details { border-color: #767676; }
-    .card, .notice, details { break-inside: avoid; }
-    main > section { margin-block: 1.5rem; }
-  }
-}
-`;
+// Authored CSS lives in a real stylesheet and is read once at module load: render calls do no I/O.
+const CSS = readFileSync(new URL("./report-styles/report.css", import.meta.url), "utf8");
+// The bundle variant links the same bytes instead of inlining them. The marker keeps every asset
+// self-identifying and lets the writer publish the exact bytes the renderer produced.
+const ASSET_CSS = `${REPORT_ASSET_MARKER}\n${CSS}`;
+const BUNDLE_CSP = "default-src 'none'; script-src 'none'; style-src 'unsafe-inline' 'self'; connect-src 'none'; img-src 'none'; font-src 'none'; media-src 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'";
 
 export const record = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 export const list = (value) => Array.isArray(value) ? value : [];
@@ -385,12 +198,14 @@ function designHtml(design) {
 <p class="scope-note">Questa sezione legge i metadati del registry della sessione: <strong>sorgenti e ricette sono le aspettative di partenza del generatore</strong>, non la formula certamente attiva. Il <strong>CSS misurato (baseline) resta la fonte finale</strong>: se l'output è obsoleto o un controllo full-color è attivo, la quota della ricetta non è necessariamente quella che disegna. Il report non applica override e non ricalcola contrasti.</p>
 <p class="design-note margin-note">Il <code>dark-blend</code> mescola bianco (al massimo 28%), non nero; quando è omesso resta la derivazione automatica del ruolo e non equivale a 0. Le percentuali non sono una soglia WCAG. I controlli sono opzioni di personalizzazione: i valori effettivi restano quelli del CSS misurato finché un controllo non è attivo; le superfici sono espressioni runtime (mix), non letterali risolti.</p>
 ${versionNote}
+<details><summary>Tabelle di provenienza — sorgenti, ricette e token pubblici</summary>
 <h3>Sorgenti della palette</h3>
 ${sources.length ? table("Sorgenti della palette (aspettative del generatore) e token pubblici collegati", ["Sorgente", "Nome", "Ruolo", "dark-blend", "Miscela dark", "Token pubblici"], sourceRows) : "<p>Nessuna sorgente valida dichiarata.</p>"}
 <h3>Ricette di partenza del generatore</h3>
 ${recipeRows.length ? table("Ricette di partenza e token che le usano", ["Ricetta di partenza", "Tipo", "Uso", "Base", "Token pubblici"], recipeRows) : "<p>Nessuna ricetta valida dichiarata.</p>"}
 <h3>Token pubblici e controlli</h3>
-${tokenRows.length ? table("Traccia dei token pubblici misurati e dei controlli per personalizzarli", ["Token pubblico", "Sorgenti", "Ricetta di partenza", "Uso", "Controllo per personalizzare (chiaro)", "Controllo per personalizzare (scuro)"], tokenRows) : "<p>Nessun token pubblico valido dichiarato.</p>"}</section>`;
+${tokenRows.length ? table("Traccia dei token pubblici misurati e dei controlli per personalizzarli", ["Token pubblico", "Sorgenti", "Ricetta di partenza", "Uso", "Controllo per personalizzare (chiaro)", "Controllo per personalizzare (scuro)"], tokenRows) : "<p>Nessun token pubblico valido dichiarato.</p>"}
+</details></section>`;
 }
 
 function sampleMeta(item) {
@@ -1188,12 +1003,12 @@ function sessionEvidenceHtml(value, prepared) {
   const automationNote = scope
     ? `${escape(automationScopeSentence(scope))}${measurements ? ` Misure incluse: ${measurements} in ${engines} ${agree(engines, "motore eseguito", "motori eseguiti")}.` : ""}`
     : "Nessun dato di automazione dichiarato in questa sessione";
-  return `<p class="scope-note">Questa sessione contiene solo le evidenze dichiarate qui sotto. Nessun contrasto di questo browser è misurato in questo documento: <a href="smart-colors-preview.html">verifica i contrasti nel browser attivo</a> dalla preview diagnostica.</p>
+  return `<p class="scope-note">Questa sessione contiene solo le evidenze dichiarate qui sotto. Nessun contrasto di questo browser è misurato in questo documento: <a href="index.html">verifica i contrasti nel browser attivo</a> dalla preview diagnostica.</p>
 <dl class="session-evidence">
 <div><dt>Modello</dt><dd>${modelNote}</dd></div>
 <div><dt>Automazione</dt><dd>${automationNote}</dd></div>
 ${rolesLine ? `<div><dt>Ruoli della palette</dt><dd>${rolesLine}</dd></div>` : ""}
-<div><dt>Verifica locale</dt><dd>Non inclusa in questo report statico; resta nella <a href="smart-colors-preview.html">preview diagnostica</a>.</dd></div>
+<div><dt>Verifica locale</dt><dd>Non inclusa in questo report statico; resta nella <a href="index.html">preview diagnostica</a>.</dd></div>
 </dl>`;
 }
 
@@ -1497,7 +1312,7 @@ ${table("Misure automatizzate per coppia", ["Coppia", "Tema", "Minimo", "Target"
   const explorationBlock = compact ? explorationSummaryHtml(run, explorationItems, explorationCoverage) : explorationHtml(run);
   const omittedTables = compact && (measurements.length > 0 || rawExplorations.length > 0 || explorationCoverage !== null);
   const fullReportLink = omittedTables
-    ? `<p class="margin-note"><a href="smart-colors.html">Apri misure complete nel report</a> per le tabelle complete delle misure automatizzate e delle esplorazioni, con soglie, esiti e conteggi per coppia.</p>`
+    ? `<p class="margin-note"><a href="report.html">Apri misure complete nel report</a> per le tabelle complete delle misure automatizzate e delle esplorazioni, con soglie, esiti e conteggi per coppia.</p>`
     : "";
 
   return `<h3>Verifica automatizzata (Playwright)</h3>
@@ -1532,7 +1347,13 @@ export function sessionVerification(value) {
   const errors = [...list(value.generationErrors), ...list(value.auditErrors)];
   const scope = record(value.automation) ? automationScope(value.automation) : null;
   const identityOk = identityProblems.length === 0 && errors.length === 0;
-  return { scope, identityProblems, identityOk, verified: identityOk && Boolean(scope && scope.complete) };
+  // A normal `--automation=off`/unavailable session has no scenario matrix, no measurements and a
+  // valid snapshot identity. That is an explicitly unmeasured report, not a malformed snapshot. A
+  // failed/partial run, a complete run with no measurements, or any identity error stays fail-closed.
+  const unmeasuredStatus = !scope || ["disabled", "unavailable", "unsupported"].includes(scope.status);
+  const normalUnmeasured = identityOk && scenarios.length === 0 && entries.length === 0
+    && unmeasuredStatus && (!scope || scope.measurements.length === 0);
+  return { scope, identityProblems, identityOk, normalUnmeasured, verified: identityOk && Boolean(scope && scope.complete) };
 }
 
 // UTF-8 byte size without a build step; the pages measure the embedded CSS bytes.
@@ -1641,16 +1462,25 @@ export function prepareContrastReport(value) {
  */
 export function prepareDiagnosticReport(value) {
   const prepared = prepareContrastReport(value);
-  if (!isDiagnosticSession(value)) return { ...prepared, verification: null };
+  if (!isDiagnosticSession(value)) return { ...prepared, verification: null, normalUnmeasured: false };
   const verification = sessionVerification(value);
+  const normalUnmeasured = Boolean(verification && verification.normalUnmeasured)
+    && prepared.proposals.length === 0 && prepared.rejectedSources.length === 0;
   const verified = prepared.verified && Boolean(verification && verification.verified);
-  if (verified === prepared.verified) return { ...prepared, verification };
-  // Downgrade only: strip the positive outcome, proposal coverage and exploratory overlaps.
+  const outcome = normalUnmeasured
+    ? "Verifica automatica non eseguita"
+    : verified === prepared.verified ? prepared.outcome : "Esito non verificato o incompleto";
+  // Scenario-presence pseudo-errors are not integrity errors in a normal unmeasured session. Real
+  // identity/generation/audit problems are never filtered: identityOk is part of the mode predicate.
+  const problems = normalUnmeasured ? prepared.problems.filter((problem) => !SCENARIO_PROBLEMS.has(problem)) : prepared.problems;
+  if (!normalUnmeasured && verified === prepared.verified) return { ...prepared, verification, normalUnmeasured, outcome, problems };
   return {
     ...prepared,
     verification,
+    normalUnmeasured,
     verified: false,
-    outcome: "Esito non verificato o incompleto",
+    outcome,
+    problems,
     proposals: prepared.proposals.map((view) => ({ ...view, complete: false, covered: new Set() })),
     complete: [],
     overlaps: overlapView(prepared.report.overlaps, prepared.scenarios, false),
@@ -1659,11 +1489,12 @@ export function prepareDiagnosticReport(value) {
 }
 
 /** Render a supplied snapshot only: no I/O, recalculation of contrast or client code. */
-export function formatContrastReportHtml(value) {
+function renderReport(value, mode) {
+  const assetMode = mode === "assets";
   const session = isDiagnosticSession(value) ? value : null;
   const prepared = session ? prepareDiagnosticReport(value) : prepareContrastReport(value);
   const { report, scenarios, entries, problems, iso, digest, issues, errors, verified, proposals,
-    groups, overlaps, variantShifts, tuningGroups, complete, rejectedSources, outcome, files } = prepared;
+    groups, overlaps, variantShifts, tuningGroups, complete, rejectedSources, outcome, files, normalUnmeasured } = prepared;
   const identity = session ? sessionIdentityHtml(session) : "";
   const design = session ? designHtml(session.design) : "";
   const modelAtlas = session ? modelAtlasHtml(session.samples) : "";
@@ -1671,28 +1502,45 @@ export function formatContrastReportHtml(value) {
   const cssEmbed = session ? cssEmbedHtml(session.css) : "";
   const entriesAtlas = familyAtlas(entries, verified);
   const verification = prepared.verification ?? null;
-  const verificationLine = verification
-    ? verification.verified
-      ? "<p><strong>Copertura verificata:</strong> le coppie automatizzate sono complete negli ambienti eseguiti (motori e scenari elencati). Il modello resta una previsione, non una verifica.</p>"
-      : "<p><strong>Copertura non verificata:</strong> l'automazione non copre tutte le coppie negli ambienti eseguiti; il modello resta una previsione, non una verifica.</p>"
+  const normal = normalUnmeasured === true;
+  const verificationLine = verification && verification.verified && !normal
+    ? "<p><strong>Copertura verificata:</strong> le coppie automatizzate sono complete negli ambienti eseguiti (motori e scenari elencati). Il modello resta una previsione, non una verifica.</p>"
     : "";
   // The static document holds no browser-local measurement, so its headline is scoped to the
   // snapshot and to the environments actually executed; the preview link is the primary way to
-  // check the active browser.
-  const scopeNote = session
+  // check the active browser. A normal unmeasured session gets a neutral, shorter explanation.
+  const scopeNote = session && !normal
     ? `<p class="scope-note">L'esito sopra riguarda solo le coppie dello snapshot e l'automazione <strong>negli ambienti eseguiti</strong>: non è la misura di questo browser e non copre usi o stati non misurati. I metadati di design sono dichiarazioni del modello: il report li mostra senza applicare override.</p>`
     : "";
-  const previewLink = session
-    ? `<p class="preview-cta"><a href="smart-colors-preview.html">Apri la preview diagnostica e verifica i contrasti nel browser attivo</a> — stessi campioni, più la verifica locale; non modifica questo report statico.</p>`
+  const neutralNote = normal
+    ? `<p class="scope-note">Snapshot statico senza misure browser: la palette è dichiarata, ma nessuna coppia è stata verificata automaticamente. Nessun verdetto positivo viene emesso.</p>`
     : "";
+  const previewLink = normal
+    ? `<p class="preview-cta"><a href="index.html">Verifica i contrasti nel browser attivo nella preview</a> — la preview esegue la misura locale; questo report resta statico.</p>`
+    : session
+      ? `<p class="preview-cta"><a href="index.html">Apri la preview diagnostica e verifica i contrasti nel browser attivo</a> — stessi campioni, più la verifica locale; non modifica questo report statico.</p>`
+      : "";
   const sessionEvidence = session ? sessionEvidenceHtml(session, prepared) : "";
+  const paletteCount = list(report.palette).length;
+  const designValue = session && record(session.design) ? session.design : null;
+  const sourceCount = designValue ? designSources(designValue).length : paletteCount;
+  const tokenCount = designValue ? designTokens(designValue).length : 0;
+  const countsFacts = `<ul class="summary-facts"><li><strong>${groups.length}</strong> ${agree(groups.length, "problema distinto", "problemi distinti")}</li><li><strong>${complete.length}</strong> ${agree(complete.length, "correzione verificata", "correzioni verificate")}</li><li><strong>${entries.length}</strong> ${agree(entries.length, "coppia misurata", "coppie misurate")}</li><li><strong>${variantShifts === null ? "n.d." : variantShifts.length}</strong> ${agree(variantShifts?.length ?? 0, "variante da rivedere", "varianti da rivedere")}</li><li><strong>${scenarios.length}</strong> ${agree(scenarios.length, "scenario", "scenari")}</li></ul>`;
+  const briefFacts = `<p class="margin-note"><strong>${paletteCount}</strong> ${agree(paletteCount, "colore in palette", "colori in palette")} · <strong>${sourceCount}</strong> ${agree(sourceCount, "sorgente", "sorgenti")} · <strong>${tokenCount}</strong> ${agree(tokenCount, "token pubblico", "token pubblici")}</p>`;
+  const technicalFacts = normal
+    ? `<p class="margin-note"><strong>${groups.length}</strong> problemi distinti · <strong>${complete.length}</strong> correzioni verificate · <strong>${entries.length}</strong> coppie misurate · <strong>${variantShifts === null ? "n.d." : variantShifts.length}</strong> varianti da rivedere · <strong>${scenarios.length}</strong> scenari</p>`
+    : "";
+  const generatedAt = iso ? `<time datetime="${escape(report.generatedAt)}">${escape(report.generatedAt)}</time>` : escape(report.generatedAt);
+  const metadataDetails = `<details class="report-metadata"><summary>Metadati dello snapshot</summary>
+<p class="doc-meta">Generato il ${generatedAt}.</p>
+${identity}
+<p class="doc-meta">SHA-256 degli input: <code>${escape(report.inputDigest)}</code>${digest ? "" : " — non valido"}</p>
+</details>`;
   // One family catalog by default: the measured atlas wins when it exists, and the model
   // estimate follows inside a native disclosure so the data survives without duplication.
   const modelAtlasHeading = `<h3 class="model-atlas-title">Famiglie di colori nel modello</h3>`;
   const modelAtlasBlock = modelAtlas
-    ? entriesAtlas
-      ? `<details><summary>Campioni dal modello — previsioni senza browser</summary>${modelAtlasHeading}${modelAtlas}</details>`
-      : `${modelAtlasHeading}${modelAtlas}`
+    ? `<details><summary>Campioni dal modello — previsioni senza browser</summary>${modelAtlasHeading}${modelAtlas}</details>`
     : "";
   // Engines, causes and measurements are technical evidence: they stay in a native disclosure so a
   // missing package or browser never dominates the designer's first reading.
@@ -1705,37 +1553,52 @@ ${sessionEvidence}
 ${modelAtlasBlock}
 ${automationBlock}</section>`
     : "";
-  const sessionNav = sessionSection ? `<li><a href="#sessione">Sessione diagnostica</a></li>` : "";
-  const designNav = design ? `<li><a href="#design">Sorgenti e ricette</a></li>` : "";
+  const sessionNav = sessionSection ? `<li><a href="#sessione">Sessione</a></li>` : "";
+  const designNav = design ? `<li><a href="#design">Sorgenti</a></li>` : "";
   const cssDetails = cssEmbed
     ? `<details><summary>CSS incorporato nello snapshot</summary>
 <section aria-labelledby="css"><h2 id="css">CSS incorporato nello snapshot</h2>${cssEmbed}</section></details>`
     : "";
   const messages = (heading, values) => `<h3>${heading}</h3>${values.length ? `<ul>${values.map((item) => `<li>${escape(item)}</li>`).join("")}</ul>` : "<p>Nessuno.</p>"}`;
+  const proposalHeading = complete.length > 1 ? "Correzioni da valutare" : "Correzione consigliata";
+  const problemHeading = groups.length ? "Cosa migliora" : "Problemi rilevati";
+  const proposalBody = normal
+    ? `<p>Nessuna correzione proposta: la verifica automatica non è stata eseguita. Apri la preview per misurare nel browser attivo.</p>`
+    : `<p>${complete.length ? "Usa il colore suggerito applicando la modifica nel file indicato." : verified && !issues.length ? "Non serve una correzione per le coppie misurate." : "Non applicare correzioni non verificate: i dati disponibili non permettono di consigliarne una."}${complete.length > 1 ? " Le opzioni sono verificate separatamente: non sommarle senza una nuova verifica." : ""}</p>
+${proposalsHtml(proposals, variantShifts, rejectedSources)}`;
+  const problemBody = normal
+    ? `<p>Nessun problema calcolato: la verifica automatica non è stata eseguita. Le misure restano disponibili nella preview.</p>`
+    : `${groups.length ? "<p>Confronta il contrasto attuale con quello ottenuto dalla correzione. I rapporti sono sintetici; minimo, target ed esiti restano distinti.</p>" : ""}
+${tuningGroups.length ? `<p><strong>${tuningGroups.length} di ${groups.length}</strong> problemi compaiono con i tuning di progetto: senza tuning il generatore rispettava il target. La riga “Senza i tuning” lo mostra coppia per coppia.</p>` : ""}
+<div class="grid">${problemsHtml(groups, proposals, verified)}</div>`;
+  const proposalsSection = normal
+    ? `<details id="proposte" class="empty-section"><summary>${proposalHeading}</summary>${proposalBody}</details>`
+    : `<section aria-labelledby="proposte"><h2 id="proposte">${proposalHeading}</h2>${proposalBody}</section>`;
+  const problemsSection = normal
+    ? `<details id="problemi" class="empty-section"><summary>${problemHeading}</summary>${problemBody}</details>`
+    : `<section aria-labelledby="problemi"><h2 id="problemi">${problemHeading}</h2>${problemBody}</section>`;
   return `${MARKER}
 <!doctype html>
 <html lang="it"><head><meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="${escape(CSP)}">
+<meta http-equiv="Content-Security-Policy" content="${escape(assetMode ? BUNDLE_CSP : CSP)}">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Rapporto contrasto — snapshot ${escape(report.generatedAt)}</title>
-<style>${CSS}</style></head><body><div class="shell">
+<title>Report di contrasto — snapshot ${escape(report.generatedAt)}</title>
+${assetMode ? `<link rel="stylesheet" href="${REPORT_ASSETS.reportStyle}">` : `<style>${CSS}</style>`}</head><body><div class="shell">
 <a class="skip" href="#contenuto">Vai al contenuto</a>
-<header><h1>Rapporto di contrasto</h1><p class="status overview">${outcome}</p>
-${scopeNote}
-<ul class="summary-facts"><li><strong>${groups.length}</strong> ${agree(groups.length, "problema distinto", "problemi distinti")}</li><li><strong>${complete.length}</strong> ${agree(complete.length, "correzione verificata", "correzioni verificate")}</li><li><strong>${entries.length}</strong> ${agree(entries.length, "coppia misurata", "coppie misurate")}</li><li><strong>${variantShifts === null ? "n.d." : variantShifts.length}</strong> ${agree(variantShifts?.length ?? 0, "variante da rivedere", "varianti da rivedere")}</li><li><strong>${scenarios.length}</strong> ${agree(scenarios.length, "scenario", "scenari")}</li></ul>
-<p>Generato il ${iso ? `<time datetime="${escape(report.generatedAt)}">${escape(report.generatedAt)}</time>` : escape(report.generatedAt)}.</p>
-${identity}${verificationLine}${previewLink}<p><strong>Snapshot statico, non stato attuale del progetto.</strong> Rigenera il report dopo ogni modifica ai colori. Data, file e impronta sono nei dettagli tecnici.</p>
-<nav aria-label="Sezioni del rapporto"><ul><li><a href="#proposte">Correzione consigliata</a></li><li><a href="#problemi">Problemi e risultato atteso</a></li><li><a href="#usi">Colpo d’occhio sugli usi</a></li>${designNav}${sessionNav}<li><a href="#tecnici">Dettagli tecnici</a></li></ul></nav></header>
+<header><div class="doc-bar"><p class="doc-product">Smart Colors</p><nav class="doc-nav" aria-label="Documenti"><a href="index.html">Preview</a><a href="report.html" aria-current="page">Report tecnico</a></nav></div>
+<div class="doc-intro"><h1>Report di contrasto</h1><p class="status overview">${normal ? "Verifica automatica non eseguita" : outcome}</p>
+${normal ? neutralNote : scopeNote}
+${normal ? briefFacts : countsFacts}
+${verificationLine}${previewLink}
+${normal ? "" : `<p><strong>Snapshot statico, non stato attuale del progetto.</strong> Rigenera il report dopo ogni modifica ai colori.</p>`}
+</div>
+${metadataDetails}
+<nav aria-label="Sezioni del rapporto"><ul><li><a href="#proposte">Correzione</a></li><li><a href="#problemi">Problemi</a></li><li><a href="#usi">Usi</a></li>${designNav}${sessionNav}<li><a href="#tecnici">Tecnici</a></li></ul></nav></header>
 <main id="contenuto">
-${verified ? "" : `<div class="notice"><p class="status">Nessuna conclusione positiva: dati assenti, non validi, incoerenti o errori impediscono di verificare lo snapshot.</p><ul>${[...problems, ...errors].map((item) => `<li>${escape(item)}</li>`).join("")}</ul></div>`}
+${normal || verified ? "" : `<div class="notice"><p class="status">Nessuna conclusione positiva: dati assenti, non validi, incoerenti o errori impediscono di verificare lo snapshot.</p><ul>${[...problems, ...errors].map((item) => `<li>${escape(item)}</li>`).join("")}</ul></div>`}
 ${list(report.notes).length ? `<p>${escape(report.notes[0])}</p>` : ""}
-<section aria-labelledby="proposte"><h2 id="proposte">${complete.length > 1 ? "Correzioni da valutare" : "Correzione consigliata"}</h2>
-<p>${complete.length ? "Usa il colore suggerito applicando la modifica nel file indicato." : verified && !issues.length ? "Non serve una correzione per le coppie misurate." : "Non applicare correzioni non verificate: i dati disponibili non permettono di consigliarne una."}${complete.length > 1 ? " Le opzioni sono verificate separatamente: non sommarle senza una nuova verifica." : ""}</p>
-${proposalsHtml(proposals, variantShifts, rejectedSources)}</section>
-<section aria-labelledby="problemi"><h2 id="problemi">${groups.length ? "Cosa migliora" : "Problemi rilevati"}</h2>
-${groups.length ? '<p>Confronta il contrasto attuale con quello ottenuto dalla correzione. I rapporti sono sintetici; minimo, target ed esiti restano distinti.</p>' : ""}
-${tuningGroups.length ? `<p><strong>${tuningGroups.length} di ${groups.length}</strong> problemi compaiono con i tuning di progetto: senza tuning il generatore rispettava il target. La riga “Senza i tuning” lo mostra coppia per coppia.</p>` : ""}
-<div class="grid">${problemsHtml(groups, proposals, verified)}</div></section>
+${proposalsSection}
+${problemsSection}
 <section aria-labelledby="usi"><h2 id="usi">Palette: colpo d’occhio sugli usi</h2>
 <p><strong>Situazione attuale, prima delle correzioni.</strong> OK vale solo per gli abbinamenti controllati; da migliorare significa minimo rispettato ma target mancato; da evitare significa sotto il minimo per quell’uso.</p>
 ${usageHtml(entries, scenarios, verified)}
@@ -1744,15 +1607,16 @@ ${usageHtml(entries, scenarios, verified)}
 ${entriesAtlas}
 ${variantShiftsHtml(variantShifts)}
 <h3>Se sovrapponi liberamente i colori base</h3>${overlapsHtml(overlaps)}
-<p>Su foto, gradienti o trasparenze, verifica il risultato sullo sfondo reale. Colori diversi per tonalità possono avere poco contrasto: non basta che sembrino diversi.</p></section>
-${design}${sessionSection}<section aria-labelledby="tecnici"><h2 id="tecnici">Dettagli tecnici</h2><p>Non servono per leggere la correzione. Tutti i dati originali restano disponibili qui.</p>
+<p>Su foto, gradienti o trasparenze, verifica il risultato sullo sfondo reale. Colori diversi per tonalità possono avere poco contrasto: non basta che sembrino diversi.</p>
+</section>
+${design}${sessionSection}<section aria-labelledby="tecnici"><h2 id="tecnici">Dettagli tecnici</h2><p>Non servono per leggere la correzione. Tutti i dati originali restano disponibili qui.</p>${technicalFacts}
 <details><summary>Misure complete — ${scenarios.length} scenari, ${entries.length} controlli</summary>
 <section aria-labelledby="scenari"><h2 id="scenari">Scenari, misure e issue</h2><p>Ogni rapporto riguarda la coppia primo piano/sfondo indicata, non il colore isolato. Minimo e target sono distinti; i rapporti sono mostrati con la precisione completa del dato numerico fornito.</p>${scenariosHtml(scenarios, entries, proposals)}</section></details>
 <details><summary>Palette completa — fonte e colori risolti</summary>
 <section aria-labelledby="palette"><h2 id="palette">Palette originale e colori risolti</h2><p>I campioni possono essere alterati dal gamut del display, dal browser o dai colori forzati. I valori OKLCH restano disponibili sulla UI neutra.</p>${paletteHtml(list(report.palette))}</section></details>
 <details><summary>File, impronta dello snapshot ed errori</summary>
 <section aria-labelledby="esito"><h2 id="esito">Esito e integrità dello snapshot</h2>
-<p>${verified ? `${entries.length} ${agree(entries.length, "coppia misurata", "coppie misurate")}; ${issues.length} ${agree(issues.length, "rilevazione", "rilevazioni")} sotto minimo o target, raggruppate in ${groups.length} ${agree(groups.length, "problema distinto", "problemi distinti")}. Esito limitato a questi scenari e alla provenienza dichiarata.` : "Nessuna conclusione positiva: dati assenti, non validi, incoerenti o errori impediscono di verificare lo snapshot."}</p>
+<p>${normal ? "Verifica automatica non eseguita: nessuna coppia misurata in questo snapshot; la preview può misurare nel browser attivo." : verified ? `${entries.length} ${agree(entries.length, "coppia misurata", "coppie misurate")}; ${issues.length} ${agree(issues.length, "rilevazione", "rilevazioni")} sotto minimo o target, raggruppate in ${groups.length} ${agree(groups.length, "problema distinto", "problemi distinti")}. Esito limitato a questi scenari e alla provenienza dichiarata.` : "Nessuna conclusione positiva: dati assenti, non validi, incoerenti o errori impediscono di verificare lo snapshot."}</p>
 <p>Questo report non legge i file attuali, non ne ricalcola l’impronta e non si aggiorna. Confrontare data e SHA-256 con l’ultima esecuzione prima di applicare proposte.</p>
 <dl><dt>Generato il (dato dichiarato)</dt><dd>${escape(report.generatedAt)}</dd><dt>SHA-256 degli input (dichiarato, non ricalcolato)</dt><dd><code>${escape(report.inputDigest)}</code>${digest ? "" : " — non valido"}</dd></dl>
 ${table("File dello snapshot", ["Ruolo", "Percorso dichiarato"], FILE_KEYS.map((key) => `<tr><th scope="row">${key}</th><td><code>${escape(files[key] === null ? "Non fornito" : files[key])}</code></td></tr>`))}
@@ -1766,4 +1630,20 @@ ${cssDetails}<details><summary>Limiti delle verifiche e metodo</summary>
 <p>Dettaglio di calcolo: rapporti WCAG 2.x in sRGB con canali clipped (limitati a 0–1), non letture dei pixel del display. La pagina HTML visualizza i risultati ricevuti e la loro provenienza: non esegue nuove misure né ricalcola i contrasti. Le differenze OKLCH/OKLab non sono una misura di contrasto né una ricerca globale della soluzione più vicina.</p></section></details></section></main>
 <footer><p>Report autonomo e statico: nessuno script, risorsa di rete o framework. Validità circoscritta allo snapshot e alla sua impronta dichiarata.</p></footer>
 </div></body></html>\n`;
+}
+
+/** Render the compact static report (inline CSS) without I/O or new measurements. */
+export function formatContrastReportHtml(value) {
+  return renderReport(value, "inline");
+}
+
+/**
+ * Asset bundle variant: the exact same document with the stylesheet linked instead of inlined.
+ * Assets are relative to the report directory and every content starts with the shared marker.
+ */
+export function formatContrastReportBundle(value) {
+  return {
+    html: renderReport(value, "assets"),
+    assets: [{ relativePath: REPORT_ASSETS.reportStyle, content: ASSET_CSS }],
+  };
 }

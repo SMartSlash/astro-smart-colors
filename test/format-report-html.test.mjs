@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import * as renderer from "../src/format-report-html.mjs";
+import { REPORT_ASSET_MARKER, REPORT_ASSETS } from "../src/report-paths.mjs";
 
 const { formatContrastReportHtml: render, prepareContrastReport } = renderer;
 const color = (l = 0.5, c = 0.1, h = 350) => ({ l, c, h });
@@ -89,7 +90,7 @@ test("the correction, suggested colors and exact manual edit precede the audit a
 
 test("navigation order matches the document order of its sections and comparisons stay intrinsically responsive", () => {
   const html = render(issueReport({ proposals: [proposal()] }));
-  const nav = html.slice(html.indexOf("<nav"), html.indexOf("</nav>"));
+  const nav = html.match(/<nav aria-label="Sezioni del rapporto">([\s\S]*?)<\/nav>/)[1];
   const links = [...nav.matchAll(/href="#([\w-]+)"/g)].map(([, id]) => id);
   assert.deepEqual(links, ["proposte", "problemi", "usi", "tecnici"]);
   const positions = links.map((id) => html.indexOf(`id="${id}"`));
@@ -157,7 +158,7 @@ test("family atlas renders only measured families, keeps the worst measurement a
   assert.match(cards[1], /Famiglia <code>--color-spark<\/code>/);
   assert.doesNotMatch(cards[1], /Testo su callout|Bottone/);
   assert.match(cards[1], /--sample-fg:oklch\(0\.5 0\.1 350\);--sample-bg:oklch\(1 0 0\)/);
-  assert.match(publicContent(guide), /Famiglie di colori: come appaiono nei componenti/);
+  assert.match(guide, /Famiglie di colori: come appaiono nei componenti/);
   const unverified = render(report({ scenarios: [scenario({ diagnostics })], auditErrors: ["Audit incompleto"] }));
   assert.match(section(unverified, "usi"), /verifica incompleta: il quadro può essere parziale/);
   const empty = render(issueReport());
@@ -301,10 +302,10 @@ test("exploratory overlaps have separate thresholds and examples without becomin
   const html = render(input);
   const guide = section(html, "usi");
   assert.match(header(html), /Esito positivo dello snapshot: 0 issue/);
-  assert.match(publicContent(guide), /non problemi già presenti nei componenti/);
-  assert.match(publicContent(guide), /<strong>0<\/strong> abbinamenti utilizzabili per testo normale · <strong>0<\/strong> solo per titoli grandi, bordi o icone · <strong>1<\/strong> da evitare/);
-  assert.match(publicContent(guide), /Esempio da evitare per il testo/);
-  assert.match(publicContent(guide), /&lt; 3:1/);
+  assert.match(guide, /non problemi già presenti nei componenti/);
+  assert.match(guide, /<strong>0<\/strong> abbinamenti utilizzabili per testo normale · <strong>0<\/strong> solo per titoli grandi, bordi o icone · <strong>1<\/strong> da evitare/);
+  assert.match(guide, /Esempio da evitare per il testo/);
+  assert.match(guide, /&lt; 3:1/);
   assert.match(guide, /<code>2\.999999999999999:1<\/code>/);
   assert.match(guide, /browser-resolved-overlap/);
   assert.doesNotMatch(publicContent(guide), /<table>|Sovrapposizioni esplorative — tema/);
@@ -317,8 +318,8 @@ test("overlap tables keep the worst measurement per theme and name the scenario 
   overlaps[0].diagnostics[0] = diagnostic({ ...overlaps[0].diagnostics[0], ratio: 4.500000000000001, status: "pass" });
   const html = render(report({ scenarios, overlaps }));
   const guide = section(html, "usi");
-  assert.match(publicContent(guide), /<strong>0<\/strong> abbinamenti utilizzabili per testo normale · <strong>0<\/strong> solo per titoli grandi, bordi o icone · <strong>1<\/strong> da evitare/);
-  assert.match(publicContent(guide), /&lt; 3:1/);
+  assert.match(guide, /<strong>0<\/strong> abbinamenti utilizzabili per testo normale · <strong>0<\/strong> solo per titoli grandi, bordi o icone · <strong>1<\/strong> da evitare/);
+  assert.match(guide, /&lt; 3:1/);
   assert.equal((guide.match(/<caption>Sovrapposizioni esplorative — tema chiaro<\/caption>/g) ?? []).length, 1);
   assert.equal((guide.match(/<caption>Sovrapposizioni esplorative — tema scuro<\/caption>/g) ?? []).length, 0);
   const table = guide.slice(guide.indexOf("Sovrapposizioni esplorative — tema chiaro"));
@@ -376,13 +377,13 @@ test("variant shifts are reported only above threshold, from measured variants a
     assert.ok(["chiaro", "scuro"].includes(theme));
     assert.equal(deltaL, "-0,411");
   }
-  assert.match(publicContent(guide), /Varianti che si allontanano dal colore di marca/);
-  assert.match(publicContent(guide), /\|ΔL\| o \|ΔC\| ≥ 0,04/);
+  assert.match(guide, /Varianti che si allontanano dal colore di marca/);
+  assert.match(guide, /\|ΔL\| o \|ΔC\| ≥ 0,04/);
   assert.doesNotMatch(guide, /tertiary-border-strong<\/code>/);
-  assert.match(publicContent(guide), /Come intervenire su palette\.css/);
-  assert.match(publicContent(guide), /indicazioni da valutare, <strong>non verifiche<\/strong>/);
-  assert.match(publicContent(guide), /valuta <code>role: decorative<\/code>/);
-  assert.equal((publicContent(guide).match(/class="palette-swatch"/g) ?? []).length, 2);
+  assert.match(guide, /Come intervenire su palette\.css/);
+  assert.match(guide, /indicazioni da valutare, <strong>non verifiche<\/strong>/);
+  assert.match(guide, /valuta <code>role: decorative<\/code>/);
+  assert.equal((guide.match(/class="palette-swatch"/g) ?? []).length, 2);
   const closePalette = [{ ...palette[0], resolved: color(0.4144, 0.0847, 89.16) }];
   const onlyText = render(report({ scenarios: scenarios.map((entry) => ({ ...entry, diagnostics: [entry.diagnostics[0]] })), palette: closePalette, roles }));
   assert.match(section(onlyText, "usi"), /Varianti vicine al colore di marca/);
@@ -540,7 +541,7 @@ function deepFreeze(value) {
 test("exports the renderer with its internal helpers and returns a complete marked static Italian document", () => {
   assert.deepEqual(Object.keys(renderer).sort(), [
     "CSP", "MARKER", "VARIANT_SHIFT_THRESHOLD", "agree", "automationHtml", "automationScope", "baselineNote", "colorChoice", "colorCss", "compactRatio",
-    "cssEmbedHtml", "deltaSummary", "entriesFor", "escape", "familyAtlasData", "fileRole", "formatContrastReportHtml",
+    "cssEmbedHtml", "deltaSummary", "entriesFor", "escape", "familyAtlasData", "fileRole", "formatContrastReportBundle", "formatContrastReportHtml",
     "isDiagnosticSession", "issueGroups", "it", "list", "overlapList", "overlapView", "prepareContrastReport", "prepareDiagnosticReport", "proposalSentence", "proposalView", "record",
     "sampleVisual", "sessionIdentityHtml", "sessionVerification", "sideEffectsHtml", "status", "validation", "variantShiftView",
   ]);
@@ -549,7 +550,7 @@ test("exports the renderer with its internal helpers and returns a complete mark
   assert.match(html, /<!doctype html>\s*<html lang="it">/);
   assert.match(html, /<meta charset="utf-8">/);
   assert.match(html, /<meta name="viewport" content="width=device-width, initial-scale=1">/);
-  assert.match(html, /<h1>Rapporto di contrasto<\/h1>/);
+  assert.match(html, /<h1>Report di contrasto<\/h1>/);
   assert.ok((html.match(/<h1>/g) ?? []).length === 1);
   assert.match(html, /<main id="contenuto">/);
   assert.match(html, /<h2[^>]*>Palette originale e colori risolti/);
@@ -565,9 +566,41 @@ test("CSP denies scripts and network resources; there are no fake actions or ext
   assert.ok(csp.includes("style-src 'unsafe-inline'"));
   assert.doesNotMatch(html, /<(?:script|link|img|iframe|button|input|form)\b|\bon\w+=|\ssrc=/i);
   assert.doesNotMatch(html, /@import|url\(|https?:\/\//i);
-  assert.ok([...html.matchAll(/href="([^"]+)"/g)].every((match) => match[1].startsWith("#")));
+  assert.ok([...html.matchAll(/href="([^"]+)"/g)].every((match) => /^(?:#[\w-]+|index\.html|report\.html)$/.test(match[1])));
   assert.match(html, /<pre tabindex="0" role="group" aria-label="Snippet della proposta"><code>--primary:/);
   assert.match(html, /user-select:\s*text/);
+});
+
+// The static report keeps the same scriptless contract in both shapes: inline CSS for a single
+// portable file, or one linked stylesheet plus the identical HTML bytes for the asset bundle.
+test("the report bundle publishes the same document with one marked stylesheet, and never adds a script", () => {
+  const inline = render(issueReport({ proposals: [proposal()] }));
+  const bundle = renderer.formatContrastReportBundle(issueReport({ proposals: [proposal()] }));
+  assert.equal(bundle.html.split("\n")[0], renderer.MARKER);
+  assert.equal(bundle.assets.length, 1);
+  assert.equal(bundle.assets[0].relativePath, REPORT_ASSETS.reportStyle);
+  assert.ok(bundle.assets[0].content.startsWith(REPORT_ASSET_MARKER), "the stylesheet carries the shared marker");
+  assert.doesNotMatch(bundle.assets[0].content, /@import|url\(|https?:\/\//i);
+  assert.match(bundle.html, new RegExp(`<link rel="stylesheet" href="${REPORT_ASSETS.reportStyle.replace(".", "\\.")}">`));
+  assert.doesNotMatch(bundle.html, /<style>|<script/);
+  assert.equal((bundle.html.match(/<link\b/g) ?? []).length, 1, "exactly one stylesheet is linked");
+  const csp = bundle.html.match(/http-equiv="Content-Security-Policy" content="([^"]+)"/)[1].replaceAll("&#39;", "'");
+  for (const directive of ["default-src 'none'", "script-src 'none'", "connect-src 'none'", "img-src 'none'", "font-src 'none'", "object-src 'none'", "base-uri 'none'", "form-action 'none'"]) assert.ok(csp.includes(directive));
+  assert.ok(csp.includes("style-src 'unsafe-inline' 'self'"), "linked CSS loads from file:// and same-origin HTTP via 'self'");
+  assert.doesNotMatch(csp, /\bfile:/, "the broad file: scheme source is not needed");
+  assert.doesNotMatch(csp, /unsafe-eval|unsafe-hashes/);
+  assert.match(bundle.html, /href="index\.html"/);
+  assert.match(bundle.html, /href="report\.html" aria-current="page"/);
+  assert.doesNotMatch(bundle.html, /\bsrc=|\son\w+=/i);
+  assert.match(inline, /<style>[\s\S]*<\/style>/);
+  assert.doesNotMatch(inline, /<link\b/);
+  const aggregate = Buffer.byteLength(bundle.html) + Buffer.byteLength(bundle.assets[0].content, "utf8");
+  assert.ok(aggregate <= 768 * 1024, `report bundle aggregate is ${aggregate} bytes, over the budget`);
+  assert.ok(aggregate < Buffer.byteLength(inline) + 4096, "the split adds no duplicated payload");
+  const normalize = (html) => html
+    .replace(/<meta http-equiv="Content-Security-Policy"[^>]*>/, "<CSP>")
+    .replace(/<style>[\s\S]*?<\/style>|<link rel="stylesheet"[^>]*>/, "<ASSET>");
+  assert.equal(normalize(bundle.html), normalize(inline), "the bundle and inline documents share the same markup");
 });
 
 test("static report keeps every IDREF closed and names only elements with an explicit role", () => {
@@ -648,7 +681,7 @@ test("escaping covers text, filenames, nested provenance, snippets, identities a
   assert.ok(styles(html).every((style) => !style.includes("img") && !style.includes("alert") && !style.includes("&")));
   assert.doesNotMatch(header(html), /<time/);
   assert.match(html, /Esito non verificato o incompleto/);
-  assert.doesNotMatch(html, /href="[^#]/);
+  assert.doesNotMatch(html, /href="(?!index\.html|report\.html|#)[^"]+/);
 });
 
 test("malicious numeric strings never enter CSS, including proposal and palette colors", () => {
@@ -901,7 +934,8 @@ test("snapshot warning and time stay visible; full fingerprint and file identity
   assert.match(top, /Snapshot statico, non stato attuale del progetto/);
   assert.match(top, /Rigenera il report dopo ogni modifica/);
   assert.ok(top.includes(input.generatedAt));
-  assert.ok(!top.includes(input.inputDigest));
+  assert.ok(!publicContent(top).includes(input.inputDigest), "the full digest stays inside the native metadata detail");
+  assert.match(top, /<details class="report-metadata"><summary>Metadati dello snapshot<\/summary>/);
   const identity = section(html, "esito");
   assert.match(identity, /non ne ricalcola l’impronta e non si aggiorna/);
   assert.ok(identity.includes(input.inputDigest));
@@ -1052,16 +1086,40 @@ function diagnosticSession(overrides = {}) {
   };
 }
 
+function normalDesignFixture() {
+  return {
+    version: 1,
+    sources: [
+      { token: "--palette-brand", name: "brand", role: "ui", darkBlend: 80 },
+      { token: "--palette-canvas", name: "canvas", role: "canvas", darkBlend: 40 },
+      { token: "--palette-ink", name: "ink", role: "ink", darkBlend: null },
+      { token: "--palette-highlight", name: "highlight", role: "decorative", darkBlend: 10 },
+      { token: "--palette-success", name: "success", role: "feedback", darkBlend: 50 },
+    ],
+    recipes: { text: { kind: "contrast", basis: "contrast", usage: "family text" }, surface: { kind: "mix", basis: "design", usage: "tinted background" } },
+    tokens: {
+      "--color-primary-text": { sources: ["--palette-brand"], recipe: "text", controls: { light: { override: "--color-tune-light-warmth" } } },
+      "--color-primary-surface": { sources: ["--palette-brand"], recipe: "surface", controls: { light: { mix: "--color-tune-dark-surface-mix" } } },
+    },
+  };
+}
+
 test("a diagnostic session renders a scoped evidence section and links the preview as the primary action", () => {
   const html = render(diagnosticSession());
   assert.equal(html.split("\n")[0], "<!-- smart-colors-report:v1 -->");
   assert.doesNotMatch(html, /<script/i);
-  assert.match(html, /href="smart-colors-preview\.html"/);
+  assert.match(html, /href="index\.html"/);
   assert.match(html, /Snapshot incorporato: <code>snap-123<\/code> · Versione tool: <code>0\.3\.0<\/code> · Input catturati: 1\/1\./);
   // The headline is scoped to the snapshot and to the environments actually executed, and the
   // static report never claims a browser-local measurement it does not contain.
-  assert.match(html, /class="scope-note">L'esito sopra riguarda solo le coppie dello snapshot e l'automazione <strong>negli ambienti eseguiti<\/strong>/);
-  assert.match(html, /class="preview-cta"><a href="smart-colors-preview\.html">Apri la preview diagnostica e verifica i contrasti nel browser attivo<\/a>/);
+  assert.match(html, /class="scope-note">Snapshot statico senza misure browser: la palette è dichiarata, ma nessuna coppia è stata verificata automaticamente\./);
+  assert.match(html, /class="preview-cta"><a href="index\.html">Verifica i contrasti nel browser attivo nella preview<\/a>/);
+  assert.match(html, /<h1>Report di contrasto<\/h1>/);
+  assert.match(html, /Verifica automatica non eseguita/);
+  assert.doesNotMatch(html, /Nessuna conclusione positiva/);
+  assert.doesNotMatch(html, /Scenari mancanti, non validi o senza misure|Diagnostiche mancanti, non valide o incoerenti/);
+  assert.match(html, /<details id="proposte" class="empty-section"><summary>Correzione consigliata<\/summary>/);
+  assert.match(html, /<details id="problemi" class="empty-section"><summary>Problemi rilevati<\/summary>/);
   assert.match(html, /<h2 id="sessione">Sessione diagnostica: ambito ed evidenze<\/h2>/);
   assert.match(html, /<dl class="session-evidence">/);
   assert.match(html, /<dt>Modello<\/dt><dd>1 coppia prevista — stima del modello, non una verifica<\/dd>/);
@@ -1071,8 +1129,61 @@ test("a diagnostic session renders a scoped evidence section and links the previ
   assert.match(html, /<details><summary>Verifica automatizzata \(Playwright\) — dettagli, cause e misure<\/summary>/);
   assert.match(html, /Automazione disattivata/);
   assert.match(html, /<h2 id="css">CSS incorporato nello snapshot<\/h2>/);
-  assert.match(html, /<a href="#sessione">Sessione diagnostica<\/a>/);
+  assert.match(html, /<a href="#sessione">Sessione<\/a>/);
   assert.doesNotMatch(html, /class="color-choice color-choice--suggested"/);
+});
+
+test("a normal unmeasured session is neutral and keeps empty work behind closed details", () => {
+  const input = diagnosticSession({ design: normalDesignFixture() });
+  const prepared = renderer.prepareDiagnosticReport(input);
+  assert.equal(prepared.normalUnmeasured, true);
+  assert.equal(prepared.outcome, "Verifica automatica non eseguita");
+  assert.deepEqual(prepared.problems, []);
+  const html = render(input);
+  const top = publicContent(header(html));
+  assert.match(html, /<h1>Report di contrasto<\/h1>/);
+  assert.match(html, /Verifica automatica non eseguita/);
+  assert.match(html, /<strong>1<\/strong> colore in palette/);
+  assert.match(html, /<strong>5<\/strong> sorgenti/);
+  assert.match(html, /<strong>2<\/strong> token pubblici/);
+  assert.doesNotMatch(top, /snap-123|"a{8}/, "identity and digest stay out of the visible header");
+  assert.match(html, /<details class="report-metadata"><summary>Metadati dello snapshot<\/summary>[\s\S]*<time datetime="2026-07-01T12:34:56\.789Z">[\s\S]*snap-123[\s\S]*0\.3\.0/);
+  assert.match(html, /<details id="proposte" class="empty-section"><summary>Correzione consigliata<\/summary><p>Nessuna correzione proposta:/);
+  assert.match(html, /<details id="problemi" class="empty-section"><summary>Problemi rilevati<\/summary><p>Nessun problema calcolato:/);
+  assert.doesNotMatch(html, /<details[^>]*\bopen\b/, "empty work is closed, not removed");
+  assert.match(html, /<a href="#proposte">Correzione<\/a>/);
+  assert.match(html, /<a href="#problemi">Problemi<\/a>/);
+  assert.match(html, /<h2 id="tecnici">Dettagli tecnici<\/h2>[\s\S]*<strong>0<\/strong> problemi distinti/);
+  assert.doesNotMatch(html, /Nessuna conclusione positiva|Scenari mancanti, non validi o senza misure|Diagnostiche mancanti, non valide o incoerenti/);
+  assert.doesNotMatch(html, /class="notice"/);
+});
+
+test("a malformed or failed session stays fail-closed and shows the real cause upfront", () => {
+  const malformed = render(diagnosticSession({ inputDigest: "invalid", design: normalDesignFixture() }));
+  assert.doesNotMatch(malformed, /Verifica automatica non eseguita/);
+  assert.match(malformed, /Esito non verificato o incompleto/);
+  assert.match(malformed, /Nessuna conclusione positiva/);
+  assert.match(malformed, /Impronta SHA-256 degli input assente o non valida\./);
+  assert.doesNotMatch(malformed, /<details id="proposte" class="empty-section"/);
+
+  const failedRun = diagnosticSession({
+    design: normalDesignFixture(),
+    automation: automationRun({
+      status: "incomplete", partial: true,
+      coverage: { complete: false, expectedCount: 1, measuredCount: 0 },
+      measurements: [],
+      errors: [{ phase: "measure", cause: "runtime-run-failed", engine: "chromium", scenarioId: null, pairId: null, message: "preferenza light: timeout" }],
+    }),
+  });
+  const failed = render(failedRun);
+  assert.doesNotMatch(failed, /Verifica automatica non eseguita/);
+  assert.match(failed, /Nessuna conclusione positiva/);
+  assert.match(failed, /preferenza light: timeout/);
+
+  const realError = render(diagnosticSession({ design: normalDesignFixture(), generationErrors: ["Errore di generazione reale."] }));
+  assert.doesNotMatch(realError, /Verifica automatica non eseguita/);
+  assert.match(realError, /Nessuna conclusione positiva/);
+  assert.match(realError, /Errore di generazione reale\./);
 });
 
 test("the report keeps a scriptless CSP and adds no script for a diagnostic session", () => {
@@ -1161,7 +1272,9 @@ test("automation details list versioned engines, phases, causes, thresholds and 
   assert.match(html, /<caption>Misure automatizzate per coppia<\/caption>/);
   assert.match(html, /<th scope="row"><code>--color-primary-text<\/code> su <code>--color-primary-surface<\/code><\/th><td>Chiaro<\/td><td><code>4\.5:1<\/code><\/td><td><code>4\.6:1<\/code><\/td><td>4,20:1<\/td><td>Sotto il minimo<\/td><td>2<\/td>/);
   assert.match(html, /<td>Scuro<\/td><td><code>4\.5:1<\/code><\/td><td><code>4\.5:1<\/code><\/td><td>3,90:1<\/td><td>Sotto il minimo<\/td><td>1<\/td>/);
-  assert.match(html, /<strong>Copertura non verificata:<\/strong>/);
+  assert.match(html, /Copertura parziale o incompleta/);
+  assert.doesNotMatch(html, /<strong>Copertura non verificata:<\/strong>/);
+  assert.match(html, /Nessuna conclusione positiva/);
 });
 
 test("an incomplete automation run with zero measurements still lists causes and unsupported reasons", () => {
@@ -1184,7 +1297,8 @@ test("an incomplete automation run with zero measurements still lists causes and
   assert.match(html, /<h4>Scenari non supportati \(1\)<\/h4>/);
   assert.match(html, /<code>chromium\/baseline-dark-dark<\/code> — forced-colors is active · motore <code>chromium<\/code>/);
   assert.doesNotMatch(html, /<h4>Misure automatizzate/);
-  assert.match(html, /<strong>Copertura non verificata:<\/strong>/);
+  assert.match(html, /Nessuna conclusione positiva/);
+  assert.doesNotMatch(html, /<strong>Copertura non verificata:<\/strong>/);
 });
 
 test("automationHtml keeps the full tables by default and compact replaces them with accurate counts and a link", () => {
@@ -1222,7 +1336,7 @@ test("automationHtml keeps the full tables by default and compact replaces them 
   assert.match(compact, /<li><strong>1<\/strong> raggiungono minimo e target<\/li>/);
   assert.match(compact, /<h4>Esplorazioni di sovrapposizione \(1 misure, canale separato\)<\/h4>/);
   assert.match(compact, /Copertura esplorativa parziale: 1 di 3 misurate/);
-  assert.match(compact, /<a href="smart-colors.html">Apri misure complete nel report<\/a>/);
+  assert.match(compact, /<a href="report\.html">Apri misure complete nel report<\/a>/);
 });
 
 test("automationHtml compact keeps engine, error and unsupported causes visible", () => {
@@ -1303,7 +1417,7 @@ test("a session never inherits a positive outcome while automation is incomplete
     const html = render(build());
     assert.doesNotMatch(html, /Esito positivo dello snapshot: 0 issue/, label);
     assert.match(html, /Nessuna conclusione positiva/, label);
-    assert.match(html, /<strong>Copertura non verificata:<\/strong>/, label);
+    assert.doesNotMatch(html, /<strong>Copertura non verificata:<\/strong>/, label);
   }
 });
 
@@ -1391,12 +1505,14 @@ test("a session shows one family catalog by default and preserves the model esti
   const both = render(measuredSession());
   // The measured atlas stays visible; the model estimate is preserved inside a native disclosure.
   assert.match(both, /<details><summary>Campioni dal modello — previsioni senza browser<\/summary>/);
-  assert.equal((publicContent(both).match(/class="card family-card"/g) ?? []).length, 1, "Only one family catalog may be visible without disclosure");
+  assert.equal((publicContent(both).match(/class="card family-card"/g) ?? []).length, 1, "the measured atlas stays public; only the model estimate is disclosed");
+  assert.match(publicContent(both), /Famiglie di colori: come appaiono nei componenti/, "the usage atlas must not move behind a disclosure");
   assert.equal((both.match(/class="card family-card"/g) ?? []).length, 2, "The model catalog data must not be dropped");
-  // Without measured scenarios the model estimate is the catalog, and it stays visible.
+  // Without measured scenarios the model estimate is the catalog and stays inside the same archive.
   const modelOnly = render(diagnosticSession());
-  assert.doesNotMatch(modelOnly, /<summary>Campioni dal modello/);
-  assert.equal((publicContent(modelOnly).match(/class="card family-card"/g) ?? []).length, 1);
+  assert.match(modelOnly, /<summary>Campioni dal modello/);
+  assert.equal((publicContent(modelOnly).match(/class="card family-card"/g) ?? []).length, 0);
+  assert.equal((modelOnly.match(/class="card family-card"/g) ?? []).length, 1);
 });
 
 test("problem cards and scenario issues lead with human usage names while the tokens remain as provenance", () => {
@@ -1515,7 +1631,7 @@ test("design registry metadata traces source, recipe, use and controls without e
   };
   const html = render(diagnosticSession({ design }));
   assert.match(html, /<section aria-labelledby="design"><h2 id="design">Sorgenti, ricette e controlli<\/h2>/);
-  assert.match(html, /<a href="#design">Sorgenti e ricette<\/a>/);
+  assert.match(html, /<a href="#design">Sorgenti<\/a>/);
   assert.match(html, /<code>--palette-primary<\/code>/);
   assert.match(html, /sorgente 77,6% · bianco 22,4%/);
   assert.match(html, /Automatico per ruolo \(nessun dark-blend dichiarato: non equivale a 0\)/);

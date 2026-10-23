@@ -9,6 +9,7 @@ import { loadSmartColorsConfig } from "./load-config.mjs";
 import { createPlaywrightProvider } from "./playwright-provider.mjs";
 import { writeContrastReport } from "./report-artifact.mjs";
 import { assertReportInputsUnchanged, captureReportInputs, darkFillTuningIdentity, formatReportSummary, mergeSideEffect, paletteOverrideNote, proposalImproves, publishedProposal, reportCandidates, reportOverlapScenario, reportScenario, reportSideEffect, reportSnapshot, resolveTuningFile, structuralChanges, REPORT_FILES } from "./report-data.mjs";
+import { REPORT_DOCUMENTS } from "./report-paths.mjs";
 import { createVerificationCore } from "./verification-core.mjs";
 
 // Single origin of the numeric contract and the pair catalog (plan §5.1.1). The legacy helpers
@@ -926,6 +927,6 @@ export async function projectAudit(names = ["chromium"], { root = process.cwd(),
       "",
     ].join("\n"));
   } else {
-    console.log(`${badge()} Per vedere gli abbinamenti e le proposte: esegui pnpm colors:report, poi apri reports/smart-colors-preview.html. Un report precedente potrebbe essere obsoleto.\n`);
+    console.log(`${badge()} Per vedere gli abbinamenti e le proposte: esegui pnpm colors:report, poi apri ${REPORT_DOCUMENTS.preview}. Un report precedente potrebbe essere obsoleto.\n`);
   }
 }

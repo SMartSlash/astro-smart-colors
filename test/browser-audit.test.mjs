@@ -12,12 +12,15 @@ import path from "node:path";
 import test from "node:test";
 import { auditPairs, projectAudit } from "../src/browser-audit.mjs";
 import { MARKER } from "../src/format-report-html.mjs";
+import { REPORT_DOCUMENTS } from "../src/report-paths.mjs";
 
 const PAIR = {
   label: "light neutral text / canvas",
   foregroundColor: { l: 0, c: 0, h: 0 },
   backgroundColor: { l: 1, c: 0, h: 0 },
 };
+const REPORT_PATH = REPORT_DOCUMENTS.report;
+const PREVIEW_PATH = REPORT_DOCUMENTS.preview;
 
 test("auditPairs fails closed when a contract pair has no usable target", () => {
   for (const contrast of [{}, { text: Number.NaN }, { text: Infinity }, { text: 0 }]) {
@@ -42,15 +45,15 @@ test("projectAudit protects the captured custom tuning path when analysis fails 
   const root = await mkdtemp(path.join(tmpdir(), "smart-colors-audit-failure-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(path.join(root, "theme"), { recursive: true });
-  await mkdir(path.join(root, "reports"), { recursive: true });
+  await mkdir(path.dirname(path.join(root, REPORT_PATH)), { recursive: true });
   await mkdir(path.join(root, "src/styles/tokens"), { recursive: true });
   // The custom palette is invalid, so analysis throws before any Playwright launch.
   await writeFile(path.join(root, "theme/palette.css"), "@property --palette-bg { initial-value: oklch(0.97 0 0); role: canvas; }\n");
   await writeFile(path.join(root, "smart-colors.config.mjs"), 'export default { palette: "theme/palette.css", output: "theme/colors.css" };\n');
   const owned = `${MARKER}\n<!doctype html><html><body>owned report</body></html>\n`;
-  await writeFile(path.join(root, "reports/smart-colors.html"), owned);
+  await writeFile(path.join(root, REPORT_PATH), owned);
   // No default tuning: the moved tuning file wins, and it aliases the owned report artifact.
-  await symlink(path.join(root, "reports/smart-colors.html"), path.join(root, "theme/colors-tuning.css"));
+  await symlink(path.join(root, REPORT_PATH), path.join(root, "theme/colors-tuning.css"));
   assert.equal((await lstat(path.join(root, "theme/colors-tuning.css"))).isSymbolicLink(), true);
   await assert.rejects(access(path.join(root, "src/styles/tokens/colors-tuning.css")), { code: "ENOENT" });
 
@@ -73,7 +76,7 @@ test("projectAudit protects the captured custom tuning path when analysis fails 
   assert.match(failure.message, /theme\/colors-tuning\.css/);
   assert.equal(process.exitCode, originalExitCode, "the test restores the process exit code");
   assert.equal(console.error, originalError, "the test restores console.error");
-  assert.equal(await readFile(path.join(root, "reports/smart-colors.html"), "utf8"), owned, "the owned report must not be overwritten");
-  await assert.rejects(access(path.join(root, "reports/smart-colors-preview.html")), { code: "ENOENT" });
+  assert.equal(await readFile(path.join(root, REPORT_PATH), "utf8"), owned, "the owned report must not be overwritten");
+  await assert.rejects(access(path.join(root, PREVIEW_PATH)), { code: "ENOENT" });
   assert.ok(logs.some((line) => /Audit incompleto/.test(line)), "the analysis failure is logged");
 });

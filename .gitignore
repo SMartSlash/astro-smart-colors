@@ -3,5 +3,7 @@ node_modules/
 
 # generated locally by consumers, never committed here
 dist/
+smart-colors-reports/
+reports/
 *.log
 .DS_Store

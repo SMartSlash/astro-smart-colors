@@ -8,6 +8,7 @@ import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { initSmartColors } from "../src/init.mjs";
+import { REPORT_ASSETS, REPORT_DIRECTORY, REPORT_DOCUMENTS } from "../src/report-paths.mjs";
 import { cssNotice, cssState, measurementAvailable, provenance, verdict, verificationComplete } from "../src/cli-style.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -60,8 +61,14 @@ const INFO_PROPERTY = `\n\n@property --palette-info {
 const OUTPUT_PATH = "src/styles/tokens/colors.css";
 const PALETTE_PATH = "src/styles/tokens/palette.css";
 const TUNING_PATH = "src/styles/tokens/colors-tuning.css";
-const PREVIEW_PATH = "reports/smart-colors-preview.html";
-const REPORT_PATH = "reports/smart-colors.html";
+const PREVIEW_PATH = REPORT_DOCUMENTS.preview;
+const REPORT_PATH = REPORT_DOCUMENTS.report;
+const PUBLISHED_ARTIFACTS = [
+  PREVIEW_PATH, REPORT_PATH,
+  path.join(REPORT_DIRECTORY, REPORT_ASSETS.reportStyle),
+  path.join(REPORT_DIRECTORY, REPORT_ASSETS.previewStyle),
+  path.join(REPORT_DIRECTORY, REPORT_ASSETS.previewScript),
+].sort();
 const REPORT_PACKAGE = JSON.stringify({ scripts: { "colors:report": "node report.mjs" } });
 
 const PROGRESS_LINE = /^smart-colors · (analisi palette|generazione token|controllo automazione opzionale|verifica automatizzata richiesta|anteprima e report)$/;
@@ -143,11 +150,11 @@ test("help documents the commands, the automation flag and the init options with
   for (const flag of ["--help", "-h"]) {
     const { stdout, stderr } = await runCli(root, flag);
     assert.match(stdout, /Uso: smart-colors \[build\|check\|init\|audit\|report\]/);
-    assert.match(stdout, /build\s+Genera i token colore semantici e i due artefatti HTML \(predefinito\)/);
+    assert.match(stdout, /build\s+Genera i token colore semantici e gli artefatti HTML \(predefinito\)/);
     assert.match(stdout, /check\s+Verifica che i token colore generati siano aggiornati/);
     assert.match(stdout, /init\s+Crea una palette iniziale e colors-tuning\.css/);
     assert.match(stdout, /audit\s+Analizza in un browser i token generati e colors-tuning\.css/);
-    assert.match(stdout, /report\s+Genera reports\/smart-colors\.html e reports\/smart-colors-preview\.html/);
+    assert.match(stdout, /report\s+Genera smart-colors-reports\/report\.html e smart-colors-reports\/index\.html/);
     assert.match(stdout, /--config <file>.*relativo a --root.*predefinito: smart-colors\.config\.mjs/);
     assert.match(stdout, /--automation <mode>.*auto\|off\|required/);
     assert.match(stdout, /--palette <file>.*predefinito: config\.palette/);
@@ -235,10 +242,11 @@ test("build without Playwright still publishes both HTML artifacts and exits 0",
 
   const after = await snapshotProject(root);
   const added = Object.keys(after).filter((relativePath) => !Object.hasOwn(before, relativePath)).sort();
-  assert.deepEqual(added, [PREVIEW_PATH, REPORT_PATH].sort());
+  assert.deepEqual(added, PUBLISHED_ARTIFACTS);
   assert.notEqual(after[OUTPUT_PATH].contents, before[OUTPUT_PATH].contents);
   assert.match(await readFile(path.join(root, PREVIEW_PATH), "utf8"), /^<!-- smart-colors-report:v1 -->/);
   assert.match(await readFile(path.join(root, REPORT_PATH), "utf8"), /^<!-- smart-colors-report:v1 -->/);
+  assert.match(await readFile(path.join(root, REPORT_DIRECTORY, REPORT_ASSETS.previewScript), "utf8"), /^\/\* smart-colors-report:v1 \*\//);
   assert.deepEqual(after[PALETTE_PATH], before[PALETTE_PATH]);
 });
 
@@ -254,8 +262,8 @@ test("build auto publishes HTML with an actionable link even when the environmen
   const built = await runCli(root, "build", "--automation=auto");
 
   assert.match(built.stdout, /file:\/\//);
-  assert.ok(built.stdout.includes("smart-colors-preview.html"));
-  assert.ok(built.stdout.includes("smart-colors.html"));
+  assert.ok(built.stdout.includes("smart-colors-reports/index.html"));
+  assert.ok(built.stdout.includes("smart-colors-reports/report.html"));
   assert.ok(built.stdout.includes(path.join(root, PREVIEW_PATH)));
   assert.match(built.stdout, /Fai ora\s+Apri l'anteprima/);
 });
@@ -512,8 +520,8 @@ test("special characters in the root produce valid file URLs without opening a b
   await writeFile(path.join(root, PALETTE_PATH), PALETTE, "utf8");
 
   const built = await runCli(root, "build", "--automation=off");
-  assert.match(built.stdout, /file:\/\/.*smart-colors-preview\.html/);
-  assert.match(built.stdout, /file:\/\/.*smart-colors\.html/);
+  assert.match(built.stdout, /file:\/\/.*smart-colors-reports\/index\.html/);
+  assert.match(built.stdout, /file:\/\/.*smart-colors-reports\/report\.html/);
   assert.match(built.stdout, /#100%25|%23|%20/);
 });
 
@@ -532,7 +540,7 @@ test("report is read-only on palette, config, tuning and CSS and publishes both 
   assert.match(reported.stdout, /Nessun file CSS, palette, config o tuning è stato modificato\./);
   assert.match(reported.stdout, /Automazione disattivata/);
   const after = await snapshotProject(root);
-  assert.deepEqual(Object.keys(after).filter((relativePath) => !Object.hasOwn(before, relativePath)).sort(), [PREVIEW_PATH, REPORT_PATH].sort());
+  assert.deepEqual(Object.keys(after).filter((relativePath) => !Object.hasOwn(before, relativePath)).sort(), PUBLISHED_ARTIFACTS);
   for (const relativePath of Object.keys(before)) assert.deepEqual(after[relativePath], before[relativePath]);
 });
 
@@ -691,7 +699,7 @@ test("check reports the colors-tuning.css status across its states", async (t) =
 test("check is read-only, reports stale output and never presents an old HTML as current", async (t) => {
   const root = await createProject(t);
   await writeFile(path.join(root, "package.json"), REPORT_PACKAGE, "utf8");
-  await mkdir(path.join(root, "reports"));
+  await mkdir(path.join(root, REPORT_DIRECTORY));
   await writeFile(path.join(root, PREVIEW_PATH), "old preview", "utf8");
   const before = await snapshotProject(root);
 
@@ -700,7 +708,7 @@ test("check is read-only, reports stale output and never presents an old HTML as
     assert.match(error.stdout, /Controllo token/);
     assertReadOnlyCheck(error.stdout);
     assert.doesNotMatch(error.stdout, /generated\.|up to date/);
-    assert.doesNotMatch(error.stdout, /reports\//);
+    assert.doesNotMatch(error.stdout, /smart-colors-reports\//);
     assert.match(error.stderr, /out of date/);
     return true;
   });
@@ -1005,7 +1013,7 @@ test("a root with shell-special characters is quoted in the regeneration command
   // An absent CSS makes the build command the reported secondary step, so the quoted root is visible.
   const reported = await runCli(root, "report", "--automation=off");
   assert.match(reported.stdout, /--root '/);
-  assert.match(reported.stdout, /file:\/\/.*smart-colors-preview\.html/);
+  assert.match(reported.stdout, /file:\/\/.*smart-colors-reports\/index\.html/);
 });
 
 // ---------------------------------------------------------------------------
@@ -1240,8 +1248,8 @@ test("auto with no Playwright and a clean model keeps stderr empty and points to
   assert.match(built.stdout, /misure browser non eseguite/);
   assert.match(built.stdout, /Problemi\s+nessun avviso del modello nelle coppie dichiarate\./);
   assert.match(built.stdout, /STIMA DEL MODELLO/);
-  assert.match(built.stdout, /file:\/\/.*smart-colors-preview\.html/);
-  assert.match(built.stdout, /file:\/\/.*smart-colors\.html/);
+  assert.match(built.stdout, /file:\/\/.*smart-colors-reports\/index\.html/);
+  assert.match(built.stdout, /file:\/\/.*smart-colors-reports\/report\.html/);
   assert.match(await readFile(path.join(root, PREVIEW_PATH), "utf8"), /^<!-- smart-colors-report:v1 -->/);
   assert.match(await readFile(path.join(root, REPORT_PATH), "utf8"), /^<!-- smart-colors-report:v1 -->/);
 });

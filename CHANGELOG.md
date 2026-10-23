@@ -21,6 +21,9 @@ the `v0.4.0` tag.
 
 ### Added
 
+- Standalone export regressions use a package-owned multi-root tuning fixture rather
+  than files from the reference site. The optional workbench browser proof resolves
+  Playwright from the package hierarchy instead of assuming a monorepo root.
 - Visual A/B pair cards with hard diagonal foreground/background swatches from each
   view's actual runtime measurements, shared grid/table filters and eight pairs per
   page. Selection, pagination and focus remain stable during remeasurement, including

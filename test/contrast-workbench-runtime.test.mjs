@@ -18,12 +18,12 @@
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 import { analyzeColorTokens } from "../src/generate-colors.mjs";
 import { createContrastAdvice } from "../src/contrast-advice.mjs";
 import { createVerificationCore } from "../src/verification-core.mjs";
@@ -54,8 +54,7 @@ import {
 } from "../src/contrast-workbench-runtime.mjs";
 
 const core = createVerificationCore();
-const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
-const WORKSPACE_ROOT = path.resolve(TEST_DIR, "../../..");
+
 const NATIVE_PROOF = process.env.SMART_COLORS_NATIVE_PROOF === "1";
 
 const SYNTHETIC_CONFIG = {
@@ -75,6 +74,25 @@ const SYNTHETIC_BASELINE = [
   "  --color-control-bg-active: light-dark(black, black);",
   "  --color-control-focus-bg: light-dark(white, white);",
   "  --color-control-border-active: light-dark(black, black);",
+  "}",
+  "",
+].join("\n");
+
+// Authored multi-root tuning is a package fixture, never a file from the reference site.
+const MULTI_ROOT_TUNING = [
+  "/* 1. MACRO THEME TUNING",
+  "   --color-tune-dark-warmth",
+  "     Quanto calore conservare nel tema scuro. */",
+  ":root {",
+  "  --color-tune-dark-warmth: 75%;",
+  "  /* A second public control and its explanation must survive a focused patch. */",
+  "  --color-tune-text-light: oklch(0.4 0.01 250);",
+  "}",
+  "",
+  "/* 3. ELEVATION TUNING */",
+  ":root {",
+  "  --elevation-filter-1: brightness(1.04);",
+  "  --elevation-filter-surface: var(--elevation-filter-1);",
   "}",
   "",
 ].join("\n");
@@ -688,9 +706,9 @@ test("exportTuningFile fails closed to a fragment on ambiguous precedence and ne
   }
 });
 
-test("exportTuningFile patches a unique knob across the real two-root tuning file and preserves the other root", async () => {
-  const real = await readFile(path.join(WORKSPACE_ROOT, "src/styles/tokens/colors-tuning.css"), "utf8");
-  assert.ok((real.match(/:root \{/g) || []).length >= 2, "the real tuning file keeps two top-level roots");
+test("exportTuningFile patches a unique knob across an authored two-root tuning file and preserves the other root", async () => {
+  const real = MULTI_ROOT_TUNING;
+  assert.equal((real.match(/:root \{/g) || []).length, 2, "the fixture keeps two top-level roots");
   const { controller } = makeWorkbench(syntheticPayload({ css: { tuning: real, tuningSupport: "supported" } }));
 
   const untouched = controller.exportTuningFile();
@@ -710,7 +728,7 @@ test("exportTuningFile patches a unique knob across the real two-root tuning fil
 });
 
 test("exportTuningFile appends new knobs to the last top-level root and removes a unique declaration in place", async () => {
-  const real = await readFile(path.join(WORKSPACE_ROOT, "src/styles/tokens/colors-tuning.css"), "utf8");
+  const real = MULTI_ROOT_TUNING;
   const { controller } = makeWorkbench(syntheticPayload({ css: { tuning: real, tuningSupport: "supported" } }));
 
   await controller.setOverride("--color-tune-bg-light", "oklch(0.97 0.005 250)");
@@ -1026,7 +1044,7 @@ const REAL_TUNING = [
 ].join("\n");
 
 function resolvePlaywright() {
-  const base = createRequire(path.join(WORKSPACE_ROOT, "package.json"));
+  const base = createRequire(import.meta.url);
   for (const request of ["@playwright/test", "playwright"]) {
     let api;
     try {
@@ -1037,7 +1055,7 @@ function resolvePlaywright() {
     const browsers = api && api.chromium ? api : api && api.default ? api.default : null;
     if (browsers && browsers.chromium) return browsers;
   }
-  throw new Error("BLOCKED: Playwright is not resolvable from the workspace root " + WORKSPACE_ROOT + "; the opted-in browser proof is mandatory and cannot be skipped.");
+  throw new Error("BLOCKED: Playwright is not resolvable from the package; the opted-in browser proof is mandatory and cannot be skipped.");
 }
 
 async function openChromium(browserType) {

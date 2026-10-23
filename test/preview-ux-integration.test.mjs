@@ -84,7 +84,7 @@ test("the emitted preview labels the matrix as snapshot data and keeps the no-JS
   try {
     assert.match(built.html, /<details class="wb-overview" data-smart-colors-workbench="overview"/);
     assert.match(built.html, /<summary id="smart-colors-workbench-overview-title" class="wb-overview-summary">Abbinamenti e filtri <span id="smart-colors-workbench-overview-scope" class="wb-overview-scope">Tutti gli abbinamenti<\/span><\/summary>/);
-    assert.match(built.html, /id="smart-colors-workbench-matrix-all"[^>]*type="checkbox" checked disabled> Tutti gli abbinamenti<\/label>/);
+    assert.match(built.html, /id="smart-colors-workbench-matrix-all"[^>]*type="checkbox" checked disabled> Tutto il catalogo<\/label>/);
     assert.match(built.html, /<table class="wb-matrix">/);
     assert.match(built.html, /<caption id="smart-colors-workbench-matrix-caption">/);
     assert.match(built.html, /<th scope="col" class="wb-matrix-uso">Uso e criterio<\/th>/);
@@ -203,7 +203,9 @@ test("browser proof: full view measurements fill the matrix, a dependent pair ch
         scopeChecked: document.getElementById("smart-colors-workbench-matrix-all").checked,
         scopeSummary: document.getElementById("smart-colors-workbench-overview-scope").textContent,
         count: document.getElementById("smart-colors-workbench-matrix-count").textContent,
-        matrixHeight: (() => { const node = document.querySelector('[data-smart-colors-workbench="overview"] .wb-matrix-scroll'); return node ? node.clientHeight : 0; })(),
+        matrixHeight: (() => { const node = document.querySelector('[data-smart-colors-workbench="overview"] .wb-matrix-grid'); return node ? node.clientHeight : 0; })(),
+        gridVisible: document.querySelector('.wb-matrix-grid').getClientRects().length > 0,
+        tableHidden: document.getElementById("smart-colors-workbench-matrix-table").hidden,
         tabStops: Array.from(document.querySelectorAll('[data-smart-colors-workbench="matrix-inspect"]')).filter((node) => node.getAttribute("tabindex") === "0").length,
         disabled: Array.from(document.querySelectorAll('[data-smart-colors-workbench="matrix-inspect"]')).filter((node) => node.disabled).length,
         headers: [document.getElementById("smart-colors-workbench-matrix-a").textContent, document.getElementById("smart-colors-workbench-matrix-b").textContent],
@@ -214,9 +216,11 @@ test("browser proof: full view measurements fill the matrix, a dependent pair ch
     assert.ok(initial.views.length >= 2, "the runtime exposes both comparison views");
     assert.ok(initial.views.every((view) => view.count > 1), "every view carries the full measurements array, not only the selected pair");
     assert.ok(initial.liveCells >= initial.rows, "the matrix fills live cells for the measured pairs");
-    assert.ok(initial.matrixHeight > 0, "the desktop overview keeps the matrix body visible");
+    assert.ok(initial.matrixHeight > 0, "the desktop overview keeps the active matrix grid visible");
+    assert.equal(initial.gridVisible, true, "the enhanced preview defaults to visible colour tiles");
+    assert.equal(initial.tableHidden, true, "the optional table starts hidden, not as a second simultaneous presentation");
     assert.equal(initial.scopeChecked, false, "a selected source scopes the catalogue by default");
-    assert.ok(initial.visibleRows > 0 && initial.visibleRows <= initial.rows, "the scoped catalogue is a visible subset");
+    assert.ok(initial.visibleRows > 0 && initial.visibleRows <= Math.min(8, initial.rows), "the scoped catalogue exposes at most eight results on its first page");
     assert.match(initial.scopeSummary, /\S/, "the collapsed summary names the active scope");
     assert.match(initial.count, /per .+ · .+ nel catalogo/, "the count names the current source");
     assert.equal(initial.tabStops, 1, "the matrix exposes one roving tab stop");
@@ -226,22 +230,34 @@ test("browser proof: full view measurements fill the matrix, a dependent pair ch
     assert.ok(initial.originalSource.length > 0, "the fixture must carry a saved tuning source");
     assert.equal(await page.getAttribute("#smart-colors-workbench-details pre", "role"), "group", "the hydrated snippet keeps an explicit group role after the initial complete phase");
 
-    // The explicit all-pairs control widens the catalogue; the bounded region must still not leak height.
+    // The catalogue remains complete in the DOM, while both presentations share eight-result pages.
+    // Select the table before checking its bounded scroll region or exercising its roving controls.
     await page.check("#smart-colors-workbench-matrix-all");
+    await page.check("#smart-colors-workbench-display-table");
+    assert.equal(await page.locator("#smart-colors-workbench-matrix-table").isVisible(), true);
+    assert.equal(await page.locator(".wb-matrix-grid").isVisible(), false);
     const allPairs = await page.evaluate(() => {
       const scroll = document.querySelector('[data-smart-colors-workbench="overview"] .wb-matrix-scroll');
       return {
         visibleRows: Array.from(document.querySelectorAll('[data-smart-colors-workbench="matrix-row"]')).filter((row) => !row.hidden).length,
         rows: document.querySelectorAll('[data-smart-colors-workbench="matrix-row"]').length,
+        rowValues: Array.from(document.querySelectorAll('[data-smart-colors-workbench="matrix-row"]'), (row) => row.getAttribute("data-pair-value")),
+        catalogue: Array.from(document.getElementById("smart-colors-workbench-pair").options, (option) => option.value).filter(Boolean),
+        page: document.getElementById("smart-colors-workbench-matrix-page").textContent,
         checked: document.getElementById("smart-colors-workbench-matrix-all").checked,
         count: document.getElementById("smart-colors-workbench-matrix-count").textContent,
         trailingGap: Math.round(document.documentElement.scrollHeight - document.body.getBoundingClientRect().height),
         scrollRegion: scroll ? { client: scroll.clientHeight, scroll: scroll.scrollHeight } : null,
       };
     });
-    assert.equal(allPairs.checked, true, "Tutti gli abbinamenti stays visibly pressed");
-    assert.equal(allPairs.visibleRows, allPairs.rows, "the control shows the full catalogue");
-    assert.match(allPairs.count, /abbinamenti visibili/);
+    assert.equal(allPairs.checked, true, "Tutto il catalogo stays visibly checked");
+    assert.equal(allPairs.rows, initial.rows, "source scope never drops catalogue rows from the DOM");
+    assert.deepEqual([...allPairs.rowValues].sort(), [...allPairs.catalogue].sort(), "every real catalogue pair has a table row, including off-page pairs");
+    assert.equal(new Set(allPairs.rowValues).size, allPairs.rows, "the complete catalogue has no duplicate rows");
+    assert.ok(allPairs.rows > 8, "the fixture exercises a genuinely paginated catalogue");
+    assert.equal(allPairs.visibleRows, 8, "the full-catalogue scope shows eight pairs at a time, not every row simultaneously");
+    assert.match(allPairs.page, /Pagina 1 di /);
+    assert.match(allPairs.count, new RegExp("^" + allPairs.rows + " abbinamenti visibili su " + allPairs.rows + "\\b"));
     assert.ok(allPairs.scrollRegion.scroll > allPairs.scrollRegion.client, "the matrix really scrolls inside its bounded region");
     assert.ok(allPairs.trailingGap < 120, `the bounded matrix must not add document whitespace (gap ${allPairs.trailingGap}px)`);
 
@@ -261,12 +277,27 @@ test("browser proof: full view measurements fill the matrix, a dependent pair ch
     assert.ok(exploration.rows > 0, "the exploration table has real measurement rows");
     assert.match(exploration.status, /combinazioni misurate/);
 
-    // Keyboard: arrows move focus without selecting; Enter activates the chosen native button.
+    async function visibleMatrixButton(value) {
+      await page.check("#smart-colors-workbench-display-table");
+      await page.fill("#smart-colors-workbench-matrix-search", value.split("|")[0]);
+      const button = page.locator('[data-smart-colors-workbench="matrix-inspect"][data-pair-value="' + value + '"]');
+      assert.equal(await button.count(), 1, "the requested pair has exactly one real inspect button");
+      const pages = Math.ceil(allPairs.rows / 8);
+      for (let index = 0; index < pages; index += 1) {
+        if (await button.isVisible()) return button;
+        assert.equal(await page.locator("#smart-colors-workbench-matrix-next").isDisabled(), false, "the requested real pair must be reachable within the filtered pages");
+        await page.click("#smart-colors-workbench-matrix-next");
+      }
+      assert.fail("the requested real pair never became visible in the bounded catalogue");
+    }
+
+    // Keyboard: the visible table's arrows move focus without selecting; Enter activates a native button.
+    await page.check("#smart-colors-workbench-display-table");
     const before = await page.evaluate(() => ({
       pairId: window.__smartColorsWorkbench.state().selection.pairId,
     }));
-    const firstButton = await page.$('[data-smart-colors-workbench="matrix-inspect"]');
-    assert.ok(firstButton, "the matrix exposes real inspect buttons");
+    const firstButton = await page.$('[data-smart-colors-workbench="matrix-row"]:not([hidden]) [data-smart-colors-workbench="matrix-inspect"]');
+    assert.ok(firstButton && await firstButton.isVisible(), "the active table page exposes visible real inspect buttons");
     await firstButton.focus();
     const firstValue = await page.evaluate(() => document.activeElement && document.activeElement.getAttribute("data-pair-value"));
     await page.keyboard.press("ArrowDown");
@@ -280,8 +311,7 @@ test("browser proof: full view measurements fill the matrix, a dependent pair ch
 
     // Select the text pair with the keyboard, then verify its live cells are real measurements.
     const selectedValue = "--color-text|--color-bg|text";
-    const textButton = await page.$('[data-smart-colors-workbench="matrix-inspect"][data-pair-value="' + selectedValue + '"]');
-    assert.ok(textButton, "the text pair row must exist");
+    const textButton = await visibleMatrixButton(selectedValue);
     await textButton.focus();
     await page.keyboard.press("Enter");
     await page.waitForFunction(() => window.__smartColorsWorkbench.state().phase === "complete" && /--color-text\|--color-bg/.test(window.__smartColorsWorkbench.state().selection.pairId || ""), null, { timeout: 30_000 });
@@ -292,6 +322,7 @@ test("browser proof: full view measurements fill the matrix, a dependent pair ch
     }, selectedValue);
     assert.ok(textCells.every((cell) => cell.source === "live"), "both view cells use a live measurement for the selected pair");
     assert.ok(textCells.every((cell) => /:1/.test(cell.text)), "the live cells carry a real ratio");
+    await page.click("#smart-colors-workbench-matrix-clear");
 
     // The Aa sample is painted from the same computed colours as the real iframe specimen.
     const sample = await page.evaluate(() => {
@@ -536,9 +567,10 @@ test("browser proof: full view measurements fill the matrix, a dependent pair ch
       return button ? button.getAttribute("data-pair-value") : null;
     });
     assert.ok(otherPair, "the matrix exposes a second pair for the rendered role check");
-    await page.locator('[data-smart-colors-workbench="matrix-inspect"][data-pair-value="' + otherPair + '"]').click();
+    await (await visibleMatrixButton(otherPair)).click();
     await page.waitForFunction((before) => window.__smartColorsWorkbench.state().selection.pairId !== before, pairBefore, { timeout: 30_000 });
     assert.equal(await page.getAttribute("#smart-colors-workbench-details pre", "role"), "group", "pair change keeps the snippet group role");
+    await page.click("#smart-colors-workbench-matrix-clear");
     await page.locator("label", { has: page.locator("#smart-colors-workbench-theme-dark") }).click();
     await page.waitForFunction(() => document.querySelector('input[name="smart-colors-workbench-theme"]:checked').value === "dark");
     assert.equal(await page.getAttribute("#smart-colors-workbench-details pre", "role"), "group", "theme change keeps the snippet group role");
@@ -601,6 +633,7 @@ test("browser proof: full view measurements fill the matrix, a dependent pair ch
     await mobilePage.goto(pathToFileURL(built.file).href);
     await mobilePage.waitForFunction(() => window.__smartColorsWorkbench && window.__smartColorsWorkbench.state().phase === "complete", null, { timeout: 30_000 });
     await mobilePage.evaluate(() => { const node = document.querySelector('[data-smart-colors-workbench="overview"]'); if (node) node.open = true; });
+    await mobilePage.check("#smart-colors-workbench-display-table");
     await mobilePage.waitForTimeout(50);
     const mobile = await mobilePage.evaluate(() => {
       const scroll = document.querySelector('[data-smart-colors-workbench="overview"] .wb-matrix-scroll');
@@ -620,32 +653,40 @@ test("browser proof: full view measurements fill the matrix, a dependent pair ch
     assert.equal(mobile.columns, 3);
     await mobileContext.close();
 
-    // 320px gate: the native disclosure starts collapsed so the selected-context inspector stays high.
+    // 320px: the overview is useful and open by default; explicit detail navigation makes the
+    // inspector reachable without requiring selection to scroll or collapsing the catalogue.
     const narrowContext = await browser.newContext({ colorScheme: "light", reducedMotion: "reduce", viewport: { width: 320, height: 720 } });
     const narrowPage = await narrowContext.newPage();
     await narrowPage.goto(pathToFileURL(built.file).href);
     await narrowPage.waitForFunction(() => window.__smartColorsWorkbench && window.__smartColorsWorkbench.state().phase === "complete", null, { timeout: 30_000 });
     const narrow = await narrowPage.evaluate(() => {
       const overview = document.querySelector('[data-smart-colors-workbench="overview"]');
-      const specimen = document.getElementById("smart-colors-workbench-left");
       return {
         overviewOpen: overview.open,
         overviewHeight: Math.round(overview.getBoundingClientRect().height),
-        specimenTop: Math.round(specimen.getBoundingClientRect().top + scrollY),
         documentWidth: document.documentElement.scrollWidth,
         viewportWidth: document.documentElement.clientWidth,
       };
     });
-    assert.equal(narrow.overviewOpen, false, "the 320px overview starts collapsed");
-    assert.ok(narrow.overviewHeight <= 64, "the collapsed disclosure stays compact");
-    assert.ok(narrow.specimenTop < 1200, "the selected specimen stays above the 1200px narrow gate");
+    assert.equal(narrow.overviewOpen, true, "the 320px overview starts open, including its readable catalogue");
+    assert.ok(narrow.overviewHeight > 64, "the open overview has actual content, not only a collapsed summary");
     assert.ok(narrow.documentWidth <= narrow.viewportWidth + 1, "no global horizontal overflow at 320px");
-    await narrowPage.evaluate(() => { const node = document.querySelector('[data-smart-colors-workbench="overview"]'); if (node) node.open = true; });
+    await narrowPage.locator('a[href="#smart-colors-workbench-inspector"]').click();
+    const reached = await narrowPage.evaluate(() => ({
+      focused: document.activeElement && document.activeElement.id,
+      targetTop: document.getElementById("smart-colors-workbench-inspector").getBoundingClientRect().top,
+      specimenTop: document.getElementById("smart-colors-workbench-left").getBoundingClientRect().top,
+      viewport: document.documentElement.clientHeight,
+    }));
+    assert.equal(reached.focused, "smart-colors-workbench-inspector", "explicit navigation focuses the inspector target");
+    assert.ok(reached.targetTop >= -1 && reached.targetTop < reached.viewport, "the inspector is reachable through its real fragment link at 320px");
+    assert.ok(reached.specimenTop >= -1 && reached.specimenTop < reached.viewport, "detail navigation brings the real selected specimen into the narrow viewport");
+    await narrowPage.check("#smart-colors-workbench-display-table");
     const narrowMatrix = await narrowPage.evaluate(() => {
       const scroll = document.querySelector('[data-smart-colors-workbench="overview"] .wb-matrix-scroll');
       return scroll ? { width: scroll.scrollWidth, client: scroll.clientWidth } : null;
     });
-    assert.ok(narrowMatrix && narrowMatrix.width <= narrowMatrix.client + 1, "the opened 320px matrix fits without horizontal scroll");
+    assert.ok(narrowMatrix && narrowMatrix.client > 0 && narrowMatrix.width <= narrowMatrix.client + 1, "the visible 320px table fits without horizontal scroll");
     await narrowContext.close();
 
     // No-JS: the static matrix is readable, the runtime is absent, no measurement frame exists.

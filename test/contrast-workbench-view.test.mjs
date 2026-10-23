@@ -309,10 +309,13 @@ test("the extracted workbench stylesheet wraps the palette, scopes focus and kee
   assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-palette \{ display: grid; \}/, "the wrapping grid is the desktop source control");
   assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-source-select \{ display: none; \}/, "the native select is fully removed on desktop");
   assert.match(CONTRAST_WORKBENCH_CSS, /@container preview-section \(min-width: 45rem\)/);
-  assert.match(CONTRAST_WORKBENCH_CSS, /@container wb-main \(min-width: 36rem\)/);
-  assert.match(CONTRAST_WORKBENCH_CSS, /@container wb-main \(min-width: 48rem\) \{\s*\.wb-proposal-frames \{ grid-template-columns: repeat\(2, minmax\(0, 1fr\)\); \}\s*\}/, "the fixed proposal frames sit side by side from 48rem");
+  assert.match(CONTRAST_WORKBENCH_CSS, /@container wb-pane \(min-width: 36rem\)/);
+  assert.match(CONTRAST_WORKBENCH_CSS, /@container wb-pane \(min-width: 48rem\) \{\s*\.wb-proposal-frames \{ grid-template-columns: repeat\(2, minmax\(0, 1fr\)\); \}\s*\}/, "the fixed proposal frames sit side by side when their own pane reaches 48rem");
   assert.match(CONTRAST_WORKBENCH_CSS, /@container wb-catalogue \(max-width: 32rem\)/, "the matrix adapts to its own column, not only the viewport");
-  assert.match(CONTRAST_WORKBENCH_CSS, /@container wb-shell \(min-width: 64rem\) \{\s*\.wb-workspace \{ grid-template-columns: minmax\(0, 2fr\) minmax\(0, 3fr\); \}/, "desktop catalogue and inspector stay roughly 40/60");
+  assert.match(CONTRAST_WORKBENCH_CSS, /@container wb-shell \(min-width: 64rem\) \{\s*\.wb-workspace \{ grid-template-columns: minmax\(0, 1fr\); \}\s*\.wb-toolbar \{ grid-column: 1 \/ -1; \}\s*\.wb-overview \{ grid-column: 1 \/ -1; \}\s*\.wb-main \{ grid-column: 1 \/ -1; \}\s*\}/, "desktop matrix spans full width on top");
+  const splitColumns = Array.from(CONTRAST_WORKBENCH_CSS.matchAll(/\.wb-main-split\s*\{[^}]*grid-template-columns:\s*([^;}]+)/g), (match) => match[1].trim());
+  assert.ok(splitColumns.length > 0, "main-split explicitly defines the full-width stack");
+  assert.ok(splitColumns.every((columns) => /^minmax\(0,\s*1fr\)$/.test(columns)), "inspector and export remain one full-width column at every container size");
   assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-picker-dialog \{[^}]*width: min\(40rem, calc\(100vw - 2rem\)\);[^}]*max-block-size: 90dvh;/, "the picker is a compact native dialog");
   assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-picker-results \{[^}]*overflow: auto;/, "only the results area scrolls inside the picker");
   assert.match(CONTRAST_WORKBENCH_CSS, /\.wb-scope-toggle \{[^}]*min-height: 2\.75rem;/, "the all-pairs control has a full target");
@@ -375,7 +378,7 @@ test("the static workspace separates source values from the generated catalogue 
   assert.match(html, /Chiaro\/scuro/);
   assert.match(html, /Generato\/tuning/);
   assert.match(html, /Prima\/dopo/);
-  assert.match(html, /<fieldset class="wb-fieldset wb-theme-fieldset"><legend>Tema<\/legend>/);
+  assert.match(html, /<fieldset class="wb-fieldset wb-theme-fieldset"><legend>Tema per le modifiche<\/legend>/);
   // The dialog owns the search, category, paginated results and native footer.
   assert.match(html, /<h2 id="smart-colors-workbench-picker-title">Scegli cosa verificare<\/h2>/);
   assert.match(html, /id="smart-colors-workbench-picker-source"[^>]*>Sorgente: /);
@@ -658,6 +661,7 @@ function workbenchDom(session) {
   const matrixViewA = register(makeNode("th"), "smart-colors-workbench-matrix-a"); overviewBox.appendChild(matrixViewA);
   const matrixViewB = register(makeNode("th"), "smart-colors-workbench-matrix-b"); overviewBox.appendChild(matrixViewB);
   const matrixBody = makeNode("tbody"); matrixBody.setAttribute("data-smart-colors-workbench", "matrix-body"); overviewBox.appendChild(matrixBody);
+  const matrixGrid = makeNode("ul"); matrixGrid.setAttribute("data-smart-colors-workbench", "matrix-grid"); overviewBox.appendChild(matrixGrid);
   function matrixRow(value, status, search) {
     const row = makeNode("tr");
     row.setAttribute("data-smart-colors-workbench", "matrix-row");
@@ -752,7 +756,7 @@ function workbenchDom(session) {
     getElementById: (id) => registry.get(id) ?? null,
     createElement: (tag) => makeNode(tag),
   };
-  return { host, status, selection, controlsForm, source, pair, themeLight, themeDark, comparisonThemes, comparisonTuning, comparisonDraft, controlsBody, proposal, proposalFrames, proposalBefore, proposalAfter, usesBox, current, currentUse, openPicker, pickerDialog, pickerSource, useSearch, useCategory, useClear, useCount, usePrev, useNext, closePicker, identity, purpose, actionTheme, resultBox, emptyNote, correctionBox, manualBox, exportBox, sessionStatus, discard, swatchBrand, swatchCanvas, swatchOrphan, overviewBox, matrixSearch, matrixFilter, matrixClear, matrixAll, overviewScope, matrixCount, matrixViewA, matrixViewB, matrixBody, leftSample, leftMeta, rightSample, rightMeta, explorationBox, explorationRun, explorationStatus, explorationResults, exportMode, document };
+  return { host, status, selection, controlsForm, source, pair, themeLight, themeDark, comparisonThemes, comparisonTuning, comparisonDraft, controlsBody, proposal, proposalFrames, proposalBefore, proposalAfter, usesBox, current, currentUse, openPicker, pickerDialog, pickerSource, useSearch, useCategory, useClear, useCount, usePrev, useNext, closePicker, identity, purpose, actionTheme, resultBox, emptyNote, correctionBox, manualBox, exportBox, sessionStatus, discard, swatchBrand, swatchCanvas, swatchOrphan, overviewBox, matrixSearch, matrixFilter, matrixClear, matrixAll, overviewScope, matrixCount, matrixViewA, matrixViewB, matrixBody, matrixGrid, leftSample, leftMeta, rightSample, rightMeta, explorationBox, explorationRun, explorationStatus, explorationResults, exportMode, document };
 }
 
 function controllerStub(options = {}) {
@@ -1708,7 +1712,9 @@ test("tuning comparisons are refused when the snapshot has no supported tuning",
 test("controls apply the public override through the runtime API, with the mix value as a percentage", async () => {
   const { dom, controller } = install(workbenchSession());
   // Default theme light renders the override controls only.
-  assert.equal(dom.controlsBody.children.length, 2);
+  assert.equal(dom.controlsBody.children.length, 1, "controls share one responsive grid");
+  assert.equal(dom.controlsBody.children[0].className, "wb-control-grid");
+  assert.equal(dom.controlsBody.children[0].children.length, 2);
   // Dark declares a mix for the primary text token.
   dom.themeLight.checked = false;
   dom.themeDark.checked = true;
@@ -2060,7 +2066,7 @@ test("the static overview is a bounded semantic matrix with scoped headers and e
   assert.match(html, /stime di build/);
   assert.match(html, /<label for="smart-colors-workbench-matrix-search">Cerca un abbinamento<\/label>/);
   assert.match(html, /<label for="smart-colors-workbench-matrix-filter">Filtra per esito<\/label>/);
-  assert.match(html, /<label class="wb-scope-toggle"><input id="smart-colors-workbench-matrix-all"[^>]*type="checkbox" checked disabled> Tutti gli abbinamenti<\/label>/, "the wrapping label needs no redundant for");
+  assert.match(html, /<label class="wb-scope-toggle"><input id="smart-colors-workbench-matrix-all"[^>]*type="checkbox" checked disabled> Tutto il catalogo<\/label>/, "the wrapping label names the catalogue scope and needs no redundant for");
   assert.match(html, /data-smart-colors-workbench="matrix-empty" hidden><td colspan="3">Nessun abbinamento corrisponde alla selezione corrente\.<\/td><\/tr>/, "an explicit empty row exists instead of a blank table");
   assert.match(html, /<noscript><p class="wb-snapshot-note">Senza JavaScript la matrice mostra solo le prime stime di build, non le misure live\.<\/p><\/noscript>/);
   assert.match(html, /<details class="is-detail wb-matrix-help"><summary>Come leggere la matrice<\/summary>/);
@@ -2207,6 +2213,65 @@ test("every matrix row takes its own pair measurement from each view, and runnin
   });
   assert.match(flat(dom.matrixViewA), /Attuale · tema chiaro · senza tuning/);
   assert.match(flat(dom.matrixViewB), /Modifica · tema chiaro · bozza/);
+});
+
+test("running clears live colours from both tile views and table swatches even when the controller retains old measurements", () => {
+  const { dom, controller } = install(workbenchSession());
+  const selection = { pairId: "light|color|--color-primary-text|--color-primary-surface", theme: "light", comparison: "themes" };
+  const pairs = [
+    ["--color-primary-text", "--color-primary-surface"],
+    ["--color-text", "--color-bg"],
+  ];
+  const views = ["light", "dark"].map((theme, index) => {
+    const measurements = pairs.map(([foreground, background]) => ({
+      pairId: `${theme}|color|${foreground}|${background}`, theme, ratio: 5.2, minimum: 4.5, target: 4.6, status: "pass",
+      foreground: index ? "rgb(245, 245, 245)" : "rgb(30, 40, 50)",
+      background: index ? "rgb(12, 12, 12)" : "rgb(250, 250, 250)",
+    }));
+    return {
+      slot: index ? "right" : "left", theme, variant: "baseline", measurements, measurement: measurements[0], errors: [],
+      pair: { foreground: pairs[0][0], background: pairs[0][1], property: "color" },
+    };
+  });
+  const publish = (phase, revision) => controller.publish({ phase, revision, selection, draft: {}, removed: [], suggestion: null, error: null, views });
+  const tileViews = () => dom.matrixGrid.querySelectorAll("span").filter((node) => ["left", "right"].includes(node.getAttribute("data-slot")));
+  const tileSwatches = () => dom.matrixGrid.querySelectorAll("span").filter((node) => /\bwb-pair-swatch\b/.test(node.getAttribute("class") || node.className));
+  const tableSwatches = () => dom.matrixBody.querySelectorAll("span").filter((node) => node.getAttribute("data-swatch-class") === "wb-matrix-cell-swatch");
+
+  publish("complete", 1);
+  assert.equal(tileViews().length, 4, "two real pairs expose both tile views");
+  assert.equal(tileSwatches().length, 4);
+  assert.equal(tableSwatches().length, 4);
+  for (const swatch of [...tileSwatches(), ...tableSwatches()]) {
+    assert.match(swatch.style.props["--pair-foreground"], /^rgb\(/, "the precondition is a genuinely painted live swatch");
+    assert.match(swatch.style.props["--pair-background"], /^rgb\(/);
+    assert.doesNotMatch(swatch.getAttribute("class"), /is-unmeasured/);
+  }
+  for (const view of tileViews()) assert.equal(view.getAttribute("data-source"), "live");
+
+  // Keep the previous views in the publication: the phase gate, not an emptied fixture, must clear them.
+  publish("running", 2);
+  for (const swatch of [...tileSwatches(), ...tableSwatches()]) {
+    assert.equal(swatch.style.props["--pair-foreground"], "");
+    assert.equal(swatch.style.props["--pair-background"], "");
+    assert.match(swatch.getAttribute("class"), /is-unmeasured/);
+  }
+  for (const view of tileViews()) {
+    assert.equal(view.getAttribute("data-source"), "build");
+    assert.match(flat(view), /stima build/);
+    assert.match(flat(view), /Colori live non disponibili/);
+  }
+  for (const value of pairs.map(([foreground, background]) => `${foreground}|${background}|text`)) {
+    const row = matrixRowByValue(dom, value);
+    assert.equal(row.left.getAttribute("data-source"), "build");
+    assert.equal(row.right.getAttribute("data-source"), "build");
+  }
+
+  views[0].measurements[0].foreground = "rgb(15, 25, 35)";
+  publish("complete", 3);
+  assert.equal(tileSwatches()[0].style.props["--pair-foreground"], "rgb(15, 25, 35)", "a fresh complete phase repaints the current measurement");
+  assert.equal(tableSwatches()[0].style.props["--pair-foreground"], "rgb(15, 25, 35)");
+  for (const view of tileViews()) assert.equal(view.getAttribute("data-source"), "live");
 });
 
 test("the live Aa sample is painted only from the runtime computed colours and clears on idle", () => {
@@ -2811,6 +2876,18 @@ test("narrow viewport keeps the proposal locally scrollable and the document nar
       assert.ok(frame.scrollHeight <= frame.contentHeight + 1, "primary text sample " + frame.slot + " must not need a nested vertical scroll at 320px: " + JSON.stringify(frame));
       assert.ok(frame.scrollHeight <= frame.height + 1, "primary text sample " + frame.slot + " fits the main iframe height at 320px: " + JSON.stringify(frame));
     }
+    async function assertDetailReachable() {
+      await page.locator('a[href="#smart-colors-workbench-inspector"]').click();
+      const reached = await page.evaluate(() => ({
+        focused: document.activeElement && document.activeElement.id,
+        targetTop: document.getElementById("smart-colors-workbench-inspector").getBoundingClientRect().top,
+        specimenTop: document.getElementById("smart-colors-workbench-left").getBoundingClientRect().top,
+        viewport: document.documentElement.clientHeight,
+      }));
+      assert.equal(reached.focused, "smart-colors-workbench-inspector", "explicit detail navigation focuses the native fragment target");
+      assert.ok(reached.targetTop >= -1 && reached.targetTop < reached.viewport, "the inspector is reachable without an implicit selection scroll: " + JSON.stringify(reached));
+      assert.ok(reached.specimenTop >= -1 && reached.specimenTop < reached.viewport, "detail navigation brings the real specimen into the viewport: " + JSON.stringify(reached));
+    }
     const narrowLayout = await page.evaluate(() => {
       const workspace = document.querySelector("#banco .wb-workspace");
       const toolbar = document.querySelector("#banco .wb-toolbar");
@@ -2839,7 +2916,7 @@ test("narrow viewport keeps the proposal locally scrollable and the document nar
     assert.notEqual(narrowLayout.sourceDisplay, "none", "the compact native source select is visible at 320px");
     assert.notEqual(narrowLayout.currentUseDisplay, "none", "the human current use is visible at 320px");
     assert.notEqual(narrowLayout.openerDisplay, "none", "the change-use opener is visible at 320px");
-    assert.ok(narrowLayout.specimenTop < 1200, "the result stays reasonably reachable at 320px: " + narrowLayout.specimenTop);
+    await assertDetailReachable();
     assert.ok(narrowLayout.toolbarTop < narrowLayout.mainTop, "the toolbar precedes the comparison at 320px");
     assert.ok(narrowLayout.toolbarWidth <= measured.viewport, "the toolbar never exceeds the 320px viewport: " + narrowLayout.toolbarWidth);
     for (const container of measured.containers) {
@@ -2869,11 +2946,10 @@ test("narrow viewport keeps the proposal locally scrollable and the document nar
     }
     assert.ok(tabbed.includes("smart-colors-workbench-proposal-before") && tabbed.includes("smart-colors-workbench-proposal-after"), "both proposal regions are keyboard reachable: " + JSON.stringify(tabbed));
 
-    // Desktop: the workbench is now overview + inspector. The three-column overview occupies the
-    // first column, the comparison/inspector the second, and the toolbar spans both. Inside the
-    // narrower inspector column the two specimens stack, because the container query follows that
-    // column and not the viewport.
+    // Desktop: overview, inspector and export remain a full-width stack; verify the optional table's
+    // bounded scroll region explicitly, rather than measuring a table hidden by the default grid.
     await page.setViewportSize({ width: 1280, height: 900 });
+    await page.check("#smart-colors-workbench-display-table");
     await page.waitForFunction(() => {
       const node = document.querySelector("#banco .wb-overview");
       return Boolean(node) && node.open;
@@ -2898,6 +2974,7 @@ test("narrow viewport keeps the proposal locally scrollable and the document nar
         matrixScrollHeight: matrixScroll ? matrixScroll.clientHeight : 0,
         specimenColumns: getComputedStyle(results).gridTemplateColumns.split(" ").length,
         proposalColumns: getComputedStyle(document.getElementById("smart-colors-workbench-proposal-frames")).gridTemplateColumns.split(" ").length,
+        splitColumns: getComputedStyle(document.querySelector("#banco .wb-main-split")).gridTemplateColumns.split(" ").length,
         proposalFrames: [...document.querySelectorAll("#smart-colors-workbench-proposal-frames .wb-frame")].map((node) => {
           const frame = node.querySelector("iframe");
           return { overflowX: getComputedStyle(node).overflowX, width: frame ? frame.offsetWidth : null, height: frame ? frame.offsetHeight : null };
@@ -2919,14 +2996,15 @@ test("narrow viewport keeps the proposal locally scrollable and the document nar
         document: document.documentElement.scrollWidth,
       };
     });
-    assert.equal(wideLayout.columns, 2, "desktop is the overview + inspector layout: " + JSON.stringify(wideLayout));
+    assert.equal(wideLayout.columns, 1, "desktop stacks the full-width overview matrix on top and main below: " + JSON.stringify(wideLayout));
     assert.equal(wideLayout.overviewOpen, true, "the desktop overview is open by default");
-    assert.ok(wideLayout.overviewTable, "the overview column carries the semantic matrix");
-    assert.ok(wideLayout.overviewHeight > 200, "the overview column has real content: " + wideLayout.overviewHeight);
-    assert.ok(wideLayout.matrixScrollHeight > 0 && wideLayout.matrixScrollHeight <= 400, "the matrix stays bounded inside the overview column: " + wideLayout.matrixScrollHeight);
-    assert.ok(wideLayout.overviewLeft < wideLayout.mainLeft, "the overview is the first column and the inspector the second: " + JSON.stringify(wideLayout));
+    assert.ok(wideLayout.overviewTable, "the overview carries the semantic matrix");
+    assert.ok(wideLayout.overviewHeight > 200, "the overview has real content: " + wideLayout.overviewHeight);
+    assert.ok(wideLayout.matrixScrollHeight > 0 && wideLayout.matrixScrollHeight <= 400, "the matrix stays bounded: " + wideLayout.matrixScrollHeight);
+    assert.ok(wideLayout.overviewTop < wideLayout.mainTop, "the overview matrix is at the top above the main panels: " + JSON.stringify(wideLayout));
     assert.equal(wideLayout.specimenColumns, 2, "the broader inspector column fits the two specimens side by side: " + JSON.stringify(wideLayout));
-    assert.equal(wideLayout.proposalColumns, 1, "the fixed proposal frames stack inside the narrower inspector column: " + JSON.stringify(wideLayout));
+    assert.equal(wideLayout.splitColumns, 1, "inspector and export remain a single full-width column: " + JSON.stringify(wideLayout));
+    assert.equal(wideLayout.proposalColumns, 2, "the full-width inspector fits both fixed proposal frames side by side: " + JSON.stringify(wideLayout));
     assert.equal(wideLayout.proposalFrames.length, 2, "both proposal frames are mounted");
     for (const frame of wideLayout.proposalFrames) {
       assert.equal(frame.overflowX, "auto", "each proposal container keeps local scrolling");
@@ -2937,9 +3015,9 @@ test("narrow viewport keeps the proposal locally scrollable and the document nar
     assert.equal(wideLayout.paletteOverflow, "visible", "the palette never needs a local horizontal scroll");
     assert.equal(wideLayout.paletteScroll, false, "every desktop source chip wraps inside the toolbar");
     assert.equal(wideLayout.sourceDisplay, "none", "the native select is removed on desktop, with no invisible focus stop: " + JSON.stringify(wideLayout));
-    assert.ok(wideLayout.specimenTop < 600, "the specimen stays high enough to be visible at 1280: " + wideLayout.specimenTop);
-    assert.ok(wideLayout.toolbarWidth > 600, "the toolbar spans both desktop columns: " + wideLayout.toolbarWidth);
-    assert.ok(Math.abs(wideLayout.toolbarLeft - wideLayout.overviewLeft) <= 1, "the toolbar starts at the overview edge and spans both columns");
+    await assertDetailReachable();
+    assert.ok(wideLayout.toolbarWidth > 600, "the toolbar spans the full desktop workbench: " + wideLayout.toolbarWidth);
+    assert.ok(Math.abs(wideLayout.toolbarLeft - wideLayout.overviewLeft) <= 1, "the full-width toolbar aligns with the overview");
     assert.ok(wideLayout.toolbarTop < wideLayout.overviewTop && wideLayout.toolbarTop < wideLayout.mainTop, "the toolbar precedes overview and inspector");
     assert.ok(wideLayout.document <= wideLayout.viewport + 1, "the desktop layout never widens the document: " + JSON.stringify(wideLayout));
 

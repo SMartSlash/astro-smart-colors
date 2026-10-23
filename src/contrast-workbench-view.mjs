@@ -453,6 +453,11 @@ function pairSnippet(foreground, background, property) {
   return `color: ${fg};\nbackground-color: ${bg};`;
 }
 
+function pairCompactSnippet(foreground, background, property) {
+  const prop = property === "borderColor" ? "border-color" : property === "outlineColor" ? "outline-color" : "color";
+  return `${prop}: var(${foreground});\nbackground-color: var(${background});`;
+}
+
 // Human kind of a catalogue pair. The exact token identity stays visible in the main area; this
 // label only names what the specimen geometry is, never a compliance claim.
 function pairKindLabel(pair) {
@@ -696,7 +701,9 @@ function sourceSwatchesHtml(entries, selectedToken) {
     const color = sourceColor(entry.value);
     const style = color ? ` style="--sample-color:${escape(color)}"` : "";
     const pressed = selectedToken && entry.token === selectedToken;
-    return `<li><button type="button" class="wb-swatch" data-smart-colors-workbench="swatch" data-token="${escape(entry.token)}" aria-pressed="${pressed ? "true" : "false"}" disabled>
+    const blendAttr = entry.darkBlend != null ? ` data-dark-blend="${escape(String(entry.darkBlend))}"` : "";
+    const roleAttr = entry.declaredRole ? ` data-role="${escape(entry.declaredRole)}"` : "";
+    return `<li><button type="button" class="wb-swatch" data-smart-colors-workbench="swatch" data-token="${escape(entry.token)}"${roleAttr}${blendAttr} aria-pressed="${pressed ? "true" : "false"}" disabled>
 <span class="wb-swatch-block" aria-hidden="true"${style}></span>
 <span class="wb-swatch-name"><span class="wb-swatch-mark" aria-hidden="true">✓</span>${escape(sourceSwatchName(entry))}</span>
 </button></li>`;
@@ -880,6 +887,26 @@ function matrixCriterionLabel(pair) {
   return "Testo · AA 4,5:1";
 }
 
+
+function pairCategory(pair) {
+  const kind = pair.kind || "";
+  const prop = pair.property || "";
+  const fg = (pair.foreground || "").toLowerCase();
+  const bg = (pair.background || "").toLowerCase();
+  const usage = (pair.usage || "").toLowerCase();
+  if (kind === "non-text" || prop === "borderColor" || prop === "outlineColor" || fg.includes("border") || fg.includes("outline") || usage.includes("bordo")) {
+    return "border";
+  }
+  if ((fg.includes("surface") && (bg.includes("bg") || bg.includes("canvas"))) || usage.includes("superficie")) {
+    return "surface";
+  }
+  if (kind === "decorative" || usage.includes("decorat")) {
+    return "decorative";
+  }
+  return "text";
+}
+
+
 function matrixSnapshotHtml(theme, source) {
   if (!theme) return `<span class="wb-matrix-status" data-status="unmeasured">tema non disponibile</span>`;
   const status = text(theme.status) || "unmeasured";
@@ -890,20 +917,36 @@ function matrixSnapshotHtml(theme, source) {
   return `<span class="wb-matrix-ratio">${escape(ratio)}</span><span class="wb-matrix-status" data-status="${escape(status)}">${escape(matrixStatusLabel(status))}</span><span class="wb-matrix-thresholds">${escape(thresholds.join(" · ") || "soglie non dichiarate")}</span><span class="wb-matrix-source">${escape(source || "stima build")}</span>`;
 }
 
+function matrixStaticGridHtml(pairs) {
+  // The no-JS surface is the snapshot table; keep this hidden scaffold bounded.
+  // Enhancement rebuilds every declared pair before filters and pagination run.
+  return pairs.slice(0, 1).map((pair) => {
+    const value = pickerValue(pair);
+    const label = pairHasPickerLabel(pair) ? pairPickerDisplay(pair) : pairFallbackLabel(pair);
+    const views = ["light", "dark"].map((theme, index) => `<span class="wb-tile-view" data-slot="${index === 0 ? "left" : "right"}" data-source="build">
+<span class="wb-tile-view-title">${theme === "light" ? "A · Tema chiaro" : "B · Tema scuro"}</span>
+<span class="wb-pair-swatch is-unmeasured" aria-hidden="true"></span>
+<span class="wb-tile-result">${matrixSnapshotHtml(pair.themes[theme], "stima build")}<span>Colori live non disponibili</span></span></span>`).join("");
+    return `<li class="wb-matrix-tile" data-smart-colors-workbench="matrix-tile" data-pair-value="${escape(value)}" data-category="${escape(pairCategory(pair))}">
+<button type="button" class="wb-tile-select" aria-pressed="false" disabled>
+<span class="wb-tile-heading"><span class="wb-tile-title">${escape(label)}</span><span class="wb-tile-mark" aria-hidden="true">✓</span></span>
+<code class="wb-tile-tokens">${escape(pair.foreground)} su ${escape(pair.background)}</code>
+<span class="wb-tile-views">${views}</span></button></li>`;
+  }).join("");
+}
+
 function matrixStaticRowsHtml(pairs) {
   if (!pairs.length) {
     return `<tr><td colspan="3">Nessun abbinamento diagnostico disponibile: il banco non inventa coppie.</td></tr>`;
   }
-  // The static HTML stays bounded. With JavaScript the view rebuilds the full matrix from the real
-  // pair options before any filter can run, so the static rows carry only what the no-JS surface
-  // shows: the search index and the row index belong to the rebuilt rows, not to this fallback.
   const rows = pairs.slice(0, 4).map((pair) => {
     const value = pickerValue(pair);
     const label = pairHasPickerLabel(pair) ? pairPickerDisplay(pair) : pairFallbackLabel(pair);
+    const cat = pairCategory(pair);
     const status = worstStatus(pair);
     const lightStatus = text(pair.themes.light && pair.themes.light.status) || "unmeasured";
     const darkStatus = text(pair.themes.dark && pair.themes.dark.status) || "unmeasured";
-    return `<tr data-smart-colors-workbench="matrix-row" data-pair-value="${escape(value)}" data-status="${escape(status)}" data-all-pass="${lightStatus === "pass" && darkStatus === "pass" ? "true" : "false"}" data-unmeasured="${lightStatus === "unmeasured" || darkStatus === "unmeasured" ? "true" : "false"}" data-live-status="false"><th scope="row" class="wb-matrix-uso"><span class="wb-matrix-label">${escape(label)}</span><code class="wb-matrix-tokens">${escape(pair.foreground)} su ${escape(pair.background)}</code><span class="wb-matrix-type">${escape(matrixCriterionLabel(pair))}</span><button type="button" class="wb-matrix-inspect" data-smart-colors-workbench="matrix-inspect" data-pair-value="${escape(value)}" tabindex="-1" disabled>Ispeziona<span class="wb-visually-hidden"> ${escape(label)}</span></button></th><td class="wb-matrix-view" data-smart-colors-workbench="matrix-cell" data-slot="left">${matrixSnapshotHtml(pair.themes.light, "stima build")}</td><td class="wb-matrix-view" data-smart-colors-workbench="matrix-cell" data-slot="right">${matrixSnapshotHtml(pair.themes.dark, "stima build")}</td></tr>`;
+    return `<tr data-smart-colors-workbench="matrix-row" data-pair-value="${escape(value)}" data-category="${escape(cat)}" data-status="${escape(status)}" data-all-pass="${lightStatus === "pass" && darkStatus === "pass" ? "true" : "false"}" data-unmeasured="${lightStatus === "unmeasured" || darkStatus === "unmeasured" ? "true" : "false"}" data-live-status="false"><th scope="row" class="wb-matrix-uso"><div class="wb-matrix-info"><span class="wb-matrix-label">${escape(label)}</span><code class="wb-matrix-tokens">${escape(pair.foreground)} su ${escape(pair.background)}</code><span class="wb-matrix-type">${escape(matrixCriterionLabel(pair))}</span></div><button type="button" class="wb-matrix-inspect" data-smart-colors-workbench="matrix-inspect" data-pair-value="${escape(value)}" tabindex="-1" disabled>Ispeziona<span class="wb-visually-hidden"> ${escape(label)}</span></button></th><td class="wb-matrix-view" data-smart-colors-workbench="matrix-cell" data-slot="left">${matrixSnapshotHtml(pair.themes.light, "stima build")}</td><td class="wb-matrix-view" data-smart-colors-workbench="matrix-cell" data-slot="right">${matrixSnapshotHtml(pair.themes.dark, "stima build")}</td></tr>`;
   }).join("");
   return `${rows}<tr data-smart-colors-workbench="matrix-empty" hidden><td colspan="3">Nessun abbinamento corrisponde alla selezione corrente.</td></tr>`;
 }
@@ -911,7 +954,7 @@ function matrixStaticRowsHtml(pairs) {
 function matrixHtml(pairs) {
   const total = pairs.length;
   const count = total === 1 ? "1 abbinamento" : `${total} abbinamenti`;
-  return `<details class="wb-overview" data-smart-colors-workbench="overview" aria-labelledby="smart-colors-workbench-overview-title">
+  return `<details class="wb-overview" data-smart-colors-workbench="overview" aria-labelledby="smart-colors-workbench-overview-title" open>
 <summary id="smart-colors-workbench-overview-title" class="wb-overview-summary">Abbinamenti e filtri <span id="smart-colors-workbench-overview-scope" class="wb-overview-scope">Tutti gli abbinamenti</span></summary>
 <div class="wb-overview-body">
 <p id="smart-colors-workbench-matrix-note" class="wb-snapshot-note">Misure live quando disponibili; altrimenti stime di build etichettate.</p>
@@ -919,14 +962,23 @@ function matrixHtml(pairs) {
 <div class="wb-overview-filters" role="search" aria-label="Cerca e filtra gli abbinamenti">
 <div class="wb-field"><label for="smart-colors-workbench-matrix-search">Cerca un abbinamento</label><input id="smart-colors-workbench-matrix-search" data-smart-colors-workbench="matrix-search" type="search" placeholder="es. testo card" autocomplete="off" spellcheck="false" disabled></div>
 <div class="wb-field"><label for="smart-colors-workbench-matrix-filter">Filtra per esito</label><select id="smart-colors-workbench-matrix-filter" data-smart-colors-workbench="matrix-filter" disabled><option value="">Tutti gli esiti</option><option value="issues">Solo problemi (sotto soglia)</option><option value="below-minimum">Sotto il minimo</option><option value="below-target">Sotto il target</option><option value="pass">Minimo raggiunto</option><option value="unmeasured">Non misurati</option><option value="live">Con misura live</option></select></div>
+<div class="wb-field"><label for="smart-colors-workbench-matrix-category">Filtra per tipo</label><select id="smart-colors-workbench-matrix-category" data-smart-colors-workbench="matrix-category" disabled><option value="">Tutti i tipi</option><option value="text">Testo</option><option value="border">Bordo / UI</option><option value="surface">Superficie / Canvas</option><option value="decorative">Decorativo</option></select></div>
 <button type="button" id="smart-colors-workbench-matrix-clear" data-smart-colors-workbench="matrix-clear" class="wb-ghost" disabled>Azzera filtri</button>
-<label class="wb-scope-toggle"><input id="smart-colors-workbench-matrix-all" data-smart-colors-workbench="matrix-all" type="checkbox" checked disabled> Tutti gli abbinamenti</label>
+<label class="wb-scope-toggle"><input id="smart-colors-workbench-matrix-all" data-smart-colors-workbench="matrix-all" type="checkbox" checked disabled> Tutto il catalogo</label>
 </div>
 <p id="smart-colors-workbench-matrix-count" data-smart-colors-workbench="matrix-count" role="status" aria-live="polite" class="wb-picker-count">${escape(count)}</p>
 <details class="is-detail wb-matrix-help"><summary>Come leggere la matrice</summary>
-<p class="margin-note">La matrice segue il colore sorgente; «Tutti gli abbinamenti» mostra il catalogo completo. Ogni cella usa la misura live quando esiste per quella coppia e quella vista, altrimenti una stima di build etichettata. Le misure valgono per la coppia e il tema mostrati: non sono un verdetto globale.</p>
+<p class="margin-note">L'ambito iniziale segue il colore sorgente; «Tutto il catalogo» mostra tutte le coppie dichiarate, non ogni combinazione teorica. Campioni e tabella condividono filtri e paginazione. Ogni vista usa la propria misura live, altrimenti una stima di build etichettata: nessun verdetto globale.</p>
 </details>
-<div class="wb-matrix-scroll" role="region" aria-labelledby="smart-colors-workbench-matrix-caption" aria-describedby="smart-colors-workbench-matrix-note" tabindex="0">
+<div class="wb-matrix-toolbar">
+<fieldset class="wb-matrix-display"><legend>Visualizzazione</legend><label><input id="smart-colors-workbench-display-grid" type="radio" name="smart-colors-matrix-display" value="grid" disabled> Campioni</label><label><input id="smart-colors-workbench-display-table" type="radio" name="smart-colors-matrix-display" value="table" checked disabled> Tabella</label></fieldset>
+<p class="wb-swatch-legend">Diagonale: primo piano in alto a sinistra, sfondo in basso a destra. I nomi dei token identificano i due colori.</p>
+</div>
+<ul class="wb-matrix-grid" data-smart-colors-workbench="matrix-grid" aria-label="Mappa visiva degli abbinamenti colore" hidden>
+${matrixStaticGridHtml(pairs)}
+</ul>
+<p id="smart-colors-workbench-matrix-no-results" class="wb-matrix-empty" hidden>Nessun abbinamento corrisponde ai filtri. Prova ad azzerarli o ad ampliare l'ambito.</p>
+<div id="smart-colors-workbench-matrix-table" class="wb-matrix-scroll" role="region" aria-labelledby="smart-colors-workbench-matrix-caption" aria-describedby="smart-colors-workbench-matrix-note" tabindex="0">
 <table class="wb-matrix">
 <caption id="smart-colors-workbench-matrix-caption">Abbinamenti tra token: uso e criterio, poi le due viste del confronto con la misura di ciascuna coppia.</caption>
 <colgroup><col class="wb-matrix-col-uso"><col class="wb-matrix-col-view"><col class="wb-matrix-col-view"></colgroup>
@@ -934,6 +986,8 @@ function matrixHtml(pairs) {
 <tbody data-smart-colors-workbench="matrix-body">${matrixStaticRowsHtml(pairs)}</tbody>
 </table>
 </div>
+<div class="wb-matrix-pager" aria-label="Pagine degli abbinamenti"><button type="button" id="smart-colors-workbench-matrix-prev" disabled>Precedenti</button><p id="smart-colors-workbench-matrix-page" role="status" aria-live="polite">Snapshot: prime ${Math.min(total, 4)} coppie di ${total}</p><button type="button" id="smart-colors-workbench-matrix-next" disabled>Successivi</button></div>
+<a class="wb-detail-link" href="#smart-colors-workbench-inspector">Vai al dettaglio selezionato ↓</a>
 </div>
 </details>`;
 }
@@ -968,6 +1022,8 @@ export function renderContrastWorkbench(session) {
   // The primary picker starts on the static best pair's own source; the runtime then keeps this in
   // sync with the active selection.
   const defaultSource = selected && selected.sources.length ? selected.sources[0] : "";
+  const defaultSourceEntry = sources.entries.find((e) => e.token === defaultSource) || sources.entries[0] || null;
+  const defaultDarkBlendNote = defaultSourceEntry ? darkBlendLine(design, defaultSourceEntry, tools) : "";
   const currentTitle = selected ? selected.title : "Nessuna coppia selezionata";
   const currentHuman = selected ? pairPickerDisplay(selected) : "Nessuna coppia selezionata";
   const currentKind = selected ? pairKindLabel(selected) : "";
@@ -975,6 +1031,8 @@ export function renderContrastWorkbench(session) {
   const picker = pickerModel(pairs, design, sources, defaultSource, selected ? pickerValue(selected) : "");
   const identityHtml = pairIdentityHtml(selected);
   const purposeText = pairPurposeText(selected);
+  const initialSnippet = selected ? pairCompactSnippet(selected.foreground, selected.background, selected.property) : "/* Nessun abbinamento selezionato */";
+  const initialHarmony = "Relazione cromatica descrittiva: non è una verifica di accessibilità.";
   return `<section id="banco" aria-labelledby="banco-titolo"><h2 id="banco-titolo" class="wb-visually-hidden">Banco di contrasto guidato</h2>
 <div id="${HOST_ID}" ${HOOK}="host">
 <noscript><p class="wb-nojs">JavaScript è disattivato: i pulsanti dei colori restano inerti e nessuna misura live viene eseguita. La matrice mostra solo dati dello snapshot di build.</p></noscript>
@@ -994,17 +1052,20 @@ ${sourceSwatchesHtml(sources.entries, defaultSource)}
 <button type="button" id="smart-colors-workbench-open-picker" ${HOOK}="open-picker" class="wb-open-picker" aria-haspopup="dialog" disabled>Cambia uso</button>
 <form id="smart-colors-workbench-selection" class="wb-compare" data-smart-colors-workbench="selection">
 <fieldset class="wb-fieldset"><legend>Confronta</legend><label><input id="smart-colors-workbench-comparison-themes" type="radio" name="smart-colors-workbench-comparison" value="themes" checked> Chiaro/scuro</label><label><input id="smart-colors-workbench-comparison-tuning" type="radio" name="smart-colors-workbench-comparison" value="tuning"${tuning.available ? "" : " disabled"}> Generato/tuning</label><label><input id="smart-colors-workbench-comparison-draft" type="radio" name="smart-colors-workbench-comparison" value="draft"${tuning.available ? "" : " disabled"}> Prima/dopo</label>${tuning.available ? "" : `<span class="margin-note">Confronti personalizzati non disponibili: ${escape(tuning.reason)}.</span>`}</fieldset>
-<fieldset class="wb-fieldset wb-theme-fieldset"><legend>Tema</legend><label><input id="smart-colors-workbench-theme-light" type="radio" name="smart-colors-workbench-theme" value="light" form="smart-colors-workbench-selection" checked> chiaro</label><label><input id="smart-colors-workbench-theme-dark" type="radio" name="smart-colors-workbench-theme" value="dark" form="smart-colors-workbench-selection"> scuro</label></fieldset>
+<fieldset class="wb-fieldset wb-theme-fieldset"><legend>Tema per le modifiche</legend><label><input id="smart-colors-workbench-theme-light" type="radio" name="smart-colors-workbench-theme" value="light" form="smart-colors-workbench-selection" checked> chiaro</label><label><input id="smart-colors-workbench-theme-dark" type="radio" name="smart-colors-workbench-theme" value="dark" form="smart-colors-workbench-selection"> scuro</label></fieldset>
 </form>
 </div>
 </section>
 ${matrixHtml(pairs)}
 <div class="wb-main">
+<div class="wb-main-split">
+<section id="smart-colors-workbench-inspector" class="wb-pane-inspector" aria-labelledby="smart-colors-workbench-current" tabindex="-1">
 <header class="wb-head">
-<h3 id="smart-colors-workbench-current" ${HOOK}="current" class="wb-current"><strong>${escape(currentTitle)}</strong></h3>
+<div class="wb-inspector-heading"><h3 id="smart-colors-workbench-current" ${HOOK}="current" class="wb-current"><strong>${escape(currentTitle)}</strong></h3><span class="wb-selected-note">Abbinamento selezionato</span></div>
 <p id="smart-colors-workbench-identity" ${HOOK}="identity" class="wb-identity">${identityHtml}</p>
 <p id="smart-colors-workbench-purpose" ${HOOK}="purpose" class="wb-purpose">${escape(purposeText)}</p>
 </header>
+
 <p id="smart-colors-workbench-status" ${HOOK}="status" role="status" aria-live="polite" class="wb-status">Misura non disponibile senza JavaScript.</p>
 <div id="smart-colors-workbench-result" ${HOOK}="result" class="wb-frames" role="group" aria-label="Campioni CSS del consumatore">
 <section class="wb-view" aria-labelledby="smart-colors-workbench-left-title"><div class="wb-view-head"><span data-smart-colors-workbench="left-sample" class="wb-aa is-unmeasured" aria-hidden="true">Aa</span><h3 id="smart-colors-workbench-left-title" class="wb-view-title">Tema chiaro</h3></div><span id="smart-colors-workbench-left-meta" data-smart-colors-workbench="left-meta" class="wb-view-meta wb-visually-hidden"></span><div id="smart-colors-workbench-left" ${HOOK}="left" class="wb-frame" role="group" aria-label="Vista CSS sinistra"></div><dl id="smart-colors-workbench-left-measure" ${HOOK}="left-measure" class="wb-measure"><div class="wb-measure-row wb-measure-ratio"><dt class="wb-visually-hidden">Rapporto</dt><dd><span class="wb-verdict" data-status="unmeasured">Non misurato</span> · serve JavaScript</dd></div></dl></section>
@@ -1030,10 +1091,42 @@ ${matrixHtml(pairs)}
 <section class="wb-view" aria-labelledby="smart-colors-workbench-proposal-frames-title smart-colors-workbench-proposal-before-title"><h4 id="smart-colors-workbench-proposal-before-title">Attuale</h4><div id="smart-colors-workbench-proposal-before" ${HOOK}="proposal-before" class="wb-frame" role="region" tabindex="0" aria-label="Vista CSS attuale della proposta: viewport di verifica fisso 360×480; scorri orizzontalmente per vedere tutta la vista"></div></section>
 <section class="wb-view" aria-labelledby="smart-colors-workbench-proposal-frames-title smart-colors-workbench-proposal-after-title"><h4 id="smart-colors-workbench-proposal-after-title">Proposta</h4><div id="smart-colors-workbench-proposal-after" ${HOOK}="proposal-after" class="wb-frame" role="region" tabindex="0" aria-label="Vista CSS proposta: viewport di verifica fisso 360×480; scorri orizzontalmente per vedere tutta la vista"></div></section>
 </section>
+</section>
 <details class="is-detail wb-how"><summary>Come funziona la ricerca della correzione</summary>
 <p class="margin-note">La ricerca varia la luminosità quanto basta per raggiungere il minimo dichiarato, non il target del progetto, e non cerca il colore più vicino in ΔE.</p>
 </details>
+<details class="wb-code-details" data-smart-colors-workbench="snippet-card"><summary id="smart-colors-workbench-snippet-title">Codice CSS e relazione cromatica</summary>
+<div class="wb-snippet-header"><button type="button" id="smart-colors-workbench-copy-snippet" ${HOOK}="copy-snippet" class="wb-snippet-copy-btn" disabled>Copia codice CSS</button></div>
+<pre class="wb-snippet-pre" tabindex="0" aria-label="Codice CSS dell'abbinamento"><code id="smart-colors-workbench-snippet-code" ${HOOK}="snippet-code">${escape(initialSnippet)}</code></pre>
+<p id="smart-colors-workbench-harmony" ${HOOK}="harmony" class="wb-harmony-note margin-note">${escape(initialHarmony)}</p>
+</details>
 </section>
+<section id="smart-colors-workbench-tuning" class="wb-pane-export" aria-labelledby="smart-colors-workbench-tuning-title">
+<div class="wb-export-panel-head">
+<div class="wb-export-panel-title-wrap">
+<span class="wb-export-panel-icon" aria-hidden="true">💾</span>
+<h3 id="smart-colors-workbench-tuning-title" class="wb-export-panel-title">Tuning ed esportazione</h3>
+</div>
+<span class="wb-export-panel-desc">Esporta gli override temporanei. Nessun file del progetto viene modificato automaticamente.</span>
+</div>
+<details class="is-detail"><summary>Indicazioni per dark-blend nella palette</summary>
+<aside class="wb-darkblend-callout" data-smart-colors-workbench="darkblend-callout">
+<div class="wb-darkblend-icon" aria-hidden="true">🌓</div>
+<div class="wb-darkblend-body">
+<h4>Ottimizzazione Dark Mode: <code>dark-blend</code> in <code>palette.css</code></h4>
+<p class="margin-note">Il trigger <code>dark-blend</code> (0–100) regola lo sbiadimento verso il bianco nel tema scuro senza mai scurire. Regola gli slider per sperimentare override temporanei per <code>colors-tuning.css</code>, oppure imposta <code>dark-blend</code> direttamente in <code>src/styles/tokens/palette.css</code>.</p>
+<p id="smart-colors-workbench-darkblend-current" ${HOOK}="darkblend-current" class="wb-darkblend-current margin-note">Sorgente attiva: <strong>${escape(defaultSource || "nessuna")}</strong>${defaultDarkBlendNote ? ` · ${escape(defaultDarkBlendNote)}` : ""}</p>
+</div>
+</aside></details>
+<details class="is-detail wb-export" data-smart-colors-workbench="export"><summary>Esporta modifiche</summary>
+<p class="margin-note">Il comando di esportazione è nell'intestazione della pagina. Qui restano il CSS generato e il download manuale.</p>
+<div class="wb-actions"><button type="button" id="smart-colors-workbench-copy-export" ${HOOK}="copy-export">Seleziona il CSS esportato</button></div>
+<p id="smart-colors-workbench-export-note" class="margin-note">Nessun tuning pubblico da esportare: nessun override attivo.</p>
+<p id="smart-colors-workbench-export-mode" class="margin-note">Export non ancora richiesto.</p>
+<label for="smart-colors-workbench-export-text">CSS pubblico esportato, selezionabile senza permessi clipboard</label>
+<textarea id="smart-colors-workbench-export-text" ${HOOK}="export-text" aria-describedby="smart-colors-workbench-export-note" readonly rows="8"></textarea>
+<a id="smart-colors-workbench-download" ${HOOK}="download" hidden>Scarica colors-tuning.css (azione manuale)</a>
+</details>
 <details class="is-detail wb-criteria" data-smart-colors-workbench="criteria"><summary>Soglie di riferimento e testo grande</summary>
 <dl class="wb-criteria-list">
 <div><dt>Testo normale · AA</dt><dd>4,5:1 · <a href="https://www.w3.org/TR/WCAG22/#contrast-minimum">SC 1.4.3</a></dd></div>
@@ -1061,15 +1154,8 @@ ${tokenCatalogueHtml(design, pairs, sources)}
 <p id="smart-colors-workbench-exploration-status" data-smart-colors-workbench="exploration-status" role="status" aria-live="polite" class="margin-note">Non misurato. Nessun dato vecchio viene mostrato.</p>
 <div id="smart-colors-workbench-exploration-results" data-smart-colors-workbench="exploration-results" class="wb-matrix-scroll"></div>
 </details>
-<details class="is-detail wb-export" data-smart-colors-workbench="export"><summary>Esporta modifiche</summary>
-<p class="margin-note">Il comando di esportazione è nell'intestazione della pagina. Qui restano il CSS generato e il download manuale.</p>
-<div class="wb-actions"><button type="button" id="smart-colors-workbench-copy-export" ${HOOK}="copy-export">Seleziona il CSS esportato</button></div>
-<p id="smart-colors-workbench-export-note" class="margin-note">Nessun tuning pubblico da esportare: nessun override attivo.</p>
-<p id="smart-colors-workbench-export-mode" class="margin-note">Export non ancora richiesto.</p>
-<label for="smart-colors-workbench-export-text">CSS pubblico esportato, selezionabile senza permessi clipboard</label>
-<textarea id="smart-colors-workbench-export-text" ${HOOK}="export-text" aria-describedby="smart-colors-workbench-export-note" readonly rows="8"></textarea>
-<a id="smart-colors-workbench-download" ${HOOK}="download" hidden>Scarica colors-tuning.css (azione manuale)</a>
-</details>
+</section>
+</div>
 </div>
 </div>
 </div>
@@ -1108,8 +1194,6 @@ export function createContrastWorkbenchView(deps) {
   var controller = deps && deps.controller;
   var host = doc && typeof doc.getElementById === "function" ? doc.getElementById("smart-colors-workbench") : null;
   if (!doc || !host || typeof doc.createElement !== "function") return null;
-  // The workbench runtime is mandatory and always installed before this factory by the preview
-  // script. A missing controller is a real integration failure: fail loud, never degrade silently.
   if (!controller || typeof controller.select !== "function" || typeof controller.subscribe !== "function") {
     throw new TypeError("createContrastWorkbenchView requires the workbench controller installed by contrast-workbench-runtime.mjs");
   }
@@ -1181,6 +1265,10 @@ export function createContrastWorkbenchView(deps) {
   var closePicker = byId("smart-colors-workbench-close-picker");
   var currentHeading = byId("smart-colors-workbench-current");
   var identityNode = byId("smart-colors-workbench-identity");
+  var darkBlendCurrent = byId("smart-colors-workbench-darkblend-current");
+  var snippetCode = byId("smart-colors-workbench-snippet-code");
+  var copySnippet = byId("smart-colors-workbench-copy-snippet");
+  var harmonyNode = byId("smart-colors-workbench-harmony");
   var purposeNode = byId("smart-colors-workbench-purpose");
   var actionThemeNode = byId("smart-colors-workbench-action-theme");
   var suggestionsTitle = byId("smart-colors-workbench-suggestions-title");
@@ -1189,9 +1277,21 @@ export function createContrastWorkbenchView(deps) {
   var correctionBox = host.querySelector("[" + HOOK + '="correction"]');
   var manualBox = host.querySelector("[" + HOOK + '="manual"]');
   var exportBox = host.querySelector("[" + HOOK + '="export"]');
-  var overviewBox = host.querySelector("[" + HOOK + '="overview"]');
+
   var matrixSearch = byId("smart-colors-workbench-matrix-search");
   var matrixFilter = byId("smart-colors-workbench-matrix-filter");
+  var matrixCategory = byId("smart-colors-workbench-matrix-category");
+  var matrixTable = byId("smart-colors-workbench-matrix-table");
+  var matrixDisplayGrid = byId("smart-colors-workbench-display-grid");
+  var matrixDisplayTable = byId("smart-colors-workbench-display-table");
+  var matrixPrev = byId("smart-colors-workbench-matrix-prev");
+  var matrixNext = byId("smart-colors-workbench-matrix-next");
+  var matrixPageNote = byId("smart-colors-workbench-matrix-page");
+  var matrixNoResults = byId("smart-colors-workbench-matrix-no-results");
+  var matrixPage = 0;
+  var matrixPageSize = 8;
+  var matrixFilterKey = null;
+  var matrixMatches = null;
   var matrixClear = byId("smart-colors-workbench-matrix-clear");
   var matrixAll = byId("smart-colors-workbench-matrix-all");
   var overviewScope = byId("smart-colors-workbench-overview-scope");
@@ -1211,7 +1311,9 @@ export function createContrastWorkbenchView(deps) {
   var swatchButtons = [];
   for (var swatchIndex = 0; swatchIndex < swatchNodes.length; swatchIndex += 1) swatchButtons.push(swatchNodes[swatchIndex]);
   var matrixBody = host.querySelector("[" + HOOK + '="matrix-body"]');
+  var matrixGrid = host.querySelector("[" + HOOK + '="matrix-grid"]');
   var matrixEntries = [];
+  var matrixTiles = [];
   var matrixEmptyRow = null;
   var lastState = null;
   var lastAnnouncement = "";
@@ -1233,11 +1335,7 @@ export function createContrastWorkbenchView(deps) {
   var pickerPage = 0;
   var busy = false;
   var overridesPending = false;
-  // Local copy: the serialized factory must not depend on any module-scope binding.
   var useVisibleLimit = 6;
-  // Blocked-source state: when no verified result can be shown for the requested source (no pair at
-  // all, or none available in the current theme, or a failed selection), the previous samples are
-  // hidden instead of left on screen under a different pair. Recovery is a new source/theme/use.
   var sourceBlocked = false;
   var blockedSource = null;
   var blockedPairId = null;
@@ -1273,8 +1371,6 @@ export function createContrastWorkbenchView(deps) {
     lastAnnouncement = next;
     status.textContent = next;
   }
-  // Routine complete announcements stay in the live region for assistive technology but no longer
-  // consume visible space. Busy, error, unavailable, incomplete and blocked states stay visible.
   function setStatusVisibility(phase, hasError, blocked) {
     if (!status) return;
     var quiet = phase === "complete" && !hasError && !blocked;
@@ -1288,17 +1384,12 @@ export function createContrastWorkbenchView(deps) {
     if (value === "draft") return "bozza";
     return "variante non indicata";
   }
-  // Human, scoped verdict for one measurement. The WCAG use comes ONLY from the catalogue kind and a
-  // supported measurement status; a numeric threshold is never allowed to infer a use. A kind or
-  // threshold that does not match the normative pair for that kind fails closed with no criterion.
   function compactThreshold(value) {
     if (!finite(value)) return "soglia non dichiarata";
     return String(Math.round(value * 100) / 100).replace(".", ",") + ":1";
   }
   function declaredKindOf(option) {
     var kind = attribute(option, "data-kind");
-    // `on-color` is a known text-semantics catalogue kind: it uses the same 4.5 threshold and DOM
-    // property as normal text, while its specimen copy stays distinct.
     if (kind === "on-color") return "text";
     return kind === "text" || kind === "non-text" ? kind : null;
   }
@@ -1437,8 +1528,6 @@ export function createContrastWorkbenchView(deps) {
     }
     return null;
   }
-  // A runtime view belongs to one pair/property. A stale view is never used to paint a sample or fill
-  // the live matrix cell for a different selected pair.
   function viewMatchesOption(view, option) {
     if (!view || !option) return true;
     var pair = isRecord(view.pair) ? view.pair : null;
@@ -1455,9 +1544,6 @@ export function createContrastWorkbenchView(deps) {
     }
     return raw;
   }
-  // The sample is painted ONLY from a computed serialization returned by the runtime. This is not a
-  // colour calculation: the string is validated as a colour literal and applied verbatim through the
-  // CSSOM. When it is missing, the sample stays neutral instead of inventing a colour.
   function safeComputedColor(value) {
     var candidate = textOf(value).trim();
     if (!candidate || candidate.length > 140) return null;
@@ -1465,7 +1551,6 @@ export function createContrastWorkbenchView(deps) {
     if (/[;"'<>{}\\]|url\(|expression\(|@import/i.test(candidate)) return null;
     return candidate;
   }
-  // Public controls for one token/theme, read from the build metadata already embedded in the payload.
   function controlsForToken(theme, token) {
     var designValue = design();
     var binding = designValue && isRecord(designValue.tokens) && isRecord(designValue.tokens[token]) ? designValue.tokens[token] : null;
@@ -1476,8 +1561,6 @@ export function createContrastWorkbenchView(deps) {
     if (typeof controls.mix === "string" && controls.mix) list.push({ control: controls.mix, kind: "mix" });
     return list;
   }
-  // Active/removed personalizations are stated per token and theme. `removed` is the runtime list of
-  // controls whose saved value is no longer used; it is NOT a draft value.
   function overrideSummary(state, theme, option) {
     if (!option) return null;
     var draft = state && isRecord(state.draft) ? state.draft : {};
@@ -1546,9 +1629,17 @@ export function createContrastWorkbenchView(deps) {
     var position = comparison === "themes" ? "" : slot === "left" ? "Attuale · " : "Modifica · ";
     return "Vista " + letter + " · " + position + "tema " + themeName(view.theme) + " · " + variantName(view.variant);
   }
-  // One cell is filled ONLY from the measurement whose pairId matches this row and this view's
-  // theme. The selected pair's measurement is never copied to another row. When a live measurement
-  // is absent, the build estimate is shown with an explicit `stima build` source label.
+  function paintMatrixSwatch(node, measurement) {
+    var foreground = measurement ? safeComputedColor(measurement.foreground) : null;
+    var background = measurement ? safeComputedColor(measurement.background) : null;
+    var available = Boolean(foreground && background);
+    if (node.style && typeof node.style.setProperty === "function") {
+      node.style.setProperty("--pair-foreground", available ? foreground : "");
+      node.style.setProperty("--pair-background", available ? background : "");
+    }
+    setAttribute(node, "class", (attribute(node, "data-swatch-class") || "wb-pair-swatch") + (available ? "" : " is-unmeasured"));
+    return available;
+  }
   function renderMatrixCell(cell, option, theme, measurement) {
     clear(cell);
     var hasMeasurement = Boolean(measurement);
@@ -1569,6 +1660,13 @@ export function createContrastWorkbenchView(deps) {
       minimum = slot.minimum !== "" ? Number(slot.minimum) : null;
       target = slot.target !== "" ? Number(slot.target) : null;
     }
+    if (attribute(cell, HOOK) === "matrix-cell") {
+      var swatch = make("span", "wb-matrix-cell-swatch");
+      setAttribute(swatch, "data-swatch-class", "wb-matrix-cell-swatch");
+      setAttribute(swatch, "aria-hidden", "true");
+      paintMatrixSwatch(swatch, measurement);
+      cell.appendChild(swatch);
+    }
     cell.appendChild(make("span", "wb-matrix-ratio", finite(ratio) ? ratioText(ratio) : "non misurato"));
     var statusNode = make("span", "wb-matrix-status", matrixStatusLabelLocal(status));
     setAttribute(statusNode, "data-status", status);
@@ -1577,10 +1675,18 @@ export function createContrastWorkbenchView(deps) {
     if (finite(minimum)) thresholds.push("min " + ratioText(minimum));
     if (finite(target)) thresholds.push("target " + ratioText(target));
     if (thresholds.length) cell.appendChild(make("span", "wb-matrix-thresholds", thresholds.join(" · ")));
-    cell.appendChild(make("span", "wb-matrix-source", hasMeasurement ? "live" : "stima build"));
+    cell.appendChild(make("span", "wb-matrix-source", hasMeasurement ? "live" : "stima build · generato"));
     setAttribute(cell, "data-source", hasMeasurement ? "live" : "build");
     setAttribute(cell, "data-status", status);
     return { status: status, live: hasMeasurement };
+  }
+  function renderMatrixTileView(entry, option, theme, measurement, view, slot, comparison) {
+    setIfChanged(entry.title, matrixViewLabel(view, slot, comparison));
+    var available = paintMatrixSwatch(entry.swatch, measurement);
+    renderMatrixCell(entry.result, option, theme, measurement);
+    setAttribute(entry.node, "data-source", measurement ? "live" : "build");
+    setAttribute(entry.node, "data-status", attribute(entry.result, "data-status"));
+    if (!available) entry.result.appendChild(make("span", null, "Colori live non disponibili"));
   }
   function worstStatusOf(statuses) {
     var worst = "unmeasured";
@@ -1619,12 +1725,43 @@ export function createContrastWorkbenchView(deps) {
       else if (key === "End") { prevent(event); moveMatrixFocus(entry.button, "last"); }
     });
   }
-  // The static matrix is intentionally bounded. With JavaScript it is rebuilt from the real pair
-  // options already present in the document, so the 100+ row catalogue is never duplicated as HTML.
+  function bindMatrixRow(entry) {
+    if (!entry || !entry.row) return;
+    listen(entry.row, "click", function (event) {
+      if (busy) return;
+      if (event && event.target && event.target.closest && event.target.closest('[data-smart-colors-workbench="matrix-inspect"]')) return;
+      var value = attribute(entry.row, "data-pair-value");
+      var option = optionByValue(value);
+      if (!option) return;
+      clearSourceBlocked();
+      setPairOption(option);
+      renderDetails(stateNow());
+      renderControls(stateNow());
+      applySelection();
+      syncMatrixFocus();
+    });
+  }
+  function bindMatrixTile(entry) {
+    if (!entry || !entry.tile) return;
+    listen(entry.button, "click", function () {
+      if (busy) return;
+      var opt = optionByValue(entry.value);
+      if (!opt) return;
+      clearSourceBlocked();
+      setPairOption(opt);
+      renderDetails(stateNow());
+      renderControls(stateNow());
+      applySelection();
+      syncMatrixFocus();
+    });
+
+  }
   function buildMatrix() {
     if (!matrixBody) return;
     clear(matrixBody);
+    if (matrixGrid) clear(matrixGrid);
     matrixEntries = [];
+    matrixTiles = [];
     var list = options();
     if (!list.length) {
       var missingRow = make("tr");
@@ -1660,11 +1797,34 @@ export function createContrastWorkbenchView(deps) {
       setAttribute(row, "data-search", pickerSearchText(option));
       setAttribute(row, "data-live-status", "false");
       setAttribute(row, "data-live-revision", "");
+      function pairCategoryLocal(opt) {
+        var kind = attribute(opt, "data-kind") || "";
+        var prop = attribute(opt, "data-property") || "";
+        var fg = (attribute(opt, "data-fg") || "").toLowerCase();
+        var bg = (attribute(opt, "data-bg") || "").toLowerCase();
+        var label = (attribute(opt, "data-picker-label") || opt.textContent || "").toLowerCase();
+        if (kind === "non-text" || prop === "borderColor" || prop === "outlineColor" || fg.indexOf("border") !== -1 || fg.indexOf("outline") !== -1 || label.indexOf("bordo") !== -1) {
+          return "border";
+        }
+        if ((fg.indexOf("surface") !== -1 && (bg.indexOf("bg") !== -1 || bg.indexOf("canvas") !== -1)) || label.indexOf("superficie") !== -1) {
+          return "surface";
+        }
+        if (kind === "decorative" || label.indexOf("decorat") !== -1) {
+          return "decorative";
+        }
+        return "text";
+      }
+
+      var cat = pairCategoryLocal(option);
+      setAttribute(row, "data-category", cat);
       var th = make("th", "wb-matrix-uso");
       setAttribute(th, "scope", "row");
-      th.appendChild(make("span", "wb-matrix-label", matrixLabelLocal(option)));
-      th.appendChild(make("code", "wb-matrix-tokens", foreground + " su " + background));
-      th.appendChild(make("span", "wb-matrix-type", matrixCriterionLocal(option)));
+
+      var infoBox = make("div", "wb-matrix-info");
+      infoBox.appendChild(make("span", "wb-matrix-label", matrixLabelLocal(option)));
+      infoBox.appendChild(make("code", "wb-matrix-tokens", foreground + " su " + background));
+      infoBox.appendChild(make("span", "wb-matrix-type", matrixCriterionLocal(option)));
+      th.appendChild(infoBox);
       var button = make("button", "wb-matrix-inspect", "Ispeziona");
       button.type = "button";
       setAttribute(button, "data-smart-colors-workbench", "matrix-inspect");
@@ -1684,9 +1844,52 @@ export function createContrastWorkbenchView(deps) {
       renderMatrixCell(rightCell, option, "dark", null);
       row.appendChild(rightCell);
       matrixBody.appendChild(row);
+
+      if (matrixGrid) {
+        var tile = make("li", "wb-matrix-tile");
+        setAttribute(tile, HOOK, "matrix-tile");
+        setAttribute(tile, "data-pair-value", value);
+        setAttribute(tile, "data-category", cat);
+        var tileButton = make("button", "wb-tile-select");
+        tileButton.type = "button";
+        setAttribute(tileButton, "aria-pressed", "false");
+        var tileHeading = make("span", "wb-tile-heading");
+        tileHeading.appendChild(make("span", "wb-tile-title", matrixLabelLocal(option)));
+        var tileMark = make("span", "wb-tile-mark", "✓");
+        setAttribute(tileMark, "aria-hidden", "true");
+        tileHeading.appendChild(tileMark);
+        tileButton.appendChild(tileHeading);
+        tileButton.appendChild(make("code", "wb-tile-tokens", foreground + " su " + background));
+        var tileViews = make("span", "wb-tile-views");
+        var tileSlots = {};
+        for (var tileIndex = 0; tileIndex < 2; tileIndex += 1) {
+          var tileSlot = tileIndex === 0 ? "left" : "right";
+          var tileTheme = tileIndex === 0 ? "light" : "dark";
+          var tileView = make("span", "wb-tile-view");
+          setAttribute(tileView, "data-slot", tileSlot);
+          var tileTitle = make("span", "wb-tile-view-title");
+          var tileSwatch = make("span", "wb-pair-swatch is-unmeasured");
+          setAttribute(tileSwatch, "aria-hidden", "true");
+          var tileResult = make("span", "wb-tile-result");
+          tileView.appendChild(tileTitle);
+          tileView.appendChild(tileSwatch);
+          tileView.appendChild(tileResult);
+          tileViews.appendChild(tileView);
+          tileSlots[tileSlot] = { node: tileView, title: tileTitle, swatch: tileSwatch, result: tileResult };
+          renderMatrixTileView(tileSlots[tileSlot], option, tileTheme, null, null, tileSlot, "themes");
+        }
+        tileButton.appendChild(tileViews);
+        tile.appendChild(tileButton);
+        matrixGrid.appendChild(tile);
+        var tileEntry = { tile: tile, button: tileButton, views: tileSlots, value: value, option: option };
+        matrixTiles.push(tileEntry);
+        bindMatrixTile(tileEntry);
+      }
+
       var entry = { row: row, button: button, cells: { left: leftCell, right: rightCell }, option: option };
       matrixEntries.push(entry);
       bindMatrixButton(entry);
+      bindMatrixRow(entry);
     }
     var emptyRow = make("tr");
     setAttribute(emptyRow, "data-smart-colors-workbench", "matrix-empty");
@@ -1720,16 +1923,35 @@ export function createContrastWorkbenchView(deps) {
       if (!entry.button) continue;
       var isSelected = Boolean(selectedValue) && attribute(entry.button, "data-pair-value") === selectedValue;
       setAttribute(entry.row, "aria-current", isSelected ? "true" : "false");
+
+      setAttribute(entry.row, "data-selected", isSelected ? "true" : "false");
       setAttribute(entry.button, "aria-current", isSelected ? "true" : "false");
       setAttribute(entry.button, "tabindex", selectedEntry && entry === selectedEntry ? "0" : "-1");
     }
+    for (var t = 0; t < matrixTiles.length; t += 1) {
+      var tEntry = matrixTiles[t];
+      var isTileSelected = Boolean(selectedValue) && tEntry.value === selectedValue;
+      setAttribute(tEntry.button, "aria-pressed", isTileSelected ? "true" : "false");
+      setAttribute(tEntry.tile, "data-selected", isTileSelected ? "true" : "false");
+    }
+  }
+  function applyMatrixDisplay() {
+    var grid = Boolean(matrixGrid && matrixDisplayGrid && matrixDisplayGrid.checked);
+    if (matrixGrid) matrixGrid.hidden = !grid;
+    if (matrixTable) matrixTable.hidden = grid;
+    if (matrixNoResults) matrixNoResults.hidden = !grid || !matrixEmptyRow || matrixEmptyRow.hidden;
   }
   function applyMatrixFilter() {
-    if (!matrixEntries.length) return;
     var query = matrixSearch ? foldLocal(matrixSearch.value) : "";
     var filter = matrixFilter ? matrixFilter.value : "";
+    var catFilter = matrixCategory ? matrixCategory.value : "";
     var sourceToken = sourceSelect ? sourceSelect.value : "";
     var scoped = Boolean(sourceToken) && !(matrixAll && matrixAll.checked);
+    var filterKey = JSON.stringify([query, filter, catFilter, scoped ? sourceToken : "", scoped]);
+    var measuring = lastState && lastState.phase === "running";
+    if (filterKey !== matrixFilterKey) { matrixPage = 0; matrixFilterKey = filterKey; matrixMatches = null; }
+    setAttribute(matrixGrid, "aria-busy", measuring ? "true" : "false");
+    setAttribute(matrixTable, "aria-busy", measuring ? "true" : "false");
     var scopeValues = null;
     if (scoped) {
       var preferred = preferredUses(sourceToken);
@@ -1737,46 +1959,69 @@ export function createContrastWorkbenchView(deps) {
       for (var p = 0; p < preferred.options.length; p += 1) scopeValues[preferred.options[p].value] = true;
     }
     var scopeName = scoped ? pickerSourceName(sourceToken) : "";
-    var visible = 0;
+    var matches = [];
     for (var index = 0; index < matrixEntries.length; index += 1) {
       var entry = matrixEntries[index];
       var row = entry.row;
       var status = attribute(row, "data-status-effective") || attribute(row, "data-status") || "unmeasured";
       var live = attribute(row, "data-live-status") === "true";
       var haystack = attribute(row, "data-search") || "";
+      var rowCat = attribute(row, "data-category") || "text";
       var matchScope = !scopeValues || scopeValues[entry.option.value] === true;
       var matchQuery = !query || haystack.indexOf(query) !== -1;
+      var matchCat = !catFilter || rowCat === catFilter;
       var matchFilter = true;
       if (filter === "issues") matchFilter = status === "below-minimum" || status === "below-target";
       else if (filter === "pass") matchFilter = attribute(row, "data-all-pass") === "true";
       else if (filter === "unmeasured") matchFilter = attribute(row, "data-unmeasured") === "true";
       else if (filter === "live") matchFilter = live;
       else if (filter) matchFilter = status === filter;
-      var show = matchScope && matchQuery && matchFilter;
-      row.hidden = !show;
-      if (show) visible += 1;
+      row.hidden = true;
+      if (matrixTiles[index]) matrixTiles[index].tile.hidden = true;
+      if (matchScope && matchQuery && matchFilter && matchCat) matches.push(index);
+    }
+    // Keep only the navigation projection while measurements are pending. The samples and
+    // live results have already been cleared; a transient empty live filter must not steal focus.
+    if (measuring && matrixMatches) matches = matrixMatches.slice();
+    else if (!measuring) matrixMatches = matches.slice();
+    var visible = matches.length;
+    var pages = Math.max(1, Math.ceil(visible / matrixPageSize));
+    matrixPage = Math.max(0, Math.min(matrixPage, pages - 1));
+    var start = matrixPage * matrixPageSize;
+    for (var shown = start; shown < Math.min(start + matrixPageSize, visible); shown += 1) {
+      var matchIndex = matches[shown];
+      matrixEntries[matchIndex].row.hidden = false;
+      if (matrixTiles[matchIndex]) matrixTiles[matchIndex].tile.hidden = false;
     }
     if (matrixAll) {
       matrixAll.disabled = !sourceToken;
       matrixAll.checked = !scoped;
     }
     if (overviewScope) setIfChanged(overviewScope, scoped ? scopeName + " · " + visible : "Tutti gli abbinamenti");
-    if (matrixEmptyRow) matrixEmptyRow.hidden = visible !== 0;
+    if (matrixEmptyRow) matrixEmptyRow.hidden = visible !== 0 || Boolean(measuring);
+    if (matrixNoResults) matrixNoResults.hidden = visible !== 0 || Boolean(measuring) || !(matrixDisplayGrid && matrixDisplayGrid.checked);
+    if (matrixPrev) matrixPrev.disabled = matrixPage === 0;
+    if (matrixNext) matrixNext.disabled = matrixPage >= pages - 1;
+    if (matrixPageNote) setIfChanged(matrixPageNote, (measuring ? "Verifica in corso · " : "") + "Pagina " + (matrixPage + 1) + " di " + pages + " · " + (visible ? start + 1 : 0) + "–" + Math.min(start + matrixPageSize, visible) + " di " + visible);
     syncMatrixFocus();
     var active = doc.activeElement;
     for (var focusIndex = 0; focusIndex < matrixEntries.length; focusIndex += 1) {
       var focused = matrixEntries[focusIndex];
-      if (!focused.button || focused.button !== active || !focused.row.hidden) continue;
-      var visibleEntries = matrixVisibleEntries();
-      if (visibleEntries.length && typeof visibleEntries[0].button.focus === "function") visibleEntries[0].button.focus();
+      var focusedTile = matrixTiles[focusIndex];
+      if (!focused.row.hidden || (focused.button !== active && (!focusedTile || focusedTile.button !== active))) continue;
+      if (matches.length) {
+        var firstIndex = matches[start];
+        var first = matrixDisplayGrid && matrixDisplayGrid.checked && matrixTiles[firstIndex] ? matrixTiles[firstIndex].button : matrixEntries[firstIndex].button;
+        focusSafely(first);
+      } else focusSafely(matrixSearch);
       break;
     }
     if (matrixCount) {
       var total = matrixEntries.length;
       var message = (scoped
         ? String(visible) + (visible === 1 ? " abbinamento" : " abbinamenti") + " per " + scopeName + " · " + String(total) + " nel catalogo"
-        : String(visible) + (visible === 1 ? " abbinamento visibile" : " abbinamenti visibili") + " su " + String(total)) + (query || filter ? " · filtro attivo" : "");
-      if (matrixCount.textContent !== message) matrixCount.textContent = message;
+        : String(visible) + (visible === 1 ? " abbinamento visibile" : " abbinamenti visibili") + " su " + String(total)) + (query || filter || catFilter ? " · filtro attivo" : "");
+      setIfChanged(matrixCount, message);
     }
   }
   function moveMatrixFocus(button, direction) {
@@ -1826,7 +2071,6 @@ export function createContrastWorkbenchView(deps) {
         if (!isRecord(pair)) continue;
         var pairForeground = pair.foreground || pair.foregroundToken;
         var pairBackground = pair.background || pair.backgroundToken;
-        // The same token pair can exist under different CSS properties: never collapse fg/bg alone.
         if (pairForeground === foreground && pairBackground === background && (!pair.property || pair.property === property)) return pair.id || provisional;
       }
       return null;
@@ -1868,10 +2112,6 @@ export function createContrastWorkbenchView(deps) {
     }
     return null;
   }
-  // Rebuilds the stable source/recipe/control facts for one token of the selected pair. The declared
-  // role comes from `paletteSource`; the configured role is only shown when it differs, under its own
-  // label. The recipe is explicitly the generator's initial rationale, and the draft line tells the
-  // user whether an override is active instead of claiming the recipe is the current formula.
   function tokenDetail(state, theme, token, label) {
     var designValue = design();
     var binding = designValue && isRecord(designValue.tokens) && isRecord(designValue.tokens[token]) ? designValue.tokens[token] : null;
@@ -1951,8 +2191,6 @@ export function createContrastWorkbenchView(deps) {
     bindingGrid.appendChild(tokenDetail(current, theme, foreground, "Primo piano"));
     bindingGrid.appendChild(tokenDetail(current, theme, background, "Sfondo"));
     article.appendChild(bindingGrid);
-    // Border/outline need the same padded surface wrapper as the runtime specimen: the outer edge
-    // and the offset ring live outside the specimen box, so the wrapper paints the measured surface.
     var snippetText = property === "borderColor"
       ? "border: 2px solid var(" + foreground + ");\nbackground-color: var(" + background + ");\nborder-radius: 8px;\npadding: 0;\nwidth: 100%;\nbox-sizing: border-box;\nheight: 48px;\n\n/* Campione vuoto: <div class=\"specimen\" role=\"img\" aria-label=\"Campione statico del bordo\"> */\n.surface {\n  padding: 12px;\n  background: var(" + background + ");\n  border-radius: 8px;\n}"
       : property === "outlineColor"
@@ -1979,8 +2217,6 @@ export function createContrastWorkbenchView(deps) {
     article.appendChild(make("p", "margin-note", "Byte associati: " + bytesText("baseline") + "."));
     details.appendChild(article);
   }
-  // A control is only submitted when the user actually changed it. The declared default is a
-  // placeholder, never an active value, so an untouched mix cannot be exported as an unsolicited knob.
   function bindControl(node, control, kind) {
     var entry = { node: node, control: control, kind: kind, dirty: false };
     var mark = function () { entry.dirty = true; };
@@ -2015,6 +2251,7 @@ export function createContrastWorkbenchView(deps) {
     var designValue = design();
     var tokens = foreground === background ? [foreground] : [foreground, background];
     var rendered = 0;
+    var controlGrid = make("div", "wb-control-grid");
     for (var t = 0; t < tokens.length; t += 1) {
       var binding = designValue && isRecord(designValue.tokens) ? designValue.tokens[tokens[t]] : null;
       var controls = binding && isRecord(binding.controls) && isRecord(binding.controls[theme]) ? binding.controls[theme] : null;
@@ -2039,7 +2276,7 @@ export function createContrastWorkbenchView(deps) {
         overrideRow.appendChild(raw);
         appendLightnessControls(overrideRow, tokens[t], controls.override, state);
         appendPersonalizationActions(overrideRow, tokens[t], controls.override);
-        controlsBody.appendChild(overrideRow);
+        controlGrid.appendChild(overrideRow);
         controlInputs.push(bindControl(overrideInput, controls.override, "override"));
         rendered += 1;
       }
@@ -2062,16 +2299,15 @@ export function createContrastWorkbenchView(deps) {
         mixRow.appendChild(mixInput);
         mixRow.appendChild(make("span", "margin-note", "Default: " + (defaultPercent ? defaultPercent + "%" : "non disponibile") + " (segnaposto: nessun override finché non modifichi il campo)"));
         appendPersonalizationActions(mixRow, tokens[t], controls.mix);
-        controlsBody.appendChild(mixRow);
+        controlGrid.appendChild(mixRow);
         controlInputs.push(bindControl(mixInput, controls.mix, "mix"));
         rendered += 1;
       }
     }
-    if (!rendered) controlsBody.appendChild(make("p", "margin-note", "Nessun controllo pubblico dichiarato per questa coppia e questo tema. Il banco non inventa knob."));
+    if (rendered) controlsBody.appendChild(controlGrid);
+    else controlsBody.appendChild(make("p", "margin-note", "Nessun controllo pubblico dichiarato per questa coppia e questo tema. Il banco non inventa knob."));
     syncDraft(state);
   }
-  // Manual lightness reads only the runtime computed serialization. It never converts a colour or
-  // derives C/H here: it sends one L value in 0..1 and leaves the rest to the runtime contract.
   function parseOklchLightness(value) {
     var match = /^\s*oklch\(\s*([0-9]*\.?[0-9]+)(%?)/i.exec(textOf(value));
     if (!match) return null;
@@ -2094,8 +2330,6 @@ export function createContrastWorkbenchView(deps) {
       var match = comparison === "tuning" || comparison === "draft" ? view.slot === "right" : view.theme === theme;
       if (!match) continue;
       var measurement = view.measurement;
-      // The runtime cohort saves the parsed channels per side (`foregroundOklch` / `backgroundOklch`).
-      // Read only `l` from them: this view never converts the computed colour to OKLCH itself.
       var sideLightness = lightnessFromChannels(measurement[side + "Oklch"]);
       if (sideLightness !== null) return sideLightness;
       var sharedLightness = lightnessFromChannels(measurement.oklch);
@@ -2121,7 +2355,6 @@ export function createContrastWorkbenchView(deps) {
     setAttribute(entry.number, "aria-invalid", "true");
     entry.note.textContent = INVALID_L;
   }
-  // The note is this field's `aria-describedby`, so it drops the error once the value is valid again.
   function clearInvalidL(entry) {
     if (!entry.invalid) return;
     entry.invalid = false;
@@ -2299,9 +2532,6 @@ export function createContrastWorkbenchView(deps) {
     actions.appendChild(discard);
     row.appendChild(actions);
   }
-  // Control values reflect the CURRENT saved draft and clear when a control is no longer overridden.
-  // A field the user is editing (dirty) is never overwritten; a restored field returns to its
-  // placeholder default.
   function syncDraft(state) {
     var draft = state && isRecord(state.draft) ? state.draft : {};
     for (var index = 0; index < controlInputs.length; index += 1) {
@@ -2316,7 +2546,6 @@ export function createContrastWorkbenchView(deps) {
     }
     syncLightness(state);
   }
-  // Supplementary rows inside a <details> are not dl groups: they use spans so the dl stays valid.
   function detailValueRow(label, content) {
     var row = make("div", "wb-measure-row");
     row.appendChild(make("span", "wb-measure-label", label));
@@ -2325,8 +2554,6 @@ export function createContrastWorkbenchView(deps) {
     row.appendChild(value);
     return row;
   }
-  // Per-specimen result: one visible ratio/status; criterion, target and provenance live in the
-  // native detail. Runtime errors stay visible.
   function renderMeasure(node, view, slot, complete, option, state) {
     if (!node) return;
     clear(node);
@@ -2354,8 +2581,6 @@ export function createContrastWorkbenchView(deps) {
     node.appendChild(ratioRow);
     var detail = make("details", "wb-measure-more");
     detail.appendChild(make("summary", null, "Dettagli della misura"));
-    // Computed colours are shown verbatim from the runtime measurement. This module never converts or
-    // recalculates them; a missing value fails soft with an explicit sentence instead of a paint.
     var computedForeground = measurement ? safeComputedColor(measurement.foreground) : null;
     var computedBackground = measurement ? safeComputedColor(measurement.background) : null;
     var computed = make("span");
@@ -2369,8 +2594,6 @@ export function createContrastWorkbenchView(deps) {
       computed.textContent = "Non misurati.";
     }
     detail.appendChild(detailValueRow("Colori CSS calcolati (runtime)", computed));
-    // One criterion+threshold row, one separate target row. Common applicability is stated once
-    // above the frames, so each card never repeats the same paragraph.
     var minimumRow = detailValueRow("Minimo richiesto e criterio", make("span", null, criterionValue(criterion)));
     minimumRow.className += " wb-threshold";
     detail.appendChild(minimumRow);
@@ -2401,7 +2624,6 @@ export function createContrastWorkbenchView(deps) {
     }
   }
   function setIfChanged(node, value) { if (node && node.textContent !== value) node.textContent = value; }
-  // A neutral chrome sample painted only from the computed serializations the runtime already measured.
   function renderSample(sampleNode, metaNode, view, state, option) {
     var measurement = view && isRecord(view.measurement) ? view.measurement : null;
     var foreground = measurement ? safeComputedColor(measurement.foreground) : null;
@@ -2441,9 +2663,6 @@ export function createContrastWorkbenchView(deps) {
       if (rightMeta) setIfChanged(rightMeta, message);
     }
   }
-  // Matrix: the snapshot columns never change at runtime; only the selected row's live cell is filled
-  // from `views[].measurements`. Every other row explicitly states that a live measurement requires
-  // selecting it, so a build snapshot is never silently presented as a current live value.
   function renderMatrix(state) {
     if (!matrixEntries.length) return;
     var phase = state && state.phase ? String(state.phase) : "unavailable";
@@ -2478,6 +2697,7 @@ export function createContrastWorkbenchView(deps) {
         var theme = view ? view.theme : slot === "left" ? "light" : "dark";
         var measurement = view && ready ? indexes[slot][matrixPairIdForTheme(entry.option, view.theme)] || null : null;
         var result = renderMatrixCell(entry.cells[slot], entry.option, theme, measurement);
+        if (matrixTiles[index]) renderMatrixTileView(matrixTiles[index].views[slot], entry.option, theme, measurement, view, slot, comparison);
         statuses[slot] = result;
         if (result.live) { hasLive = true; liveStatuses.push(result.status); }
       }
@@ -2531,8 +2751,6 @@ export function createContrastWorkbenchView(deps) {
     if (measurement && isRecord(measurement) && typeof measurement.foreground === "string" && typeof measurement.background === "string") return measurement.foreground + " su " + measurement.background;
     return pairId || "coppia non indicata";
   }
-  // Exploration is advisory and read-only. A stale theme, revision, draft or selection clears the table
-  // instead of leaving old measurements on screen as if they were current.
   function renderExploration(state) {
     if (!explorationBox || !explorationResults || !explorationStatus) return;
     var available = typeof controller.explorationPairs === "function" && typeof controller.measureExploration === "function";
@@ -2643,8 +2861,6 @@ export function createContrastWorkbenchView(deps) {
     if (Array.isArray(scope.unchangedThemes) && scope.unchangedThemes.length) parts.push("altri temi rimisurati solo per regressioni: " + scope.unchangedThemes.map(themeName).join(", "));
     return parts.length ? "Ambito: " + parts.join(" · ") + "." : null;
   }
-  // The runtime owns the two proposal frames. The factory only toggles the section visibility and
-  // clears it when no verified proposal exists; it never paints a serialized swatch in those nodes.
   function setProposalFrames(verified) {
     if (proposalFrames) proposalFrames.hidden = !verified;
     if (!verified) {
@@ -2661,8 +2877,6 @@ export function createContrastWorkbenchView(deps) {
     var target = slot && slot.target !== "" && finite(Number(slot.target)) ? Number(slot.target) : null;
     return { minimum: minimum, target: target, list: [minimum, target] };
   }
-  // The result the user is actually looking at: the selected theme view, or the right-hand view in a
-  // tuned/draft comparison. Used only to state the project-target status honestly in a `none` result.
   function selectedMeasurement(state) {
     var selection = state && isRecord(state.selection) ? state.selection : {};
     var views = state && Array.isArray(state.views) ? state.views : [];
@@ -2677,8 +2891,6 @@ export function createContrastWorkbenchView(deps) {
     }
     return null;
   }
-  // A `none` result says exactly what the current result state is. It never implies that no change is
-  // ever needed: it states the minimum that the search addresses and whether the project target is met.
   function noneTargetSentence(state, suggestion) {
     var threshold = suggestionThresholds(state);
     var measurement = selectedMeasurement(state);
@@ -2736,8 +2948,6 @@ export function createContrastWorkbenchView(deps) {
     if (suggestion.before !== undefined || suggestion.after !== undefined) {
       proposal.appendChild(make("p", null, "Prima: " + (finite(suggestion.before) ? ratioText(suggestion.before, threshold.list) : "non misurata") + " · Dopo: " + (finite(suggestion.after) ? ratioText(suggestion.after, threshold.list) : "non misurata") + "."));
     }
-    // The identity and the runtime reasoning stay available, but the decision surface stays short:
-    // only the values that change and the before/after ratios remain visible by default.
     var technical = [];
     var identity = [];
     if (suggestion.control) identity.push("controllo " + suggestion.control);
@@ -2772,8 +2982,6 @@ export function createContrastWorkbenchView(deps) {
     suggestionVerified = Boolean(verified);
     if (applyButton) { applyButton.hidden = !verified; applyButton.disabled = !verified; }
   }
-  // Honest session line owned by the shell: a local preview is not a saved report. A verified but
-  // unapplied proposal and unsaved draft changes are named explicitly instead of implying persistence.
   function renderSessionStatus(state) {
     if (!sessionStatus) return;
     var suggestion = state && isRecord(state.suggestion) ? state.suggestion : null;
@@ -2792,9 +3000,6 @@ export function createContrastWorkbenchView(deps) {
     if (phase === "running") message += " · verifica in corso";
     setIfChanged(sessionStatus, message);
   }
-  // Details depend on the active selection and on the current draft (the draft line changes when an
-  // override is saved). The signature avoids rebuilding the panel on unrelated renders, which would
-  // drop focus from the keyboard-focusable snippet.
   function detailsSignature(state) {
     var selection = state && isRecord(state.selection) ? state.selection : {};
     var draft = state && isRecord(state.draft) ? state.draft : {};
@@ -2812,10 +3017,6 @@ export function createContrastWorkbenchView(deps) {
     article.appendChild(make("p", null, "La coppia attiva del runtime non è nel catalogo statico: " + textOf(pairId) + ". Nessun dettaglio viene inventato."));
     details.appendChild(article);
   }
-  // The runtime is authoritative for selection: radios, selects, source filter, details and panel
-  // headings are projected from `state.selection`/`state.views`. DOM properties are set directly
-  // (never a change event), so an update cannot re-trigger the UI or move focus. Returns true when the
-  // active key changed, so the caller can rebuild details/controls (initial render included).
   function syncSelection(selection) {
     var value = isRecord(selection) ? selection : {};
     var theme = value.theme === "dark" ? "dark" : "light";
@@ -2831,7 +3032,6 @@ export function createContrastWorkbenchView(deps) {
     lastSelectionKey = key;
     if (!pairSelect) return changed;
     if (!pairId) {
-      // No active pair yet: keep the static selection coherent with the still-selected option.
       selectionAvailable = Boolean(selectedOption());
       return changed;
     }
@@ -2841,13 +3041,9 @@ export function createContrastWorkbenchView(deps) {
       return true;
     }
     selectionAvailable = true;
-    // The source filter must match the active pair: preserve a compatible user choice, otherwise
-    // reset to this pair's own source (or all) instead of leaving a leftover unrelated source.
     var own = (attribute(option, "data-sources") || "").split(/\s+/).filter(Boolean);
     var currentSource = sourceSelect ? sourceSelect.value : "";
     var compatible = currentSource === "" || own.indexOf(currentSource) !== -1;
-    // While an empty-source selection is pinned to the runtime's current pair, the user's source
-    // choice is preserved instead of being reset to this pair's own source.
     var pinned = sourceBlocked && pairId === blockedPairId;
     var sourceReset = false;
     if (sourceSelect && !compatible && !pinned) { sourceSelect.value = own.length ? own[0] : ""; sourceReset = true; }
@@ -2872,18 +3068,12 @@ export function createContrastWorkbenchView(deps) {
     var list = options();
     for (var candidate = 0; candidate < list.length; candidate += 1) {
       if (attribute(list[candidate], "data-fg") !== foreground || attribute(list[candidate], "data-bg") !== background) continue;
-      // The same token pair can exist under different CSS properties; never collapse fg/bg alone.
       if (property && propertyFor(list[candidate]) !== property) continue;
-      // The contract kind is authoritative when available (for example `on-color`). It affects the
-      // specimen copy only, never the criterion: the criterion still comes from the known kind and
-      // the canonical threshold.
       if (typeof descriptor.kind === "string" && descriptor.kind) setAttribute(list[candidate], "data-pair-kind", descriptor.kind);
       return list[candidate];
     }
     return null;
   }
-  // Human frame titles: light/dark for the theme comparison, "Attuale"/"Modifica" otherwise. The
-  // exact theme and variant stay in each frame's own measure block, not in the title.
   function frameTitle(slot, comparison) {
     if (comparison === "themes") return slot === "left" ? "Tema chiaro" : "Tema scuro";
     return slot === "left" ? "Attuale" : "Modifica";
@@ -2902,8 +3092,6 @@ export function createContrastWorkbenchView(deps) {
     if (left) setAttribute(left, "aria-label", "Vista CSS sinistra · " + frameTitle("left", comparison) + (leftView ? " · tema " + themeName(leftView.theme) + " · " + variantName(leftView.variant) : ""));
     if (right) setAttribute(right, "aria-label", "Vista CSS destra · " + frameTitle("right", comparison) + (rightView ? " · tema " + themeName(rightView.theme) + " · " + variantName(rightView.variant) : ""));
   }
-  // Short heading for the current selection, plus the exact token identity and the contextual
-  // criterion. The human title stays primary; the tokens are now visible here, not only in details.
   function renderIdentity(option) {
     if (!identityNode) return;
     clear(identityNode);
@@ -2917,8 +3105,6 @@ export function createContrastWorkbenchView(deps) {
     if (!actionThemeNode) return;
     setIfChanged(actionThemeNode, "Tema per proposta e override: " + themeName(checkedTheme()) + ".");
   }
-  // The toolbar summary is a human use, not a token list. An unknown catalogue pair keeps a neutral
-  // label and exposes the exact tokens only as a secondary technical identifier.
   function renderCurrentUse() {
     if (!currentUse) return;
     clear(currentUse);
@@ -2927,6 +3113,49 @@ export function createContrastWorkbenchView(deps) {
     currentUse.appendChild(make("strong", null, pickerHuman(option)));
     currentUse.appendChild(make("span", "wb-current-use-kind", optionKindLabel(option)));
     if (!pickerHasHuman(option)) currentUse.appendChild(make("code", "wb-current-use-tech", pickerTech(option)));
+  }
+  function pairCompactSnippetLocal(fg, bg, property) {
+    var p = property === "borderColor" ? "border-color" : property === "outlineColor" ? "outline-color" : "color";
+    return p + ": var(" + (fg || "--color-text") + ");\nbackground-color: var(" + (bg || "--color-bg") + ");";
+  }
+  function updateHarmonyText(option) {
+    if (!harmonyNode) return;
+    if (!option) { setIfChanged(harmonyNode, "Armonia cromatica: nessuna selezione attiva."); return; }
+    var state = stateNow();
+    var views = state && Array.isArray(state.views) ? state.views : [];
+    var measurement = null;
+    for (var i = 0; i < views.length; i += 1) {
+      if (views[i] && isRecord(views[i].measurement) && viewMatchesOption(views[i], option)) {
+        measurement = views[i].measurement;
+        break;
+      }
+    }
+    var fgOklch = measurement && isRecord(measurement.foregroundOklch) ? measurement.foregroundOklch : null;
+    var bgOklch = measurement && isRecord(measurement.backgroundOklch) ? measurement.backgroundOklch : null;
+    if (fgOklch && bgOklch && finite(fgOklch.h) && finite(bgOklch.h)) {
+      var diffH = Math.round(Math.min(Math.abs(fgOklch.h - bgOklch.h), 360 - Math.abs(fgOklch.h - bgOklch.h)));
+      var type = diffH < 25 ? "Affinità monocromatica (tono su tono)"
+        : diffH < 70 ? "Armonia analoga"
+        : diffH < 140 ? "Contrasto tonale bilanciato"
+        : "Contrasto complementare";
+      var diffL = Math.round(Math.abs((fgOklch.l || 0) - (bgOklch.l || 0)) * 100);
+      setIfChanged(harmonyNode, "Armonia cromatica: " + type + " (ΔH " + diffH + "°) · Stacco ΔL: " + diffL + "%.");
+    } else {
+      setIfChanged(harmonyNode, "Relazione cromatica non disponibile: i risultati di contrasto restano separati.");
+    }
+  }
+  function updateSnippetAndHarmony(option) {
+    if (snippetCode) {
+      if (!option) {
+        snippetCode.textContent = "/* Nessun abbinamento selezionato */";
+      } else {
+        var fg = attribute(option, "data-fg") || "";
+        var bg = attribute(option, "data-bg") || "";
+        var prop = propertyFor(option);
+        snippetCode.textContent = pairCompactSnippetLocal(fg, bg, prop);
+      }
+    }
+    if (harmonyNode) updateHarmonyText(option);
   }
   function renderCurrent() {
     var option = selectedOption();
@@ -2941,11 +3170,10 @@ export function createContrastWorkbenchView(deps) {
     }
     renderIdentity(sourceBlocked ? null : option);
     renderCurrentUse();
+    updateSnippetAndHarmony(sourceBlocked ? null : option);
     if (purposeNode) setIfChanged(purposeNode, sourceBlocked ? "Nessun criterio applicato: la sorgente non ha una coppia disponibile." : purposeFor(option));
     renderActionTheme();
   }
-  // Matched uses for one source, derived from the real diagnostics only: foreground bindings first,
-  // background dependencies as an explicit fallback.
   function matchUses(chosen) {
     var list = options();
     var foreground = [];
@@ -2964,9 +3192,6 @@ export function createContrastWorkbenchView(deps) {
     var value = raw === null || raw === "" ? 999 : Number(raw);
     return isFinite(value) ? value : 999;
   }
-  // Rank by the serialized semantic rank (stable for equal ranks), then diversify round-robin across
-  // buckets so the primary choices are different uses. A single-bucket source still yields its six
-  // best text choices instead of being forced to one.
   function rankOptions(list) {
     var copy = [];
     for (var index = 0; index < list.length; index += 1) copy.push(list[index]);
@@ -3030,8 +3255,6 @@ export function createContrastWorkbenchView(deps) {
   function usageHuman(option) {
     return usageHasHuman(option) ? attribute(option, "data-usage") || "" : "Uso senza nome";
   }
-  // Picker labels are authoritative and serialized per option. A known on-color pair can be
-  // readable in the picker while the existing data-usage / full heading contract stays untouched.
   function pickerHasHuman(option) {
     var label = attribute(option, "data-picker-label");
     if (label !== null) return Boolean(label);
@@ -3073,9 +3296,6 @@ export function createContrastWorkbenchView(deps) {
     }
     return pickerFold(parts.join(" "));
   }
-  // Preferred foreground uses win; a source that only appears as a background dependency falls back
-  // to that explicit scope. The current option is kept in the pool when it is compatible, so an
-  // external runtime selection always has a truthful selected row.
   function pickerCandidates(chosen) {
     var list = options();
     var pool = [];
@@ -3148,8 +3368,6 @@ export function createContrastWorkbenchView(deps) {
   }
   function setPagerState(button, enabled) {
     if (!button) return;
-    // Keep the pager focusable: aria-disabled communicates the boundary without dropping focus
-    // to the body when the user reaches the first or last page.
     button.disabled = false;
     button.setAttribute("aria-disabled", enabled ? "false" : "true");
   }
@@ -3224,9 +3442,6 @@ export function createContrastWorkbenchView(deps) {
     setPagerState(usePrev, pickerPage > 0);
     setPagerState(useNext, pickerPage < pages - 1);
   }
-  // The result list is the only region rebuilt by paging and filtering. Query, category and pager
-  // controls keep their focus; a source change resets all filters, while a measurement update with
-  // the same source updates only the pressed state in place.
   function renderUses(chosen) {
     var sourceChanged = chosen !== lastUsesSource;
     if (sourceChanged) {
@@ -3244,6 +3459,30 @@ export function createContrastWorkbenchView(deps) {
       updateUsePressed(pairSelect ? pairSelect.value : "");
     }
   }
+  function syncDarkBlendCallout(chosen) {
+    if (!darkBlendCurrent) return;
+    clear(darkBlendCurrent);
+    if (!chosen) { darkBlendCurrent.appendChild(make("span", null, "Nessun colore sorgente selezionato.")); return; }
+    var found = null;
+    for (var i = 0; i < swatchButtons.length; i += 1) {
+      if (attribute(swatchButtons[i], "data-token") === chosen) { found = swatchButtons[i]; break; }
+    }
+    var isDark = themeDark && themeDark.checked;
+    darkBlendCurrent.appendChild(make("span", null, "Sorgente attiva: "));
+    darkBlendCurrent.appendChild(make("strong", null, chosen));
+    if (found) {
+      var blend = attribute(found, "data-dark-blend");
+      var role = attribute(found, "data-role");
+      if (blend) {
+        var num = Number(blend);
+        var white = Math.round((num / 100) * 28 * 10) / 10;
+        darkBlendCurrent.appendChild(make("span", null, " · dark-blend " + num + " (" + (100 - white) + "% sorgente + " + white + "% bianco)"));
+      } else {
+        darkBlendCurrent.appendChild(make("span", null, " · dark-blend automatico" + (role ? " per " + role : "")));
+      }
+      darkBlendCurrent.appendChild(make("span", null, isDark ? " · attivo in dark mode" : " · regola il tema scuro"));
+    }
+  }
   function syncPalette() {
     var chosen = sourceSelect ? sourceSelect.value : "";
     for (var index = 0; index < swatchButtons.length; index += 1) {
@@ -3252,6 +3491,7 @@ export function createContrastWorkbenchView(deps) {
       button.setAttribute("aria-pressed", on ? "true" : "false");
       button.disabled = false;
     }
+    syncDarkBlendCallout(chosen);
     renderUses(chosen);
   }
   function bindSwatch(button) {
@@ -3271,9 +3511,8 @@ export function createContrastWorkbenchView(deps) {
     pairSelect.value = option.value;
     var list = options();
     for (var index = 0; index < list.length; index += 1) list[index].selected = list[index] === option;
+    syncMatrixFocus();
   }
-  // The blocked presentation: nothing verified can be shown for the requested source, so the previous
-  // result, the correction, the manual controls and the pair details are hidden with an explicit note.
   function applyBlockedPresentation() {
     if (resultBox) resultBox.hidden = sourceBlocked;
     if (emptyNote) emptyNote.hidden = !sourceBlocked;
@@ -3300,11 +3539,6 @@ export function createContrastWorkbenchView(deps) {
     blockedPairId = null;
     applyBlockedPresentation();
   }
-  // A swatch (or the canonical source select) is THE source choice. It resolves the source's own
-  // preferred foreground use (never a background-only pair from a combined dependency filter) and
-  // compares immediately. With no verified use at all, or none available in the current theme, the
-  // previous result is cleared with an explicit state instead of a stale pair; changing the theme or
-  // the source re-attempts the selection.
   function applySourceSelection(token, trigger) {
     if (!sourceSelect) return;
     var next = token || "";
@@ -3338,9 +3572,6 @@ export function createContrastWorkbenchView(deps) {
     syncPalette();
     applySelection(trigger);
   }
-  // A theme or comparison change re-attempts the pinned source when the result is blocked, so the
-  // user can always recover from an unavailable-in-theme state. `trigger` is the control that started
-  // the action: a run never disables it, which would blur it to the body.
   function resumeSelection(trigger) {
     if (sourceBlocked && blockedSource) { applySourceSelection(blockedSource, trigger); return; }
     applySelection(trigger);
@@ -3371,7 +3602,6 @@ export function createContrastWorkbenchView(deps) {
   }
   function openPickerDialog() {
     if (!pickerDialog) return;
-    // Opening starts on the first page so the pinned current use is visible and selected.
     pickerPage = 0;
     lastUsesKey = null;
     renderUses(sourceSelect ? sourceSelect.value : "");
@@ -3389,19 +3619,7 @@ export function createContrastWorkbenchView(deps) {
       if (typeof useSearch.select === "function") useSearch.select();
     }
   }
-  function overviewIsWide() {
-    return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(min-width: 64rem)").matches;
-  }
-  function syncOverviewDisclosure() {
-    if (!overviewBox) return;
-    overviewBox.open = overviewIsWide();
-  }
-  // The native disclosure is collapsed on narrow screens by default; desktop opens it immediately.
-  // A no-JS desktop keeps the native summary, so the matrix stays reachable even without this code.
-  syncOverviewDisclosure();
-  // The primary path starts on the light/dark comparison, but ONLY from a clean idle state: an already
-  // mounted, already running selection or a preexisting draft is never changed. Initialised from the
-  // view through the frozen controller API, so the runtime defaults are never modified.
+
   function initializeSelection() {
     var state = stateNow();
     if (!state) return;
@@ -3416,13 +3634,8 @@ export function createContrastWorkbenchView(deps) {
   }
   function render(state) {
     lastState = state;
-    // An external runtime selection (a different pair) always restores the normal result; an unrelated
-    // republish of the same pair keeps the pinned empty-source state.
     var projectedPairId = state && isRecord(state.selection) ? state.selection.pairId : null;
     if (sourceBlocked && projectedPairId !== blockedPairId) clearSourceBlocked();
-    // Rebuild details/controls from the active controller selection whenever its key changes,
-    // including the first render. This is what keeps a static build-time pair (for example a warm
-    // failing pair) from surviving next to a different runtime selection.
     var selectionChanged = syncSelection(state && state.selection);
     var detailKey = detailsSignature(state);
     if (selectionChanged) filterPairs(state);
@@ -3433,7 +3646,6 @@ export function createContrastWorkbenchView(deps) {
     syncPalette();
     applyBlockedPresentation();
     var phase = state && state.phase ? String(state.phase) : "unavailable";
-    // One concise live announcement per state; the runtime error is folded in rather than repeated.
     var error = state && state.error ? " " + String(state.error) : "";
     setStatusVisibility(phase, Boolean(state && state.error), sourceBlocked);
     if (sourceBlocked) {
@@ -3469,8 +3681,6 @@ export function createContrastWorkbenchView(deps) {
     renderSuggestion(state);
     renderSessionStatus(state);
     renderControls(state);
-    // The exported text is derived from the CURRENT draft: whenever the draft changes, an already
-    // published export is recomputed so it can never show a stale previous state.
     var draftObject = state && isRecord(state.draft) ? state.draft : {};
     var removedObject = state && Array.isArray(state.removed) ? state.removed.slice().sort() : [];
     var hasDraft = Object.keys(draftObject).length > 0 || removedObject.length > 0;
@@ -3513,9 +3723,6 @@ export function createContrastWorkbenchView(deps) {
   function setBusy(value, keep) {
     busy = Boolean(value);
     setAttribute(host, "aria-busy", busy ? "true" : "false");
-    // "Prova proposta" is never re-enabled blindly: it stays gated on a verified suggestion. The
-    // source swatches and the use chips are deliberately NOT disabled here: disabling the control the
-    // user just activated would blur it. Re-entrancy is guarded by the `busy` flag in their handlers.
     var buttons = [submit, controlsSubmit, resetPair, resetAll, suggestForeground, suggestBackground, exportButton, copyPalette, explorationRun];
     for (var index = 0; index < buttons.length; index += 1) {
       if (buttons[index]) buttons[index].disabled = busy && buttons[index] !== keep;
@@ -3569,11 +3776,7 @@ export function createContrastWorkbenchView(deps) {
       setSourceBlocked("La coppia non è disponibile nel runtime: nessun campione viene mostrato.", source);
       return Promise.resolve(null);
     }
-    // A selection that will run clears any blocked state: the pending result replaces the old one.
     clearSourceBlocked();
-    // Invalidate the previous ratio before the request: details for a pending pair must never sit
-    // beside a stale measurement from the previous pair. If the request fails, the result is blocked
-    // instead of showing a different pair under the requested source.
     markPending();
     return run(
       function () { return controller.select({ pairId: pairId, theme: theme, comparison: comparison }); },
@@ -3617,8 +3820,6 @@ export function createContrastWorkbenchView(deps) {
     return jobs;
   }
   function applyOverrides() {
-    // Only a repeated submit of THIS action is refused: another action's run may still be in flight
-    // and the override is allowed to land on it. The flag is set before the flush resolves.
     if (overridesPending) { announce("Override già in corso: attendi il risultato."); return Promise.resolve(null); }
     var pending = [];
     for (var index = 0; index < controlInputs.length; index += 1) {
@@ -3699,9 +3900,6 @@ export function createContrastWorkbenchView(deps) {
       unmatched: [],
     };
   }
-  // Recompute from the controller every time: the export is always the current draft, never the
-  // previously published text. `lastExportStamp` changes only when the user actually exports/copies
-  // or downloads, so "dirty" never becomes a lie after an automatic re-render.
   function refreshExport() {
     var model = exportFileModel();
     var css = model.css;
@@ -3738,8 +3936,6 @@ export function createContrastWorkbenchView(deps) {
     return model;
   }
   function exportTuning() {
-    // The header owns the only export command; opening it reveals the real generated CSS and the
-    // manual download in the secondary disclosure. No second export button exists in the workbench.
     if (exportBox) exportBox.open = true;
     var model = refreshExport();
     if (exportText && typeof exportText.focus === "function") exportText.focus();
@@ -3777,14 +3973,10 @@ export function createContrastWorkbenchView(deps) {
     return result;
   }
 
-  // Establish the primary light/dark comparison before mounting, so the first measurement run already
-  // uses it (the runtime defaults are never modified; only the selection is set from the view).
   initializeSelection();
   if (left && right) {
     try {
       var slots = { left: left, right: right };
-      // B's runtime mounts the two real CSS consumer frames for a verified proposal. The slots are
-      // passed only when the static markup provides them; the factory never paints a swatch there.
       if (proposalBefore) slots.proposalBefore = proposalBefore;
       if (proposalAfter) slots.proposalAfter = proposalAfter;
       controller.mount(slots);
@@ -3796,8 +3988,6 @@ export function createContrastWorkbenchView(deps) {
   unsubscribe = controller.subscribe(function (next) {
     try { render(next); } catch (error) { /* presentation must never break the run */ }
   });
-  // A source or pair choice takes effect immediately: the runtime invalidates the old ratio while it
-  // measures, so the panel never shows pending details beside a stale measurement.
   listen(sourceSelect, "change", function () {
     if (sourceSelect.value === "") { clearSourceBlocked(); filterPairs(); syncPalette(); applyMatrixFilter(); return; }
     applySourceSelection(sourceSelect.value);
@@ -3818,7 +4008,6 @@ export function createContrastWorkbenchView(deps) {
     renderUses(sourceSelect ? sourceSelect.value : "");
   });
   listen(useClear, "click", function () {
-    // Labelled «Azzera filtri»: the category is a filter too.
     resetPickerFilters();
     renderUses(sourceSelect ? sourceSelect.value : "");
     if (useSearch && typeof useSearch.focus === "function") useSearch.focus();
@@ -3834,16 +4023,13 @@ export function createContrastWorkbenchView(deps) {
     renderUses(sourceSelect ? sourceSelect.value : "");
   });
   listen(pairSelect, "change", function () { renderDetails(); renderControls(stateNow()); applySelection(); });
-  // A theme change is an immediate selection and a recovery path: a blocked source is re-attempted.
-  // The visible identity, criterion and action theme follow the checked radio immediately.
-  listen(themeLight, "change", function () { renderCurrent(); renderDetails(); renderControls(stateNow()); resumeSelection(); });
-  listen(themeDark, "change", function () { renderCurrent(); renderDetails(); renderControls(stateNow()); resumeSelection(); });
+  listen(themeLight, "change", function () { syncDarkBlendCallout(sourceSelect ? sourceSelect.value : ""); renderCurrent(); renderDetails(); renderControls(stateNow()); resumeSelection(); });
+  listen(themeDark, "change", function () { syncDarkBlendCallout(sourceSelect ? sourceSelect.value : ""); renderCurrent(); renderDetails(); renderControls(stateNow()); resumeSelection(); });
   listen(comparisonThemes, "change", resumeSelection);
   listen(comparisonTuning, "change", resumeSelection);
   listen(comparisonDraft, "change", resumeSelection);
   listen(selectionForm, "submit", function (event) {
     prevent(event);
-    // The submit stays enabled during its own run, so re-entrancy is guarded here.
     if (busy) { announce("Confronto già in corso: attendi le misure."); return; }
     resumeSelection(submit);
   });
@@ -3873,13 +4059,10 @@ export function createContrastWorkbenchView(deps) {
     );
     if (pending && typeof pending.then === "function") {
       pending.then(function () {
-        // run() calls the failure callback only when the action rejects: only a successful apply hands focus on.
         if (!failed) focusAfterAction("apply");
       }, function () { /* the failure path already announced its own error */ });
     }
   });
-  // Discarding a proposal is not a reset: the synchronous runtime method clears/invalidates
-  // the suggestion while leaving every saved public override exactly as it is.
   listen(discardButton, "click", function () {
     if (!suggestionPresent) { announce("Nessuna proposta da scartare."); return; }
     if (typeof controller.discardSuggestion !== "function") { announce("Il runtime non espone lo scarto della proposta. Nessun override viene modificato."); return; }
@@ -3902,8 +4085,6 @@ export function createContrastWorkbenchView(deps) {
   listen(exportButton, "click", exportTuning);
   listen(copyPalette, "click", function () { copyTextarea(paletteSource, "Sorgente palette"); });
   var copyExport = byId("smart-colors-workbench-copy-export");
-  // The copy action recomputes the current draft; it never copies a stale export or announces a copy
-  // of an empty string.
   listen(copyExport, "click", function () {
     var model = refreshExport();
     if (model.css === "") { announce("Nessun CSS pubblico da copiare: nessun override attivo."); return; }
@@ -3916,20 +4097,55 @@ export function createContrastWorkbenchView(deps) {
     lastExportStamp = exportText.value;
     refreshExport();
   });
-  // Matrix search/filter and roving focus: one tab stop for the whole table body. Arrow keys move
-  // between visible rows, Enter/Space activates the native button, and a filtered-out selected row
-  // hands the tab stop to the first visible row without selecting it.
+  if (copySnippet) {
+    listen(copySnippet, "click", function () {
+      if (!snippetCode) return;
+      var textToCopy = snippetCode.textContent || "";
+      if (typeof navigator !== "undefined" && navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+        navigator.clipboard.writeText(textToCopy).then(function () {
+          setIfChanged(copySnippet, "Copiato! ✓");
+          setTimeout(function () { setIfChanged(copySnippet, "Copia codice CSS"); }, 2000);
+        }, function () {
+          setIfChanged(copySnippet, "Selezionato!");
+          setTimeout(function () { setIfChanged(copySnippet, "Copia codice CSS"); }, 2000);
+        });
+      } else {
+        setIfChanged(copySnippet, "Selezionato!");
+        setTimeout(function () { setIfChanged(copySnippet, "Copia codice CSS"); }, 2000);
+      }
+    });
+  }
   listen(matrixSearch, "input", applyMatrixFilter);
   listen(matrixFilter, "change", applyMatrixFilter);
+  listen(matrixCategory, "change", applyMatrixFilter);
   listen(matrixAll, "change", applyMatrixFilter);
   listen(matrixClear, "click", function () {
+    matrixPage = 0;
     if (matrixSearch) matrixSearch.value = "";
     if (matrixFilter) matrixFilter.value = "";
+    if (matrixCategory) matrixCategory.value = "";
     applyMatrixFilter();
     if (matrixSearch && typeof matrixSearch.focus === "function") matrixSearch.focus();
   });
   if (matrixAll) matrixAll.checked = !(sourceSelect && sourceSelect.value);
+  if (matrixDisplayGrid) { matrixDisplayGrid.checked = true; matrixDisplayGrid.disabled = false; }
+  if (matrixDisplayTable) { matrixDisplayTable.checked = false; matrixDisplayTable.disabled = false; }
+  listen(matrixDisplayGrid, "change", applyMatrixDisplay);
+  listen(matrixDisplayTable, "change", applyMatrixDisplay);
+  listen(matrixPrev, "click", function () {
+    if (matrixPrev.disabled) return;
+    matrixPage -= 1;
+    applyMatrixFilter();
+    if (matrixPrev.disabled) focusSafely(matrixNext);
+  });
+  listen(matrixNext, "click", function () {
+    if (matrixNext.disabled) return;
+    matrixPage += 1;
+    applyMatrixFilter();
+    if (matrixNext.disabled) focusSafely(matrixPrev);
+  });
   buildMatrix();
+  applyMatrixDisplay();
   if (explorationRun) {
     listen(explorationRun, "click", function () {
       if (busy) return;
@@ -3938,19 +4154,10 @@ export function createContrastWorkbenchView(deps) {
     });
   }
 
-  var overviewWide = overviewIsWide();
   if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
     window.addEventListener("pagehide", function () { if (unsubscribe) unsubscribe(); });
-    // Reopen only when the layout crosses into the wide two-column mode. A manual close on desktop
-    // must survive ordinary resizes, and narrowing never forces the user's open matrix shut.
-    window.addEventListener("resize", function () {
-      var next = overviewIsWide();
-      if (next === overviewWide) return;
-      overviewWide = next;
-      if (next && overviewBox) overviewBox.open = true;
-    });
   }
-  // The source swatches are inert until the factory wires them: only then are they enabled.
+  if (copySnippet) copySnippet.disabled = false;
   if (openPicker) openPicker.disabled = false;
   if (useSearch) useSearch.disabled = false;
   if (useCategory) useCategory.disabled = false;
@@ -3958,10 +4165,12 @@ export function createContrastWorkbenchView(deps) {
   if (closePicker) closePicker.disabled = false;
   if (matrixSearch) matrixSearch.disabled = false;
   if (matrixFilter) matrixFilter.disabled = false;
+  if (matrixCategory) matrixCategory.disabled = false;
   if (matrixClear) matrixClear.disabled = false;
   if (explorationRun) explorationRun.disabled = typeof controller.measureExploration !== "function" || typeof controller.explorationPairs !== "function";
   for (var swatchBind = 0; swatchBind < swatchButtons.length; swatchBind += 1) bindSwatch(swatchButtons[swatchBind]);
   applyMatrixFilter();
+  syncDarkBlendCallout(sourceSelect ? sourceSelect.value : "");
   render(stateNow());
   return {
     render: render,

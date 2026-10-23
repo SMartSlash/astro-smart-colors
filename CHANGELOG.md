@@ -21,6 +21,14 @@ the `v0.4.0` tag.
 
 ### Added
 
+- Visual A/B pair cards with hard diagonal foreground/background swatches from each
+  view's actual runtime measurements, shared grid/table filters and eight pairs per
+  page. Selection, pagination and focus remain stable during remeasurement, including
+  the live-only filter, without retaining stale live colours or results.
+- Full-width pair inspection followed by a separate tuning/export section, responsive
+  manual controls, disclosed CSS snippets and a readable no-JavaScript snapshot table.
+  Matrix results distinguish declared minimum, project target and provenance rather
+  than inferring AA/AAA conformance from non-text ratios.
 - The uniform public per-token controls `--color-tune-<public-name>-light|dark`.
   Every emitted public `--color-*` token reads its own pair: neutrals (`bg`,
   `surface`, `text`, `text-muted`, `border-subtle`, `border-strong`,

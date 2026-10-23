@@ -481,13 +481,59 @@ export function createLocalPresenter(deps) {
     card.appendChild(element("p", "margin-note", nextStepText(scenario)));
     return card;
   }
+  function selectControl(label, options) {
+    var sel = element("select", "local-filter-select");
+    sel.setAttribute("aria-label", label);
+    for (var s = 0; s < options.length; s += 1) {
+      var opt = element("option", null, options[s][1]);
+      opt.setAttribute("value", options[s][0]);
+      sel.appendChild(opt);
+    }
+    return sel;
+  }
   function rowsTable(measurements) {
     var scroll = element("div", "local-table-scroll");
     scroll.setAttribute("tabindex", "0");
     scroll.setAttribute("role", "region");
     scroll.setAttribute("aria-label", "Tabella delle misure locali di questo browser");
     var table = element("table", "local-table");
-    table.appendChild(element("caption", null, "Misure locali eseguite in questo browser"));
+
+    var caption = element("caption", "local-table-caption");
+    var toolbar = element("div", "local-filter-toolbar");
+
+    var titleRow = element("div", "local-filter-title-row");
+    titleRow.appendChild(element("strong", null, "Misure locali eseguite in questo browser"));
+    var countBadge = element("span", "local-filter-count", measurements.length + " di " + measurements.length + " misure");
+    titleRow.appendChild(countBadge);
+    toolbar.appendChild(titleRow);
+
+    var controlsRow = element("div", "local-filter-controls-row");
+    var searchInput = element("input", "local-filter-input");
+    searchInput.setAttribute("type", "search");
+    searchInput.setAttribute("placeholder", "Cerca scenario o token (es. primary, dark)...");
+    searchInput.setAttribute("aria-label", "Filtra misure locali");
+    controlsRow.appendChild(searchInput);
+
+    var statusSelect = selectControl("Filtra per esito", [
+      ["", "Tutti gli esiti (" + measurements.length + ")"],
+      ["problems", "Solo problemi (sotto soglia)"],
+      ["pass", "Solo conformi (superati)"]
+    ]);
+    controlsRow.appendChild(statusSelect);
+
+    var scenarioSelect = selectControl("Filtra per scenario", [
+      ["", "Tutti gli scenari"],
+      ["baseline", "Senza tuning (baseline)"],
+      ["tuning", "Con tuning (tuning)"],
+      ["light", "Tema chiaro (light)"],
+      ["dark", "Tema scuro (dark)"]
+    ]);
+    controlsRow.appendChild(scenarioSelect);
+
+    toolbar.appendChild(controlsRow);
+    caption.appendChild(toolbar);
+    table.appendChild(caption);
+
     var head = element("thead");
     var headRow = element("tr");
     var columns = ["Scenario", "Coppia", "Rapporto", "Minimo", "Target", "Esito", "Nota"];
@@ -499,14 +545,17 @@ export function createLocalPresenter(deps) {
     head.appendChild(headRow);
     table.appendChild(head);
     var body = element("tbody");
+    var rowEntries = [];
     for (var index = 0; index < measurements.length; index += 1) {
       var item = isRecord(measurements[index]) ? measurements[index] : {};
       var row = element("tr");
-      var scenario = element("th", null, item.scenarioId == null ? "non indicato" : item.scenarioId);
+      var scenarioId = item.scenarioId == null ? "non indicato" : String(item.scenarioId);
+      var scenario = element("th", null, scenarioId);
       scenario.setAttribute("scope", "row");
       row.appendChild(scenario);
       var pair = parsePair(item.pairId);
-      row.appendChild(element("td", null, pair ? pairTitle(pair.foreground, pair.background, pair.property) : (item.pairId == null ? "coppia non indicata" : String(item.pairId))));
+      var pairTitleText = pair ? pairTitle(pair.foreground, pair.background, pair.property) : (item.pairId == null ? "coppia non indicata" : String(item.pairId));
+      row.appendChild(element("td", null, pairTitleText));
       // Exact numbers stay in data attributes so a threshold-aware label never hides the real value.
       var ratioCell = element("td", null, formatRatio(item.ratio, [item.minimum, item.target]));
       if (finite(item.ratio)) ratioCell.setAttribute("data-ratio", String(item.ratio));
@@ -515,12 +564,47 @@ export function createLocalPresenter(deps) {
       row.appendChild(ratioCell);
       row.appendChild(element("td", null, formatRatio(item.minimum)));
       row.appendChild(element("td", null, formatRatio(item.target)));
-      row.appendChild(element("td", null, formatStatus(item.status)));
+
+      var statusCell = element("td", null);
+      var statusBadge = element("span", "local-status-badge", formatStatus(item.status));
+      if (item.status) {
+        statusBadge.setAttribute("data-status", String(item.status));
+        statusCell.setAttribute("data-status", String(item.status));
+      }
+      statusCell.appendChild(statusBadge);
+      row.appendChild(statusCell);
+
       row.appendChild(element("td", null, item.error ? String(item.error) : "Nessun errore"));
       body.appendChild(row);
+
+      rowEntries.push({
+        row: row,
+        text: (scenarioId + " " + pairTitleText + " " + (item.pairId || "")).toLowerCase(),
+        status: item.status,
+        scenario: scenarioId.toLowerCase()
+      });
     }
     table.appendChild(body);
     scroll.appendChild(table);
+
+    function updateTableFilter() {
+      var q = searchInput.value ? searchInput.value.toLowerCase().trim() : "";
+      var st = statusSelect.value || "";
+      var sc = scenarioSelect.value || "";
+      var count = 0;
+      for (var k = 0; k < rowEntries.length; k += 1) {
+        var r = rowEntries[k];
+        var show = (!q || r.text.indexOf(q) !== -1) &&
+          (!st || (st === "problems" ? (r.status === "below-minimum" || r.status === "below-target") : r.status === st)) &&
+          (!sc || r.scenario.indexOf(sc) !== -1);
+        r.row.hidden = !show;
+        if (show) count += 1;
+      }
+      countBadge.textContent = count + " di " + rowEntries.length + " misure";
+    }
+    if (typeof searchInput.addEventListener === "function") searchInput.addEventListener("input", updateTableFilter);
+    if (typeof statusSelect.addEventListener === "function") statusSelect.addEventListener("change", updateTableFilter);
+    if (typeof scenarioSelect.addEventListener === "function") scenarioSelect.addEventListener("change", updateTableFilter);
     return scroll;
   }
   function errorsList(errors) {
@@ -746,9 +830,52 @@ export function createLocalPresenter(deps) {
     if (rest.length) {
       var details = element("details", "local-details");
       details.appendChild(element("summary", null, "Altre " + rest.length + " coppie esplorative"));
+
+      var filterWrap = element("div", "local-filter-toolbar local-filter-toolbar--compact");
+      var searchInput = element("input", "local-filter-input");
+      searchInput.setAttribute("type", "search");
+      searchInput.setAttribute("placeholder", "Cerca tra le " + rest.length + " coppie esplorative (es. primary, dark)...");
+      searchInput.setAttribute("aria-label", "Filtra coppie esplorative");
+      filterWrap.appendChild(searchInput);
+
+      var statusSelect = selectControl("Filtra per esito", [
+        ["", "Tutti gli esiti (" + rest.length + ")"],
+        ["problems", "Solo problemi"],
+        ["pass", "Solo conformi"]
+      ]);
+      filterWrap.appendChild(statusSelect);
+
+      var countBadge = element("span", "local-filter-count", rest.length + " di " + rest.length + " coppie");
+      filterWrap.appendChild(countBadge);
+      details.appendChild(filterWrap);
+
+      var scrollBox = element("div", "local-exploration-scroll");
       var restList = element("ul", "local-exploration-list");
-      for (var r = 0; r < rest.length; r += 1) restList.appendChild(explorationItemNode(rest[r]));
-      details.appendChild(restList);
+      var restEntries = [];
+      for (var r = 0; r < rest.length; r += 1) {
+        var liNode = explorationItemNode(rest[r]);
+        if (rest[r].status) liNode.setAttribute("data-status", rest[r].status);
+        restList.appendChild(liNode);
+        restEntries.push({ li: liNode, text: (liNode.textContent || "").toLowerCase(), status: rest[r].status });
+      }
+      scrollBox.appendChild(restList);
+      details.appendChild(scrollBox);
+
+      function updateExplorationFilter() {
+        var q = searchInput.value ? searchInput.value.toLowerCase().trim() : "";
+        var filterSt = statusSelect.value || "";
+        var visibleCount = 0;
+        for (var j = 0; j < restEntries.length; j += 1) {
+          var e = restEntries[j];
+          var showLi = (!q || e.text.indexOf(q) !== -1) &&
+            (!filterSt || (filterSt === "problems" ? (e.status === "below-minimum" || e.status === "below-target") : e.status === filterSt));
+          e.li.hidden = !showLi;
+          if (showLi) visibleCount += 1;
+        }
+        countBadge.textContent = visibleCount + " di " + restEntries.length + " coppie";
+      }
+      if (typeof searchInput.addEventListener === "function") searchInput.addEventListener("input", updateExplorationFilter);
+      if (typeof statusSelect.addEventListener === "function") statusSelect.addEventListener("change", updateExplorationFilter);
       block.appendChild(details);
     }
     if (coverage && coverage.unmeasuredNames.length) block.appendChild(element("p", "margin-note", "Non misurate: " + coverage.unmeasuredNames.join(", ")));

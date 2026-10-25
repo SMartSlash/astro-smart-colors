@@ -140,9 +140,15 @@ Keep consumer commands runnable with `pnpm exec smart-colors` and the effective
 `--root`/`--config` paths. `scripts/run-tests.mjs` is package development
 tooling for the grouped suite; the `scripts/*` harnesses in the site repository
 remain site files and must not be documented as shipped examples. Do not bump
-the version or create a tag as part of a documentation change. When documenting
-the diagnostic artifacts, name the whole `smart-colors-reports/` folder and its
-local assets; do not describe an HTML file as self-contained.
+the version or create a tag as part of a documentation change. Write install
+commands with the unversioned GitHub spec as the primary form and a pinned tag
+(`#v0.5.0`) as the reproducible alternative. Do not describe the unversioned spec
+as selecting the newest release tag: it follows the default branch tip and only
+moves when the dependency is updated. pnpm does support explicit version
+selectors (`#semver:<range>`), so name one when a range is intended. A committed
+lockfile is what keeps a project reproducible. When documenting the diagnostic
+artifacts, name the whole `smart-colors-reports/` folder and its local assets; do
+not describe an HTML file as self-contained.
 
 ## Navigating the source
 

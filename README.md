@@ -11,9 +11,9 @@ You author a few `@property` source colors. The package derives the rest at buil
 
 The generated color system runs build-time/dev-time only: the browser receives static CSS and **no client JavaScript is required for the baseline tokens**.
 
-The **Unreleased development sources** can also publish a portable diagnostic folder, `smart-colors-reports/`: an interactive preview (`index.html`), a static full technical report (`report.html`) and their local assets (`styles/preview.css`, `styles/report.css`, `scripts/preview.js`). The folder name is the default value of `reports.directory`; configure it in `smart-colors.config.mjs` with a path relative to the consumer root or an absolute file path. The default resolves under the consumer root, never inside the installed package or `node_modules`. The preview leads with a **guided contrast workbench**: source selection, real consumer CSS specimens and contextual correction actions; the raw source archive follows. It loads an isolated local runtime with a classic deferred script next to an inert JSON payload; the full report stays static and script-free. The static report shows the designer provenance (palette sources, derivation recipes, public tokens and controls) and the difference between the generated model CSS and the captured baseline, without writing CSS or recalculating contrast. That diagnostic JavaScript never becomes part of your site's color CSS, and it is unrelated to Astro hydration. Keep the whole folder together: moving `index.html` alone loses its stylesheet and runtime.
+Since `v0.5.0`, `build` and `report` can also publish a portable diagnostic folder, `smart-colors-reports/`: an interactive preview (`index.html`), a static full technical report (`report.html`) and their local assets (`styles/preview.css`, `styles/report.css`, `scripts/preview.js`). The folder name is the default value of `reports.directory`; configure it in `smart-colors.config.mjs` with a path relative to the consumer root or an absolute file path. The default resolves under the consumer root, never inside the installed package or `node_modules`. The preview leads with a **guided contrast workbench**: source selection, real consumer CSS specimens and contextual correction actions; the raw source archive follows. It loads an isolated local runtime with a classic deferred script next to an inert JSON payload; the full report stays static and script-free. The static report shows the designer provenance (palette sources, derivation recipes, public tokens and controls) and the difference between the generated model CSS and the captured baseline, without writing CSS or recalculating contrast. That diagnostic JavaScript never becomes part of your site's color CSS, and it is unrelated to Astro hydration. Keep the whole folder together: moving `index.html` alone loses its stylesheet and runtime.
 
-The **Unreleased** workbench work adds a live semantic pair matrix driven by the runtime's own measurements, a read-only exploration disclosure, per-token lightness editing and override removal, and a conservative tuning export (`exportTuningFile`). It is **implemented in the development sources and verified by the agent's tests** (the final verified gates are recorded in the analysis) and it is **not part of the `v0.4.0` tag**. The two external projects that informed the direction, the verified licences and the decisions behind it are recorded in [`docs/PREVIEW-UX-ANALYSIS.md`](./docs/PREVIEW-UX-ANALYSIS.md).
+The workbench adds a live semantic pair matrix driven by the runtime's own measurements, a read-only exploration disclosure, per-token lightness editing and override removal, and a conservative tuning export (`exportTuningFile`). These features ship in `v0.5.0`. The UX decisions, export policy and the historical validation of the development phase are recorded in [`docs/PREVIEW-UX-ANALYSIS.md`](./docs/PREVIEW-UX-ANALYSIS.md).
 
 [Quickstart](#quickstart) · [Daily API](#start-here-i-want-x--use-yz) · [Tuning](#runtime-tuning-colors-tuningcss) · [CLI](#cli) · [Diagnostics](#diagnostic-artifacts) · [Reference](./docs/REFERENCE.md) · [Changelog](./CHANGELOG.md)
 
@@ -28,11 +28,19 @@ Works in an Astro project and in a project with no Astro at all: `build` emits p
 - **Astro is the only declared peer**, and it is optional. Playwright is **not** a dependency or a peer: when automation is requested, the CLI looks for an already-installed `playwright` or `@playwright/test` in your project, from your project root.
 - The package is distributed **from GitHub**; nothing is published to npm.
 
-**Release status.** `v0.4.0` is the current released tag and remains the install target above; it includes the build/report workflow, the automation policy and the native preview. The **development sources (Unreleased)** are **no longer presentation-only**: they add the designer provenance report, the public `--color-tune-<public-name>-light|dark` controls, the per-identity surface-mix knobs and the **guided contrast workbench** documented below — the palette selector leads into real `var(--color-*)` pairs measured in light/dark and baseline/tuned/draft comparisons, with editable public full-color and surface-mix knobs, a minimum-lightness correction, and no automatic writes — while keeping existing tokens, macros and legacy dark knobs working. The same Unreleased sources also carry **second-generation workbench work, verified by the agent's tests and not part of `v0.4.0`**: a live semantic pair matrix, a read-only exploration disclosure, per-token lightness editing and override removal, and a conservative `exportTuningFile`. Its status, the verified external references, the exact export policy and the separate evidence counts are recorded in [`docs/PREVIEW-UX-ANALYSIS.md`](./docs/PREVIEW-UX-ANALYSIS.md). `v0.4.0` keeps the behavior its [changelog](./CHANGELOG.md) documents. In the **Unreleased** sources, `build` writes the CSS and attempts the diagnostic folder; `check` and the Astro integration remain CSS-only. Opening the files needs no server, and Playwright stays an optional consumer tool: with no Playwright installed, a valid `build` still exits `0` and publishes the folder.
+**Release status.** `v0.5.0` (2026-10-25) is the current release and the one these docs describe. It keeps what `v0.4.0` introduced — the build/report workflow, the automation policy and the native preview — and adds the designer provenance report, the public `--color-tune-<public-name>-light|dark` controls, the per-identity surface-mix knobs, `reports.directory`, and the **guided contrast workbench**: real `var(--color-*)` pairs measured in light/dark and baseline/tuned/draft, a semantic pair matrix with diagonal A/B swatches, editable full-color and surface-mix knobs, minimum-lightness correction, override removal and a manual `exportTuningFile`. Existing tokens, macros and legacy dark knobs keep working; `v0.4.0` keeps the behavior its [changelog](./CHANGELOG.md) documents. `build` writes the CSS and publishes the diagnostic folder; `check` and the Astro integration remain CSS-only. Opening the files needs no server, and Playwright stays an optional consumer tool: with no Playwright installed, a valid `build` still exits `0` and publishes the folder.
 
 ```sh
-pnpm add -D github:SMartSlash/astro-smart-colors#v0.4.0
+# Default: the tip of the default branch (currently `main`)
+pnpm add -D github:SMartSlash/astro-smart-colors
+
+# Pinned release
+pnpm add -D github:SMartSlash/astro-smart-colors#v0.5.0
 ```
+
+**What the suffix means.** Without `#`, the dependency resolves to the latest commit on the default branch — currently `main` — not to the newest release tag. Version selectors are explicit: `#v0.5.0` pins one tag, `#semver:^0.5.0` follows a range.
+
+A resolved install stays at its commit, and a committed `pnpm-lock.yaml` reproduces it (`--frozen-lockfile` enforces that). To follow the branch, run `pnpm update @smartslash/astro-smart-colors` in a project that already tracks the unversioned spec. The update respects an explicit tag pin, so a `#v0.4.0` consumer switches with `pnpm add -D github:SMartSlash/astro-smart-colors` first. The package has no postinstall hook, no runtime network access and no background updater.
 
 ### 2. Create the two authored files
 
@@ -102,7 +110,7 @@ pnpm exec smart-colors check   # read-only; exits 1 while the file on disk is st
 
 Components never read `--palette-*` and never edit the generated file. This is the whole non-Astro path: the output is plain CSS you import wherever the project keeps its styles.
 
-`v0.3.0` `build` wrote only the CSS output; `v0.4.0` added diagnostic pages under `reports/`. The **Unreleased** sources publish the portable report folder instead (default `smart-colors-reports/`, configurable with `reports.directory`) and leave those old paths untouched. `build` defaults to `--automation=auto`. On a valid model, a missing Playwright still exits `0`, publishes the diagnostic artifacts and prints a brief optional-automation note (no install instruction by default). For CI, use `--automation=required` or `audit` when a missing browser must fail the command, including an explicit install action; `--automation=off` never resolves or imports Playwright and still publishes the artifacts.
+`v0.3.0` `build` wrote only the CSS output; `v0.4.0` added diagnostic pages under `reports/`. `v0.5.0` publishes the portable report folder instead (default `smart-colors-reports/`, configurable with `reports.directory`) and leaves those old paths untouched. `build` defaults to `--automation=auto`. On a valid model, a missing Playwright still exits `0`, publishes the diagnostic artifacts and prints a brief optional-automation note (no install instruction by default). For CI, use `--automation=required` or `audit` when a missing browser must fail the command, including an explicit install action; `--automation=off` never resolves or imports Playwright and still publishes the artifacts.
 
 The CLI console summary is plain terminal text in English and states its provenance once; the published preview and report HTML UI remain in Italian. `check` leads with the CSS file state under **CSS** (`up to date`, or `stale` plus the regeneration command), then **Contrast** (`model estimate: …`) and **Tuning**, and states its read-only scope under **Read-only**. `build`/`report` stream progress as `smart-colors: palette analysis`, `token generation`, `checking optional automation` (`automated verification required` under `--automation=required`) and `preview and report`. The summary that follows groups the facts: **Palette** (colors and roles), **CSS** (the real file and its state: `regenerated`, `already up to date`, `up to date`, `out of date`, `absent`, `empty`; `check` reports a failed comparison as `stale`), **Verification** (`MEASURED` or `MODEL ESTIMATE`), **Verdict** (the single verdict: `OK`, `NEEDS REVIEW`, `UNVERIFIED` or `ERROR`), optional **Problems**, optional **Extra** for exploratory pairings outside the outcome criteria, then the two clickable `file://` URLs (**Preview** first, **Report** second) and **Action**. A clean run prints no all-clear problem line; the **Problems** list starts at the first real pair. `Action` opens the preview; regenerating the CSS is a conditional secondary step, and `report` states once that it leaves CSS, palette, config and tuning unchanged. Raw external causes, model warning/suggestion strings and raw core errors stay verbatim on stderr. When output is piped it uses plain text without decorative glyphs or ANSI; paths and messages may still contain Unicode. Color is used only on a TTY and is disabled by `NO_COLOR`.
 
@@ -241,7 +249,7 @@ Additional rules:
 
 ## Diagnostic artifacts
 
-In the **Unreleased** sources, `build` and `report` publish one portable `file://` diagnostic folder from the same captured snapshot, with no network access and no server. The default folder is `smart-colors-reports/` under the consumer root; `reports.directory` in `smart-colors.config.mjs` overrides it with a relative path (resolved from the consumer root) or an absolute file path / `file:` URL. Remote URLs are rejected. Inside the configured folder:
+Since `v0.5.0`, `build` and `report` publish one portable `file://` diagnostic folder from the same captured snapshot, with no network access and no server. The default folder is `smart-colors-reports/` under the consumer root; `reports.directory` in `smart-colors.config.mjs` overrides it with a relative path (resolved from the consumer root) or an absolute file path / `file:` URL. Remote URLs are rejected. Inside the configured folder:
 
 - **`index.html`** — the designer-first preview. It leads with source/pair selection and full-width specimen comparisons, powered by an isolated runtime and an inert JSON payload containing the exact CSS bytes. It uses a classic deferred script and a same-folder stylesheet. The raw source metadata and extended local verification remain secondary archives.
 - **`report.html`** — the complete **static** full technical report. It keeps `script-src 'none'` and has no script; its only stylesheet is the same-folder `styles/report.css`. It adds designer provenance (sources, recipes, public tokens and controls), separates the generated model CSS from the captured baseline, and keeps exploratory overlaps in their own channel.
@@ -347,21 +355,38 @@ Everything else keeps its name, including the configuration keys (`contrast.*`, 
 
 ## Migrating from 0.3.0 behavior
 
-Install the new tag first; the generated token API is unchanged:
+Install the current release first; the generated token API is unchanged:
 
 ```sh
-pnpm add -D github:SMartSlash/astro-smart-colors#v0.4.0
+pnpm add -D github:SMartSlash/astro-smart-colors#v0.5.0
 ```
 
-- `build` now also publishes the diagnostic folder, even when the CSS output is already current. The Astro integration and the generator API still write only the CSS/motion outputs.
+- `build` also publishes the diagnostic folder (in `v0.5.0`, under the configurable default `smart-colors-reports/`), even when the CSS output is already current. The Astro integration and the generator API still write only the CSS/motion outputs.
 - `report` now publishes the same folder without writing CSS, palette, config or tuning. The full report stays static; the preview gains the isolated local runtime described above.
 - Playwright is no longer declared as a peer. `off` never resolves or imports it. `auto` tries the engines already available in the consumer; `required` is the strict request for CI.
 - The preview CSP is `default-src 'none'` with `script-src 'sha256-…' 'self'` and `style-src 'unsafe-inline' 'self'` in the bundle: the generated page references only its same-folder assets, while `'self'` is a same-origin permission and the hash records the emitted runtime rather than acting as an SRI/external-execution pin. The full report keeps `script-src 'none'`. All files in the folder are snapshots to regenerate after edits and go through the same ownership and output-path guardrails.
 - The read-only proposal solver and the `./report` / `./audit` legacy API wrappers keep their behavior; the new exit policy belongs to the CLI workflow, not to the adapters. See [`docs/REFERENCE.md`](./docs/REFERENCE.md).
 
+## Migrating from 0.4.0 behavior
+
+Install the release, then regenerate the CSS and re-measure:
+
+```sh
+pnpm add -D github:SMartSlash/astro-smart-colors#v0.5.0
+pnpm exec smart-colors build
+pnpm exec smart-colors check
+```
+
+- The diagnostic folder moves from `reports/smart-colors-preview.html` and `reports/smart-colors.html` to `smart-colors-reports/index.html` and `smart-colors-reports/report.html`. `reports.directory` selects another folder. The old files are not deleted, moved or rewritten.
+- The new per-token and surface-mix controls change the emitted declarations, so `colors.css` must be regenerated; byte parity with a 0.4.0 output is not preserved. Re-measure after any tuning change.
+- The build/report console summary is now a labelled English layout (`Palette`, `CSS`, `Verification`, `Verdict`, `Problems`, `Extra`, `Preview`, `Report`, `Action`); the published preview and report UI stays Italian.
+- The preview now leads with the guided contrast workbench: the semantic pair matrix with diagonal A/B swatches, the read-only exploration disclosure, per-token lightness editing, override removal and `exportTuningFile`. Nothing in it writes project files.
+- Tuning, `check` and the Astro integration keep their behavior; Playwright is still optional, is never installed or downloaded, and a valid `build` without it still exits `0`.
+
 ## Links
 
-- **Release 0.4.0**: [tag `v0.4.0`](https://github.com/SMartSlash/astro-smart-colors/releases/tag/v0.4.0) — the install target above.
+- **Release 0.5.0**: [tag `v0.5.0`](https://github.com/SMartSlash/astro-smart-colors/releases/tag/v0.5.0) — the release these docs describe.
+- **Release 0.4.0**: [tag `v0.4.0`](https://github.com/SMartSlash/astro-smart-colors/releases/tag/v0.4.0) — the previous release, still installable by tag.
 - **Starter HTML, no framework**: [`./examples/minimal/`](./examples/minimal/) — one palette, one plain page, no config file.
 - **Releases and token renames**: [`./CHANGELOG.md`](./CHANGELOG.md) — what each tag changes, and the migration steps between them.
 - **Full technical reference**: [`./docs/REFERENCE.md`](./docs/REFERENCE.md) — configuration, contrast contract and solver, generated API, `--surface-color` substrate, `--ink-*` helpers, motion, programmatic API, validation guarantees and the CLI policy.

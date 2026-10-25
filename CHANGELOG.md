@@ -3,21 +3,44 @@
 Releases are **git tags** on [`github.com/SMartSlash/astro-smart-colors`](https://github.com/SMartSlash/astro-smart-colors); nothing is published to npm.
 
 ```sh
-# Install a released tag (adjust the tag after each release):
-pnpm add -D github:SMartSlash/astro-smart-colors#v0.4.0
+# Default: the tip of the default branch (currently `main`)
+pnpm add -D github:SMartSlash/astro-smart-colors
+
+# Pinned release (reproducible)
+pnpm add -D github:SMartSlash/astro-smart-colors#v0.5.0
 ```
+
+Without a `#` suffix the dependency resolves to the **latest commit on the
+default branch**, currently `main` — not to the newest release tag. Version
+selectors are explicit: `#v0.5.0` pins one tag, `#semver:^0.5.0` follows a range.
+
+A resolved install stays at its commit, and a committed lockfile reproduces it
+(`--frozen-lockfile` enforces that). To move a project that already tracks the
+unversioned spec to the current default-branch commit:
+
+```sh
+pnpm update @smartslash/astro-smart-colors
+```
+
+`pnpm update` respects an explicit tag pin, so a `#v0.4.0` consumer switches
+first with `pnpm add -D github:SMartSlash/astro-smart-colors`, then updates. The
+package has no postinstall hook and no runtime network access.
 
 ## Unreleased
 
-An **additive designer-contract** release in the development sources: it adds the
-designer provenance report, the public per-token tuning controls, the surface-mix
-knobs, the all-role `dark-blend` model and the optional exploratory-overlap
-channel. Existing token names, legacy macros and the `--color-tune-<id>-dark` /
-`--color-tune-<id>-dark-mix` escape hatches keep working; no existing generated
-value is renamed. The console and preview presentation changes below are part of
-the same unreleased sources. The version stays `0.4.0`, nothing is released,
-tagged or published, and these entries describe the in-development sources, not
-the `v0.4.0` tag.
+No changes yet.
+
+## 0.5.0 — 2026-10-25
+
+A **minor** bump on 0.x, following the same policy as 0.4.0: before 1.0, a new
+documented behavior is a minor release, not a patch. This is an **additive
+designer-contract** release: it adds the designer provenance report, the public
+per-token tuning controls, the surface-mix knobs, the all-role `dark-blend`
+model, the optional exploratory-overlap channel and the second-generation guided
+contrast workbench in the preview. Existing token names, legacy macros and the
+`--color-tune-<id>-dark` / `--color-tune-<id>-dark-mix` escape hatches keep
+working; no existing generated value is renamed. The build/report console
+summaries are English, while the published preview and report UI stays Italian.
 
 ### Added
 
@@ -340,6 +363,14 @@ the `v0.4.0` tag.
   (`@import`/`url()`), alpha and gradients. A palette/config/tuning edit still requires
   regenerating `colors.css` and re-measuring before any earlier snapshot is treated as
   current.
+
+### Migration from 0.4.0
+
+Point the dependency at `#v0.5.0` (or drop the suffix to follow `main`), then
+regenerate `colors.css` and re-measure. The diagnostic folder now defaults to the
+configurable `smart-colors-reports/`; the 0.4.0 files under `reports/` are left
+untouched. See [Migrating from 0.4.0 behavior](./README.md#migrating-from-040-behavior)
+for the walkthrough.
 
 ## 0.4.0 — 2026-10-18
 

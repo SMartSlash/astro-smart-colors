@@ -73,6 +73,15 @@ the `v0.4.0` tag.
   missing units and omitted families (schema cap: 24 families); the rest stays in
   a disclosure. The channel never changes verified-pair coverage, applies no
   autofix and does not substitute an accessibility audit.
+- Additive `reports.directory` config for the diagnostic folder, default
+  `smart-colors-reports` resolved from the consumer root. Relative and absolute
+  file paths and `file:` URLs are accepted; remote URLs are rejected. The field
+  only moves the report output: palette, config, tuning and CSS inputs keep
+  resolving from the consumer root, and the default never writes inside
+  `node_modules` or the installed package. No migration or deletion is
+  performed: a legacy `reports/` directory and a previously configured folder
+  remain untouched. The whole folder, documents plus `styles/` and `scripts/`,
+  stays portable when copied together.
 - The starter `colors-tuning.css` is now a guided, fully commented panel:
   legacy macros, the uniform per-token light/dark overrides for every category,
   surface mixes, dark mixing plus the foundation dark controls
@@ -153,37 +162,111 @@ the `v0.4.0` tag.
   configured role stays separate in `session.roles.identities[]` (keyed by `paletteName`) and is
   shown only when it differs from the declared one.
 
+### Fixed
+
+- Explicit role definitions now override palette annotations across the functional
+  identity/decorative boundary for the same public name. Automatic focus selection
+  follows the effective identities; conflicting explicit definitions still fail
+  validation.
+- A final `role` or `initial-value` descriptor in a palette `@property` block may
+  omit its semicolon. Source capture and read-only proposal rewrites preserve these
+  declarations, while missing separators between descriptors remain invalid.
+  Regressions run in Node without requiring Playwright.
+- The CSS resolver oracle pins hue interpolation to the shorter arc across `0/360`,
+  including reversed operands, so a long-arc regression fails instead of passing a
+  symmetric fixture.
+- Playwright provider regressions assert the explicit consumer root and the absence
+  of a checkout or global fallback. Discovery remains read-only and never installs
+  or downloads a browser binary.
+- The workbench L-debounce regressions use Node’s built-in mock timers: no call
+  before the 180 ms deadline, one call with the last rapid value, a restarted
+  deadline, a single submit flush and no late call after pair, theme or `destroy`
+  cancellation. The same proofs check that the cancelled timer never fires past
+  the submit flush.
+- The test runner rejects an explicit empty `--browser=` selection and an engine
+  without a package native proof (`firefox`) instead of reporting an all-skipped
+  run as green. `--list` validates groups and browser flags but skips the site
+  filesystem preflight, so `--list site` works without a browser selection or a
+  checkout.
+- When native proofs are enabled, the runner serializes the selected files with
+  `--test-concurrency=1`, so browser proofs do not compete for the same engine and
+  produce false timeouts. The default Node groups keep Node’s normal parallelism,
+  and the native commands are unchanged.
+
 ### Changed
 
-- The `build`/`report` console summary is rebuilt as one compact labelled line per
-  fact: **Palette** (colors and roles), **Output**, **Generato**, **Verifica**,
-  **Esito**, **Problemi**, **Anteprima**, **Report** and **Fai ora**. Generation is
-  shown as a fact separate from verification, so a successful write is never read as
-  a positive verification.
+- Separated the workbench's Node-side HTML and stylesheet loading into
+  `contrast-workbench-markup.mjs`. `contrast-workbench-view.mjs` now owns only the
+  browser view and its serializer, with no Node/rendering dependencies. Emitted
+  markup, styles, browser factories and scripts are unchanged.
+- Grouped generator modules under `src/colors/` and diagnostic modules under
+  `src/diagnostics/`, with dedicated `browser/`, `preview/` and `report/` folders.
+  Report and preview source stylesheets live beside their renderers. Public
+  package exports, CLI commands, authored inputs and emitted CSS/diagnostic assets
+  are unchanged; Playwright remains optional. `CONTRIBUTING.md` now follows the
+  generator's reading path and maps changes to the owning modules.
+- Tests are grouped under `test/unit`, `test/integration`, `test/browser` and
+  `test/site`, with shared helpers under `test/helpers`. `scripts/run-tests.mjs`
+  discovers the selected `.test.mjs` files and hands them to `node --test`;
+  `--list` prints them without running. Package scripts expose `test`, `test:unit`,
+  `test:integration`, `test:browser` and `test:site`. The default is unit +
+  integration + browser: the browser files keep their Node assertions, native
+  proofs are opt-in, and the site group (three extracted reference-site root
+  proofs) is never implied.
+- Package browser proofs resolve Playwright package-locally or through an explicit
+  `SMART_COLORS_PLAYWRIGHT_ROOT`; the explicit site group requires
+  `SMART_COLORS_SITE_ROOT` or the monorepo sibling. No command installs or downloads
+  Playwright or a browser binary. CI runs `pnpm test` on Node 22.12.0, 24 and 26
+  with a frozen lockfile, and has no browser job.
+- The site proof enforces the approved **896 KiB (917504 bytes)** preview budget.
+  The raise follows a previous run that measured 596,886 bytes for the starter,
+  816,277 bytes for the stress fixture and 806,508 bytes for the root-sized
+  session; those are current measurements, not a permanent guarantee. The site
+  group remains opt-in and is not reported here as run or passing: it is not part
+  of `pnpm test` or CI, and a green default or browser run is not a site
+  verification.
+- The `build`/`report` console summary is a compact labelled layout in English:
+  **Palette** (colors and roles), **CSS** (path and state: `regenerated`,
+  `already up to date`, `up to date`, `out of date`, `absent`, `empty`; `check`
+  reports a failed comparison as `stale`), **Verification** (`MEASURED` /
+  `MODEL ESTIMATE`), **Verdict** (`OK`, `NEEDS REVIEW`, `UNVERIFIED`, `ERROR`),
+  **Problems** only when at least one pair is listed, **Extra** only when
+  exploratory pairings are available, then the two clickable
+  **Preview**/**Report** URLs and **Action**. Generation remains a fact separate
+  from verification, and a clean run prints no all-clear line. The published
+  report and preview HTML UI stay in Italian, and raw external causes remain
+  verbatim.
 - Live, plain progress lines are streamed as each real phase starts
-  (`smart-colors · analisi palette`, `generazione token`,
-  `controllo automazione opzionale` — `verifica automatizzata richiesta` in
-  `required` — and `anteprima e report`) — no spinner, no TUI and no invented
-  percentages. Only started phases reach stdout; a usage failure keeps stdout empty.
-- Provenance and completeness are separate facts. The **Verifica** line says
-  `MISURATO` for any real browser measurement — including a partial run, whose
-  incomplete coverage is stated on the same line — and `STIMA DEL MODELLO` only when
+  (`smart-colors: palette analysis`, `token generation`,
+  `checking optional automation` — `automated verification required` in
+  `required` — and `preview and report`) — no spinner, no TUI and no invented
+  percentages. Only started phases reach stdout; a usage failure keeps stdout
+  empty. Piped output uses plain text without decorative glyphs or ANSI; paths
+  and messages may still contain Unicode. Colour is used only on a TTY and is
+  disabled by `NO_COLOR`.
+- Provenance and completeness are separate facts. The **Verification** line says
+  `MEASURED` for any real browser measurement — including a partial run, whose
+  incomplete coverage is stated on the same line — and `MODEL ESTIMATE` only when
   no pair was measured. A partial measured run keeps its measured problems instead
   of falling back to the model list.
-- The single **Esito** verdict is `DA RIVEDERE` for any measured problem — below
+- The single **Verdict** is `NEEDS REVIEW` for any measured problem — below
   minimum **or** below target — `OK` only for a complete, clean measurement,
-  `NON VERIFICATO` for a measured-but-partial clean run or when no engine started,
-  and `ERRORE` for a strict-invalid model.
-- **Fai ora** opens the preview first; regenerating the CSS is a separate,
+  `UNVERIFIED` for a measured-but-partial clean run or when no engine started,
+  and `ERROR` for a strict-invalid model.
+- **Action** opens the preview first; regenerating the CSS is a separate,
   conditional secondary step shown only when the output actually needs a build.
+  `report` also states once that CSS, palette, config and tuning stay unchanged.
 - Problems use human usage names and the theme (a shared designer lexicon), capped
   at five per run; token names and raw ratios stay in the stderr detail and in the
   report. More model warnings still never certify a palette, and the project target
   stays distinct from the reference minimum.
-- `init` prints a short **Come funziona** block naming the three files a designer
-  touches: the palette (your source), the generated output (do not edit by hand)
-  and the tuning file (optional runtime refinement).
-- `check` labels its model result as **Contrasti non misurati (stima del modello)**.
+- `init` prints `Created` (the files written, with their role), `Output` (the
+  generated file `build` owns, to import without editing), `Warnings` only when
+  guidance is needed, and the next `build` command under `Action`. The
+  interactive prompts are in English.
+- `check` reports the contrast model under **Contrast** as `model estimate: …`
+  without a checkmark or a positive verdict, and states its read-only scope under
+  **Read-only**.
 - Blocking model errors are now also echoed once on stderr for `build`/`report`,
   bounded and deduplicated with the rest of the technical detail.
 - The preview leads with source/pair selection and the guided contrast workbench on real
@@ -196,7 +279,8 @@ the `v0.4.0` tag.
 - The **Smart Colors** preview adopts a compact horizontal toolbar instead of a sidebar:
   source swatches (native source select on narrow containers), a human current-use summary
   and **Cambia uso**, all three comparison modes and theme controls, with full-width specimens
-  side by side on desktop and stacked on mobile. The header has an honest local/pending/
+  side by side on desktop and stacked on mobile. Its main layout is a 12-column grid; the
+  workbench sections span it and stack on narrow containers. The header has an honest local/pending/
   draft badge and one **Esporta CSS** action. Correction/apply/discard actions sit together
   below the specimens; proposal reasoning and manual controls remain secondary disclosures.
   Fixed `360×480` proposal verification frames scroll locally rather than resizing. Explicit
@@ -243,11 +327,12 @@ the `v0.4.0` tag.
   declarations, so verifying the actual new CSS requires regenerating
   `colors.css`. Byte parity with a pre-upgrade output is **not** preserved;
   regenerate first, then re-measure with `report`/`audit`.
-- The preview artifact budget is **768 KiB (786432 bytes)**, replacing the former
-  **384 KiB (393216 bytes)**. The page carries the full palette source and its manual
+- The preview artifact budget is **896 KiB (917504 bytes)**, raised from the
+  previous approved budget. The page carries the full palette source and its manual
   download, the serialized interactive runtimes and the view factory, the measurement
-  frames, and the comparison/correction metadata. Current measurements stay around 675 KiB,
-  within the budget, and are reported as current values, not a guarantee.
+  frames, and the comparison/correction metadata. A previous run measured 596,886 bytes
+  for the starter, 816,277 bytes for the stress fixture and 806,508 bytes for the
+  root-sized session; those are current measurements, not a permanent guarantee.
 - The guided workbench is explicitly **not an accessibility audit** and **not a full
   component catalog or an APG pattern gallery**: the specimen is a small demonstration
   surface, the bench measures declared opaque token pairs only, it does not emulate the OS

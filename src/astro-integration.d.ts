@@ -1,5 +1,5 @@
 import type { AstroIntegration } from "astro";
-import type { SmartColorsUserConfig } from "./defaults.d.ts";
+import type { SmartColorsUserConfig } from "./colors/defaults.d.ts";
 
 export type SmartColorsOptions = SmartColorsUserConfig & {
   configFile?: string;

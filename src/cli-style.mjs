@@ -1,5 +1,8 @@
 import { styleText } from "node:util";
 
+// ANSI is a terminal affordance, never part of the data: a piped or redirected run keeps the same
+// plain text, and NO_COLOR always wins. The CLI's own guard is required because styleText does not
+// disable itself on a non-TTY stream.
 const COLOR = Boolean(process.stdout.isTTY && !process.env.NO_COLOR);
 
 export function paint(text, ...formats) {
@@ -32,7 +35,6 @@ export function verificationComplete(result) {
     && (coverage.measuredPairs ?? 0) > 0;
 }
 
-
 /**
  * Data availability is distinct from completeness: a partial run still produced real browser
  * measurements, so its facts are measured, not a model estimate. Only `measurementAvailable`
@@ -47,31 +49,33 @@ export function measurementAvailable(result) {
  * Explicit so a measured shortfall is never hidden as a "model advisory", and vice versa.
  */
 export function provenance(result) {
-  return measurementAvailable(result) ? "MISURATO" : "STIMA DEL MODELLO";
+  return measurementAvailable(result) ? "MEASURED" : "MODEL ESTIMATE";
 }
 
 /**
  * One honest verdict, aligned with the exit policy and never positive without a full measurement.
- * Any measured problem (below-minimum OR below-target) is `DA RIVEDERE`; a measured-but-incomplete
- * run is never `OK`; a strict-invalid model is always `ERRORE`.
+ * Any measured problem (below-minimum OR below-target) is `NEEDS REVIEW`; a measured-but-incomplete
+ * run is never `OK`; a strict-invalid model is always `ERROR`.
+ *
+ * The detail states the consequence, not the cause: the verification line above already names the
+ * mode, the engines and the coverage, so repeating them here would only add noise.
  * Returns `{ code, label, detail }` where `code` is one of `ok`, `review`, `unverified`, `error`.
  */
 export function verdict(result) {
   const coverage = result?.coverage ?? {};
-  const mode = result?.mode ?? "auto";
 
   if (result?.strictInvalid) {
     const count = result?.analysis?.errors?.length ?? 0;
     return {
       code: "error",
-      label: "ERRORE",
-      detail: `Contratto di contrasto non valido: ${count} ${count === 1 ? "errore" : "errori"} nel modello.`,
+      label: "ERROR",
+      detail: `contrast contract invalid, ${count} ${count === 1 ? "error" : "errors"} in the model.`,
     };
   }
 
   // An empty measured output can never verify green, whatever the coverage says.
   if (cssState(result).shape === "empty") {
-    return { code: "unverified", label: "NON VERIFICATO", detail: "output vuoto: nessuna verifica positiva possibile." };
+    return { code: "unverified", label: "UNVERIFIED", detail: "empty CSS output: no positive verification possible." };
   }
 
   if (measurementAvailable(result)) {
@@ -79,30 +83,21 @@ export function verdict(result) {
     if (problems.length) {
       return {
         code: "review",
-        label: "DA RIVEDERE",
-        detail: `${problems.length} ${problems.length === 1 ? "coppia misurata" : "coppie misurate"} sotto soglia.`,
+        label: "NEEDS REVIEW",
+        detail: `${problems.length} measured ${problems.length === 1 ? "pair" : "pairs"} below threshold.`,
       };
     }
     if (verificationComplete(result)) {
-      return { code: "ok", label: "OK", detail: "nessuna coppia misurata sotto soglia." };
+      return { code: "ok", label: "OK", detail: "all measured pairs meet the thresholds." };
     }
     // Measured and clean, but the coverage is partial: never promoted to OK.
-    return { code: "unverified", label: "NON VERIFICATO", detail: "verifica incompleta: copertura parziale, nessun esito positivo confermato." };
+    return { code: "unverified", label: "UNVERIFIED", detail: "incomplete coverage: no positive outcome." };
   }
 
-  if (coverage.mode === "off" || coverage.status === "disabled") {
-    return { code: "unverified", label: "NON VERIFICATO", detail: "automazione disattivata: nessuna coppia misurata nel browser." };
+  if (coverage.mode === "off" || coverage.status === "disabled" || (coverage.launched ?? 0) === 0) {
+    return { code: "unverified", label: "UNVERIFIED", detail: "no browser measurement, so no positive outcome." };
   }
-  if ((coverage.launched ?? 0) === 0) {
-    return {
-      code: "unverified",
-      label: "NON VERIFICATO",
-      detail: mode === "required"
-        ? "verifica richiesta non disponibile: nessun motore avviato."
-        : "nessun motore avviato: nessuna coppia misurata nel browser.",
-    };
-  }
-  return { code: "unverified", label: "NON VERIFICATO", detail: "verifica incompleta: copertura parziale, nessun esito positivo confermato." };
+  return { code: "unverified", label: "UNVERIFIED", detail: "incomplete coverage: no positive outcome." };
 }
 
 // ---------------------------------------------------------------------------
@@ -163,19 +158,4 @@ function legacyCssState(result, outputPath) {
   // build: once written, the on-disk output is the generated one.
   if (result?.writeOutcome) return { ...base, shape: "current", source: "output", production: true };
   return { ...base, shape: "unknown", source: null, production: null };
-}
-
-/**
- * One line naming what a read-only report actually measured, or null when nothing needs saying.
- * `stale` names the real file it read (never a "candidate"); `absent` states the diagnostic
- * candidate explicitly; `empty` refuses any green. The path is raw — the caller owns escaping.
- */
-export function cssNotice(state) {
-  if (!state || typeof state !== "object") return null;
-  switch (state.shape) {
-    case "stale": return `Misurato su ${state.path}: i byte letti divergono dai token generati dal modello.`;
-    case "absent": return "Output assente: i risultati si riferiscono a un candidato diagnostico, non alla produzione.";
-    case "empty": return `L'output ${state.path} è vuoto: nessuna verifica positiva possibile.`;
-    default: return null;
-  }
 }

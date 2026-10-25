@@ -3,8 +3,8 @@ import { lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
-import { loadSmartColorsConfig, resolveProjectUrl, DEFAULT_CONFIG_FILE } from "./load-config.mjs";
-import { validateOutputPaths } from "./output-paths.mjs";
+import { loadSmartColorsConfig, resolveProjectUrl, DEFAULT_CONFIG_FILE } from "./colors/load-config.mjs";
+import { validateOutputPaths } from "./colors/output-paths.mjs";
 
 const PALETTE_TEMPLATE_URL = new URL("./templates/palette.css", import.meta.url);
 const TUNING_TEMPLATE_URL = new URL("./templates/colors-tuning.css", import.meta.url);
@@ -185,7 +185,7 @@ async function promptForProject({ root, configFile, stdin, stdout, defaultPalett
   };
 
   try {
-    const directoryLine = await ask(`[smart-colors] Configurazione iniziale\n\n  In quale cartella vuoi inserire i file dei token?\n  Cartella [${path.posix.dirname(defaultPalettePath)}]: `);
+    const directoryLine = await ask(`[smart-colors] Initial setup\n\n  Which folder should contain the token files?\n  Folder [${path.posix.dirname(defaultPalettePath)}]: `);
     if (directoryLine === null) return { confirmed: false };
     const directoryAnswer = directoryLine.trim();
     if (CANCEL_ANSWER.test(directoryAnswer)) return { confirmed: false };
@@ -199,11 +199,11 @@ async function promptForProject({ root, configFile, stdin, stdout, defaultPalett
       && !await pathExists(fileURLToPath(resolveProjectUrl(root, CONFIG_FILENAME)));
 
     const confirmation = await ask([
-      "  File da creare:",
+      "  Files to create:",
       `    • palette  ${palettePath}`,
       `    • tuning   ${tuningPath}`,
       ...(createConfig ? [`    • config   ${CONFIG_FILENAME}`] : []),
-      "  Creare questi file? [Y/n] ",
+      "  Create these files? [Y/n] ",
     ].join("\n"));
 
     // End of input right after an affirmative first answer means the user
@@ -242,7 +242,7 @@ async function tuningGuidance({ root, paletteDir, tuningPath }) {
     ? candidateTuning
     : defaultTuningPath;
   const warnings = sameResolvedPath(root, tuningPath, buildTuningPath) ? [] : [
-    `Il tuning ${tuningPath} non verrà letto da build: legge ${buildTuningPath} (accanto alla palette).`,
+    `Tuning ${tuningPath} will not be read by build: build reads ${buildTuningPath} (next to the palette).`,
   ];
   return { buildTuningPath, warnings };
 }

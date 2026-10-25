@@ -5,6 +5,10 @@ on: [push, pull_request]
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22.12.0", "24", "26"]
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -15,6 +19,9 @@ jobs:
           version: 12.11.2
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ matrix.node }}
       - run: pnpm install --frozen-lockfile
+      # The default runner is unit + integration + browser. Browser files keep their
+      # Node assertions; native proofs stay opt-in, so CI needs no Playwright and no
+      # browser binary. The reference-site group is never implied.
       - run: pnpm test

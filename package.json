@@ -17,25 +17,29 @@
       "default": "./src/astro-integration.mjs"
     },
     "./generate": {
-      "types": "./src/generate-colors.d.ts",
-      "default": "./src/generate-colors.mjs"
+      "types": "./src/colors/generate-colors.d.ts",
+      "default": "./src/colors/generate-colors.mjs"
     },
     "./config": {
-      "types": "./src/defaults.d.ts",
-      "default": "./src/defaults.mjs"
+      "types": "./src/colors/defaults.d.ts",
+      "default": "./src/colors/defaults.mjs"
     },
     "./report": {
-      "default": "./src/report-data.mjs"
+      "default": "./src/diagnostics/report-data.mjs"
     },
     "./audit": {
-      "default": "./src/browser-audit.mjs"
+      "default": "./src/diagnostics/browser/browser-audit.mjs"
     }
   },
   "bin": {
     "smart-colors": "./src/cli.mjs"
   },
   "scripts": {
-    "test": "node --test test/*.test.mjs"
+    "test": "node scripts/run-tests.mjs",
+    "test:unit": "node scripts/run-tests.mjs unit",
+    "test:integration": "node scripts/run-tests.mjs integration",
+    "test:browser": "node scripts/run-tests.mjs browser --native --browser=chromium,webkit",
+    "test:site": "node scripts/run-tests.mjs site --browser=chromium"
   },
   "peerDependencies": {
     "astro": ">=5"

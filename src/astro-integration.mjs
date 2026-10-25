@@ -1,7 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { generateColorTokens } from "./generate-colors.mjs";
-import { DEFAULT_CONFIG_FILE, loadSmartColorsConfig, resolveProjectUrl } from "./load-config.mjs";
+import { generateColorTokens } from "./colors/generate-colors.mjs";
+import { DEFAULT_CONFIG_FILE, loadSmartColorsConfig, resolveProjectUrl } from "./colors/load-config.mjs";
 
 export default function smartColors(options = {}) {
   const configFile = options.configFile;
